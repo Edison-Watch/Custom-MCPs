@@ -57,9 +57,9 @@ Layering (top calls down, never the reverse):
 
 ### Top-level layout
 
-- **`src/cli/app.py`** + **`src/cli/commands/`** - Typer CLI (`mymcp`); `src/cli/commands/__init__.py` auto-discovers `src/cli/commands/*.py` and registers them.
-- **`mcp_server/`** - FastMCP server. Primary transport is **streamable HTTP**, mounted on the FastAPI app at `/mcp` from `api_server/server.py` (one process, one port, shared auth/CORS). Stdio is legacy/dev-only via `mymcp-mcp`. `mcp_server/server.py:build_mcp_server` populates a single FastMCP singleton from the service registry; `mount_on` + `lifespan` handle the streamable-HTTP wiring. See [`mcp_server/COMMON_TERMS.md`](./mcp_server/COMMON_TERMS.md).
-- **`api_server/`** - FastAPI HTTP server (`auth/`, `billing/`, `middleware/`, `routes/`). Hosts the `/mcp` mount; the primary entrypoint is `mymcp-serve`.
+- **`src/cli/app.py`** + **`src/cli/commands/`** - Typer CLI (`edisonmcps`); `src/cli/commands/__init__.py` auto-discovers `src/cli/commands/*.py` and registers them.
+- **`mcp_server/`** - FastMCP server. Primary transport is **streamable HTTP**, mounted on the FastAPI app at `/mcp` from `api_server/server.py` (one process, one port, shared auth/CORS). Stdio is legacy/dev-only via `edisonmcps-mcp`. `mcp_server/server.py:build_mcp_server` populates a single FastMCP singleton from the service registry; `mount_on` + `lifespan` handle the streamable-HTTP wiring. See [`mcp_server/COMMON_TERMS.md`](./mcp_server/COMMON_TERMS.md).
+- **`api_server/`** - FastAPI HTTP server (`auth/`, `billing/`, `middleware/`, `routes/`). Hosts the `/mcp` mount; the primary entrypoint is `edisonmcps-serve`.
 - **`services/`** - `@service(name=, description=, input_model=, output_model=)`-decorated pure functions (`services/__init__.py:20`).
 - **`common/`** - pydantic-settings config.
   - `global_config.yaml` - base; `<name>.yaml` - split configs loaded as root key `<name>`
@@ -192,7 +192,7 @@ async def my_enhanced(tool: EnhancedTool[MyInput, MyOutput]) -> MyOutput:
     if tool.can_elicit:
         ...  # await tool.elicit(...)
     if tool.can_show_app:
-        tool.send_app("ui://mymcp/my_dashboard")
+        tool.send_app("ui://edisonmcps/my_dashboard")
     return result
 ```
 

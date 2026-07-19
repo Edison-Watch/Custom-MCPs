@@ -1,12 +1,12 @@
 {
-  "name": "io.github.Miyamura80/MCP-Template",
+  "name": "io.github.Edison-Watch/Custom-MCPs",
   "version": "0.1.1",
   "title": "GmailMCP",
   "description": "Give your AI agent real tools - one service registry over CLI, MCP, and HTTP.",
   "websiteUrl": "https://gmailmcp.com",
   "serverUrl": "https://mcp.gmailmcp.com/mcp",
   "repository": {
-    "url": "https://github.com/Miyamura80/MCP-Template",
+    "url": "https://github.com/Edison-Watch/Custom-MCPs",
     "source": "github"
   },
   "icons": [

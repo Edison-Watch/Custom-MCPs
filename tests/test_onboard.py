@@ -179,5 +179,5 @@ def test_headless_apply_prunes_cli_surface_for_custom_profile(tmp_path: Path):
     assert (worktree / "mcp_server").exists()
     pyproject = (worktree / "pyproject.toml").read_text()
     makefile = (worktree / "Makefile").read_text()
-    assert 'mymcp = "src.cli.app:main_cli"' not in pyproject
+    assert 'edisonmcps = "src.cli.app:main_cli"' not in pyproject
     assert "\ncli:" not in makefile

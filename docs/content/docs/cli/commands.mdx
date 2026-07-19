@@ -8,13 +8,13 @@ description: All available CLI commands
 Greet someone by name.
 
 ```bash
-mymcp greet Alice
+edisonmcps greet Alice
 # Hello, Alice!
 
-mymcp greet Alice --shout
+edisonmcps greet Alice --shout
 # HELLO, ALICE!
 
-mymcp greet Bob --shout --times 3
+edisonmcps greet Bob --shout --times 3
 ```
 
 | Option | Short | Default | Description |
@@ -27,9 +27,9 @@ mymcp greet Bob --shout --times 3
 Inspect and modify configuration.
 
 ```bash
-mymcp config show                           # view full config
-mymcp config get llm_config.cache_enabled   # get a single value
-mymcp config set logging.verbose false      # set an override
+edisonmcps config show                           # view full config
+edisonmcps config get llm_config.cache_enabled   # get a single value
+edisonmcps config set logging.verbose false      # set an override
 ```
 
 | Subcommand | Description |
@@ -43,8 +43,8 @@ mymcp config set logging.verbose false      # set an override
 Run health checks on the project environment.
 
 ```bash
-mymcp doctor          # check everything
-mymcp doctor --fix    # auto-fix what it can
+edisonmcps doctor          # check everything
+edisonmcps doctor --fix    # auto-fix what it can
 ```
 
 Checks Python version, `uv` installation, dependency sync, config validity, `.env` file, pre-commit hooks, and git status.
@@ -54,9 +54,9 @@ Checks Python version, `uv` installation, dependency sync, config validity, `.en
 Scaffold a new command from a built-in template.
 
 ```bash
-mymcp init my_command --desc "Does something useful"
+edisonmcps init my_command --desc "Does something useful"
 # Creates commands/my_command.py
-# Run it: mymcp my-command
+# Run it: edisonmcps my-command
 ```
 
 | Option | Description |
@@ -70,10 +70,10 @@ The name must be `snake_case`. Underscores are converted to hyphens for the CLI 
 Install shell tab-completions for faster usage.
 
 ```bash
-mymcp completions install bash    # append to ~/.bashrc
-mymcp completions install zsh     # append to ~/.zshrc
-mymcp completions install fish    # append to config.fish
-mymcp completions show bash       # print script to stdout
+edisonmcps completions install bash    # append to ~/.bashrc
+edisonmcps completions install zsh     # append to ~/.zshrc
+edisonmcps completions install fish    # append to config.fish
+edisonmcps completions show bash       # print script to stdout
 ```
 
 ## update
@@ -81,7 +81,7 @@ mymcp completions show bash       # print script to stdout
 Check for a newer version and upgrade.
 
 ```bash
-mymcp update
+edisonmcps update
 ```
 
 ## telemetry
@@ -89,9 +89,9 @@ mymcp update
 Manage anonymous usage telemetry.
 
 ```bash
-mymcp telemetry status     # show enabled/disabled
-mymcp telemetry disable    # opt out
-mymcp telemetry enable     # opt back in
+edisonmcps telemetry status     # show enabled/disabled
+edisonmcps telemetry disable    # opt out
+edisonmcps telemetry enable     # opt back in
 ```
 
 You can also set `CLI_TELEMETRY_DISABLED=1` to disable.

@@ -17,7 +17,7 @@ export const site = {
   url: "https://gmailmcp.com",
   // TODO: links used across nav, footer, and CTAs.
   docsUrl: "https://docs.gmailmcp.com",
-  githubUrl: "https://github.com/Miyamura80/MCP-Template",
+  githubUrl: "https://github.com/Edison-Watch/Custom-MCPs",
   // TODO: the deployed streamable-HTTP MCP endpoint users add to their client.
   // This is the URL you paste / one-click-install into Claude, Cursor, etc.
   mcpUrl: "https://mcp.gmailmcp.com/mcp",
@@ -43,7 +43,7 @@ export const site = {
  */
 export const serverCard = {
   // Reverse-DNS registry identity, exactly one slash. Usually io.github.<owner>/<repo>.
-  name: "io.github.Miyamura80/MCP-Template",
+  name: "io.github.Edison-Watch/Custom-MCPs",
   // SemVer - keep in step with pyproject.toml / server.json when you release.
   version: "0.1.1",
   // Concise capability summary (<=100 chars for the registry server.json schema).

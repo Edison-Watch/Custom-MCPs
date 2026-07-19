@@ -120,11 +120,11 @@ server:
 # deployed endpoint URL is NOT set here - it comes from MCP_PUBLIC_URL so the
 # card and OAuth resource metadata stay in lockstep.
 branding:
-  name: "io.github.Miyamura80/MCP-Template"   # reverse-DNS registry id (one slash)
+  name: "io.github.Edison-Watch/Custom-MCPs"   # reverse-DNS registry id (one slash)
   title: "GmailMCP"                            # human-readable display name
   description: "Give your AI agent real tools - one service registry over CLI, MCP, and HTTP."
   website_url: "https://gmailmcp.com"
-  repository_url: "https://github.com/Miyamura80/MCP-Template"
+  repository_url: "https://github.com/Edison-Watch/Custom-MCPs"
   repository_source: "github"
   icons:
     - src: "https://gmailmcp.com/favicon.svg"

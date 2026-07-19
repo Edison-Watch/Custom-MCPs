@@ -36,7 +36,7 @@ from mcp_server.server import mount_on as mount_mcp_server
 from services.gmail_svc import GmailAttachmentTooLargeError
 
 try:
-    _APP_VERSION = _pkg_version("mcp-template")
+    _APP_VERSION = _pkg_version("custom-mcps")
 except PackageNotFoundError:
     _APP_VERSION = "0.1.0"
 
@@ -73,7 +73,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="mymcp-api",
+    title="edisonmcps-api",
     version=_APP_VERSION,
     description=_API_DESCRIPTION,
     servers=_openapi_servers,
@@ -130,7 +130,7 @@ mount_mcp_server(app)
 
 
 def main() -> None:
-    """Entry-point for ``mymcp-api`` console script."""
+    """Entry-point for ``edisonmcps-api`` console script."""
     uvicorn.run(
         "api_server.server:app",
         host=global_config.server.host,

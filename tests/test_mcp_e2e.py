@@ -180,7 +180,7 @@ class TestMCPWireE2E(TestTemplate):
             # their ui:// resource in tools/list per the MCP Apps spec.
             compose = tools["gmail_compose"]
             assert compose["outputSchema"]["type"] == "object"
-            assert compose["_meta"]["ui"]["resourceUri"].startswith("ui://mymcp/")
+            assert compose["_meta"]["ui"]["resourceUri"].startswith("ui://edisonmcps/")
             assert (
                 compose["_meta"]["ui/resourceUri"]
                 == (compose["_meta"]["ui"]["resourceUri"])
@@ -208,7 +208,7 @@ class TestMCPWireE2E(TestTemplate):
         with _wire_session("u-e2e-res") as session:
             resources = session.request("resources/list")["resources"]
             ui_resources = [
-                r for r in resources if str(r["uri"]).startswith("ui://mymcp/")
+                r for r in resources if str(r["uri"]).startswith("ui://edisonmcps/")
             ]
             assert ui_resources, "expected ui:// resources in resources/list"
             assert all(
@@ -257,7 +257,7 @@ class TestMCPWireE2E(TestTemplate):
                 # Enhanced read tool: publishes outputSchema + its ui:// app.
                 gc = tools["inbox_get_curation"]
                 assert gc["outputSchema"]["type"] == "object"
-                assert gc["_meta"]["ui"]["resourceUri"] == "ui://mymcp/gmail_inbox"
+                assert gc["_meta"]["ui"]["resourceUri"] == "ui://edisonmcps/gmail_inbox"
                 # The mutating write-back stays headless (no UI on the wire).
                 save_meta = tools["inbox_save_curation"].get("_meta")
                 assert save_meta in (None, {})
@@ -272,7 +272,10 @@ class TestMCPWireE2E(TestTemplate):
                 assert sc["records"][0]["ledger_status"] == "curated"
                 assert result["isError"] is False
                 # Enhancer attached the dashboard app on the result.
-                assert result["_meta"]["ui"]["resourceUri"] == "ui://mymcp/gmail_inbox"
+                assert (
+                    result["_meta"]["ui"]["resourceUri"]
+                    == "ui://edisonmcps/gmail_inbox"
+                )
 
     def test_not_connected_gmail_tool_returns_url_elicitation_error(self):
         """A Gmail tool called by a user with no linked account surfaces the
@@ -324,7 +327,7 @@ class TestMCPWireE2E(TestTemplate):
         async def _enhancer(tool):
             result = tool.call()
             tool.send_text("extra block", audience=["user"])
-            tool.send_app("ui://mymcp/__e2e_test_app")
+            tool.send_app("ui://edisonmcps/__e2e_test_app")
             return result
 
         entry = next(e for e in get_registry() if e.name == svc_name)
@@ -340,8 +343,8 @@ class TestMCPWireE2E(TestTemplate):
                 assert blocks[1]["text"] == "extra block"
                 assert blocks[1]["annotations"]["audience"] == ["user"]
                 meta = result["_meta"]
-                assert meta["ui"]["resourceUri"] == "ui://mymcp/__e2e_test_app"
-                assert meta["ui/resourceUri"] == "ui://mymcp/__e2e_test_app"
+                assert meta["ui"]["resourceUri"] == "ui://edisonmcps/__e2e_test_app"
+                assert meta["ui/resourceUri"] == "ui://edisonmcps/__e2e_test_app"
         finally:
             _registry[:] = [e for e in _registry if e.name != svc_name]
             _enhancers.pop(svc_name, None)

@@ -24,7 +24,7 @@ class TestServerCard:
 
         body = resp.json()
         # The fields the registry audit checks for: name, description, icon.
-        assert body["name"] == "io.github.Miyamura80/MCP-Template"
+        assert body["name"] == "io.github.Edison-Watch/Custom-MCPs"
         assert body["title"]
         assert body["description"]
         assert body["version"]
