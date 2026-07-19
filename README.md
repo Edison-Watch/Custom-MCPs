@@ -5,7 +5,8 @@
 </p>
 
 <p align="center">
-<b>Batteries-included Python template. One codebase ships as a CLI, an MCP server, and an HTTP API over a shared service registry.</b>
+<b>Custom MCPs for a wide range of applications.</b><br>
+Write an integration once in <code>services/</code> and it ships three ways: a CLI, an MCP server (streamable HTTP at <code>/mcp</code>), and an HTTP API, all over one shared service registry. Gmail is the first.
 </p>
 
 <p align="center">

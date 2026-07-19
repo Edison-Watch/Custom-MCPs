@@ -3,7 +3,7 @@ name = "custom-mcps"
 version = "0.1.1"
 description = "Custom MCPs for wide range of applications"
 authors = [
-    { name = "Edison-Watch", email = "eitomiyamura@gmail.com" }
+    { name = "Edison-Watch", email = "eito@gatlingx.com" }
 ]
 license = { file = "LICENSE" }
 classifiers = [
