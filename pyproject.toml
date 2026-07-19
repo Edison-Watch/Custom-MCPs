@@ -179,7 +179,6 @@ exclude = [
     "src/utils/theme.py",
     "tests/conftest.py",
     "init/",
-    "init/onboard.py",
     "src/cli/",
     "templates/",
     "services/",
@@ -202,7 +201,6 @@ exclude = [
 [tool.file_length]
 max_lines = 500
 exclude = [
-    "init/onboard.py",
     "api_server/routes/payments/webhooks.py",
     "api_server/middleware/rate_limit.py",
     "tests/test_gmail_services.py",

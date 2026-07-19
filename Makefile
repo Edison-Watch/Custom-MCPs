@@ -40,10 +40,7 @@ help: ## Show this help message
 ########################################################
 
 ### Initialization
-.PHONY: onboard banner logo
-onboard: check_uv ## Run onboarding CLI (PROFILE=cli-only, CONFIG=.onboard.yaml, ARGS="--dry-run")
-	@$(PYTHON) -m init.onboard $(if $(PROFILE),--profile $(PROFILE),) $(if $(CONFIG),--config $(CONFIG),) $(if $(DRY_RUN),--dry-run,) $(ARGS)
-
+.PHONY: banner logo
 banner: check_uv ## Generate project banner image
 	@echo "$(YELLOW)🔍Generating banner...$(RESET)"
 	@uv run python -m init.generate_banner

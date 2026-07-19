@@ -123,7 +123,6 @@ See [`mcp_server/MCP_UI_ARCHITECTURE.md`](mcp_server/MCP_UI_ARCHITECTURE.md) for
 ## Quick Start
 
 ```bash
-make onboard              # interactive setup (rename, deps, env, hooks)
 uv sync                   # install deps
 uv run edisonmcps --help       # see all CLI commands
 uv run edisonmcps greet Alice  # run a command
