@@ -21,7 +21,7 @@ class TestCLI(TestTemplate):
     def test_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "CLI Template" in result.output
+        assert "Custom-MCPs" in result.output
 
     def test_greet(self):
         result = runner.invoke(app, ["greet", "Alice"])

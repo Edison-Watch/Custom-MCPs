@@ -46,7 +46,7 @@ _FORMAT_MAP = {
 
 app = typer.Typer(
     name="edisonmcps",
-    help="CLI Template - a batteries-included Python CLI.",
+    help="Custom-MCPs - custom MCP servers over CLI, MCP, and HTTP.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -186,8 +186,8 @@ def main_cli() -> None:
     emoji, primary = _load_cli_branding()
     prefix = f"{emoji} " if emoji else ""
     app.info.help = (
-        f"{prefix}[{primary}]CLI Template[/{primary}] "
-        f"[dim]v{version}[/dim] - a batteries-included Python CLI."
+        f"{prefix}[{primary}]Custom-MCPs[/{primary}] "
+        f"[dim]v{version}[/dim] - custom MCP servers over CLI, MCP, and HTTP."
     )
 
     command = _detect_command(sys.argv)
