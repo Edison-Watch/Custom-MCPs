@@ -1,7 +1,7 @@
 [project]
 name = "custom-mcps"
 version = "0.1.1"
-description = "Custom MCPs for wide range of applications"
+description = "Custom MCPs for a wide range of applications"
 authors = [
     { name = "Edison-Watch", email = "eito@gatlingx.com" }
 ]

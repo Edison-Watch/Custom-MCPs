@@ -44,7 +44,7 @@ Write an integration once in <code>services/</code> and it ships three ways: a C
 ```text
 Install the CLI and download the gmail-mcp skill:
 
-pip install custom-mcps
+uv tool install custom-mcps
 
 curl -fsSL https://raw.githubusercontent.com/Edison-Watch/Custom-MCPs/main/scripts/install-skills.sh -o install-skills.sh
 bash install-skills.sh && rm install-skills.sh
