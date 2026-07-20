@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Downloads the official gmail-mcp agent skill from the MCP-Template repository
+# Downloads the official gmail-mcp agent skill from the Custom-MCPs repository
 # into .claude/skills/ (the same skill that is self-published on skills.sh).
 set -euo pipefail
 
-REPO="Miyamura80/MCP-Template"
+REPO="Edison-Watch/Custom-MCPs"
 BRANCH="main"
 BASE_URL="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 

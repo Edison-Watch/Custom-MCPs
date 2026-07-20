@@ -1,9 +1,9 @@
 [project]
-name = "mcp-template"
+name = "custom-mcps"
 version = "0.1.1"
-description = "🪛 CLI tool template (python) with batteries included. Auto-install, updates, linting, dead code analysis, and a whole lot more."
+description = "Custom MCPs for a wide range of applications"
 authors = [
-    { name = "Miyamura80", email = "eitomiyamura@gmail.com" }
+    { name = "Edison-Watch", email = "eito@gatlingx.com" }
 ]
 license = { file = "LICENSE" }
 classifiers = [
@@ -75,18 +75,18 @@ readme = "README.md"
 requires-python = ">= 3.12"
 
 [project.urls]
-Homepage = "https://github.com/Miyamura80/MCP-Template"
-Repository = "https://github.com/Miyamura80/MCP-Template"
-Issues = "https://github.com/Miyamura80/MCP-Template/issues"
+Homepage = "https://github.com/Edison-Watch/Custom-MCPs"
+Repository = "https://github.com/Edison-Watch/Custom-MCPs"
+Issues = "https://github.com/Edison-Watch/Custom-MCPs/issues"
 
 [project.scripts]
-mymcp = "src.cli.app:main_cli"
+edisonmcps = "src.cli.app:main_cli"
 # Primary remote-MCP entrypoint: HTTP API + MCP (streamable HTTP) on one port.
-mymcp-serve = "api_server:main"
+edisonmcps-serve = "api_server:main"
 # Legacy stdio transport, kept for local Claude Desktop / dev only.
-mymcp-mcp = "mcp_server:main"
-# Deprecated alias for mymcp-serve; prefer the new name.
-mymcp-api = "api_server:main"
+edisonmcps-mcp = "mcp_server:main"
+# Deprecated alias for edisonmcps-serve; prefer the new name.
+edisonmcps-api = "api_server:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -179,7 +179,6 @@ exclude = [
     "src/utils/theme.py",
     "tests/conftest.py",
     "init/",
-    "init/onboard.py",
     "src/cli/",
     "templates/",
     "services/",
@@ -202,7 +201,6 @@ exclude = [
 [tool.file_length]
 max_lines = 500
 exclude = [
-    "init/onboard.py",
     "api_server/routes/payments/webhooks.py",
     "api_server/middleware/rate_limit.py",
     "tests/test_gmail_services.py",

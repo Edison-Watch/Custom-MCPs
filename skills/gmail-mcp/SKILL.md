@@ -42,4 +42,4 @@ Add the MCP server to your client, then discover its tools.
 
 - Full description for LLMs: `https://gmailmcp.com/llms-full.txt`
 - Human documentation: `https://gmailmcp.com/docs`
-- Source code: `https://github.com/Miyamura80/MCP-Template`
+- Source code: `https://github.com/Edison-Watch/Custom-MCPs`

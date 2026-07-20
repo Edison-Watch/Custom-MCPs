@@ -148,13 +148,13 @@ class BrandingConfig(BaseModel):
     card and the OAuth resource metadata can never disagree.
     """
 
-    name: str = "io.github.Miyamura80/MCP-Template"
+    name: str = "io.github.Edison-Watch/Custom-MCPs"
     title: str = "GmailMCP"
     description: str = (
         "Give your AI agent real tools - one service registry over CLI, MCP, and HTTP."
     )
     website_url: str = "https://gmailmcp.com"
-    repository_url: str = "https://github.com/Miyamura80/MCP-Template"
+    repository_url: str = "https://github.com/Edison-Watch/Custom-MCPs"
     repository_source: str = "github"
     icons: list[IconConfig] = Field(
         default_factory=lambda: [IconConfig(src="https://gmailmcp.com/favicon.svg")]

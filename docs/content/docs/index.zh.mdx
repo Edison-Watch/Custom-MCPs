@@ -1,9 +1,9 @@
 ---
 title: 快速入门
-description: 开始使用 MCP 模板
+description: 开始使用 Custom-MCPs
 ---
 
-MCP Template 提供三种方式与同一组工具进行交互:
+Custom-MCPs 提供三种方式与同一组工具进行交互:
 
 - **CLI** - 在终端中运行命令
 - **MCP** - 直接连接 Claude 等 AI 助手
@@ -21,8 +21,8 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 ### 从源码安装
 
 ```bash
-git clone https://github.com/Miyamura80/MCP-Template.git
-cd MCP-Template
+git clone https://github.com/Edison-Watch/Custom-MCPs.git
+cd Custom-MCPs
 uv sync
 ```
 
@@ -32,8 +32,8 @@ uv sync
 ### 验证安装
 
 ```bash
-uv run mymcp --version
-uv run mymcp --help
+uv run edisonmcps --version
+uv run edisonmcps --help
 ```
 
 </Step>
@@ -42,7 +42,7 @@ uv run mymcp --help
 ### 尝试一个命令
 
 ```bash
-uv run mymcp greet Alice
+uv run edisonmcps greet Alice
 # Hello, Alice!
 ```
 

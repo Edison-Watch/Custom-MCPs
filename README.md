@@ -1,11 +1,12 @@
-# mcp-template
+# custom-mcps
 
 <p align="center">
   <img src="media/banner.png" alt="2" width="400">
 </p>
 
 <p align="center">
-<b>Batteries-included Python template. One codebase ships as a CLI, an MCP server, and an HTTP API over a shared service registry.</b>
+<b>Custom MCPs for a wide range of applications.</b><br>
+Write an integration once in <code>services/</code> and it ships three ways: a CLI, an MCP server (streamable HTTP at <code>/mcp</code>), and an HTTP API, all over one shared service registry. Gmail is the first.
 </p>
 
 <p align="center">
@@ -22,15 +23,15 @@
 <p align="center">
   <a href="https://railway.com/deploy/gmailmcp"><img alt="Deploy on Railway" src="https://railway.com/button.svg" height="32"></a>
   &nbsp;
-  <a href="https://render.com/deploy?repo=https://github.com/Miyamura80/MCP-Template"><img alt="Deploy to Render" src="https://render.com/images/deploy-to-render-button.svg" height="32"></a>
+  <a href="https://render.com/deploy?repo=https://github.com/Edison-Watch/Custom-MCPs"><img alt="Deploy to Render" src="https://render.com/images/deploy-to-render-button.svg" height="32"></a>
 </p>
 
 <p align="center">
-  <img alt="Project Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FMiyamura80%2FMCP-Template%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=blue">
-  <img alt="Python Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FMiyamura80%2FMCP-Template%2Fmain%2Fpyproject.toml&query=%24.project['requires-python']&label=python&logo=python&color=blue">
-  <img alt="GitHub repo size" src="https://img.shields.io/github/repo-size/Miyamura80/MCP-Template">
-  <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Miyamura80/MCP-Template/a_test_target_tests.yml?branch=main">
-  <a href="https://skills.sh/Miyamura80/MCP-Template"><img alt="skills.sh" src="https://skills.sh/b/Miyamura80/MCP-Template"></a>
+  <img alt="Project Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FEdison-Watch%2FCustom-MCPs%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=blue">
+  <img alt="Python Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FEdison-Watch%2FCustom-MCPs%2Fmain%2Fpyproject.toml&query=%24.project['requires-python']&label=python&logo=python&color=blue">
+  <img alt="GitHub repo size" src="https://img.shields.io/github/repo-size/Edison-Watch/Custom-MCPs">
+  <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/Edison-Watch/Custom-MCPs/a_test_target_tests.yml?branch=main">
+  <a href="https://skills.sh/Edison-Watch/Custom-MCPs"><img alt="skills.sh" src="https://skills.sh/b/Edison-Watch/Custom-MCPs"></a>
 
 </p>
 
@@ -43,17 +44,17 @@
 ```text
 Install the CLI and download the gmail-mcp skill:
 
-pip install mcp-template
+uv tool install custom-mcps
 
-curl -fsSL https://raw.githubusercontent.com/Miyamura80/MCP-Template/main/scripts/install-skills.sh -o install-skills.sh
+curl -fsSL https://raw.githubusercontent.com/Edison-Watch/Custom-MCPs/main/scripts/install-skills.sh -o install-skills.sh
 bash install-skills.sh && rm install-skills.sh
 ```
 
 The official **gmail-mcp** agent skill is self-published on
-[skills.sh](https://skills.sh/Miyamura80/MCP-Template). Install it directly with:
+[skills.sh](https://skills.sh/Edison-Watch/Custom-MCPs). Install it directly with:
 
 ```bash
-npx skills add Miyamura80/MCP-Template
+npx skills add Edison-Watch/Custom-MCPs
 ```
 
 The skill's source of truth lives in [`skills/gmail-mcp/SKILL.md`](skills/gmail-mcp/SKILL.md);
@@ -122,14 +123,13 @@ See [`mcp_server/MCP_UI_ARCHITECTURE.md`](mcp_server/MCP_UI_ARCHITECTURE.md) for
 ## Quick Start
 
 ```bash
-make onboard              # interactive setup (rename, deps, env, hooks)
 uv sync                   # install deps
-uv run mymcp --help       # see all CLI commands
-uv run mymcp greet Alice  # run a command
-uv run mymcp init my_command  # scaffold a new command
+uv run edisonmcps --help       # see all CLI commands
+uv run edisonmcps greet Alice  # run a command
+uv run edisonmcps init my_command  # scaffold a new command
 
-uv run mymcp-serve        # start the server (HTTP API + MCP at /mcp on one port)
-uv run mymcp-mcp          # legacy: stdio MCP only, for local Claude Desktop / dev
+uv run edisonmcps-serve        # start the server (HTTP API + MCP at /mcp on one port)
+uv run edisonmcps-mcp          # legacy: stdio MCP only, for local Claude Desktop / dev
 ```
 
 ## Deploy
@@ -150,9 +150,9 @@ Global flags go **before** the subcommand:
 | `--version` | `-V` | Print version and exit |
 
 ```bash
-uv run mymcp --format json config show     # JSON output
-uv run mymcp --dry-run greet Bob           # preview without executing
-uv run mymcp --verbose greet Alice         # detailed output
+uv run edisonmcps --format json config show     # JSON output
+uv run edisonmcps --dry-run greet Bob           # preview without executing
+uv run edisonmcps --verbose greet Alice         # detailed output
 ```
 
 ## Adding Commands
@@ -172,7 +172,7 @@ def main(name: Annotated[str, typer.Argument(help="Who to greet.")]) -> None:
 ```
 
 ```bash
-uv run mymcp hello World   # Hello, World!
+uv run edisonmcps hello World   # Hello, World!
 ```
 
 **Subcommand group** - export `app = typer.Typer()`:
@@ -190,10 +190,10 @@ def migrate() -> None:
 ```
 
 ```bash
-uv run mymcp db migrate
+uv run edisonmcps db migrate
 ```
 
-Or scaffold with: `uv run mymcp init my_command --desc "Does something"`.
+Or scaffold with: `uv run edisonmcps init my_command --desc "Does something"`.
 
 ## Configuration
 
@@ -210,9 +210,9 @@ global_config.OPENAI_API_KEY
 CLI config inspection:
 
 ```bash
-uv run mymcp config show                           # full config
-uv run mymcp config get llm_config.cache_enabled   # single value
-uv run mymcp config set logging.verbose false      # write override
+uv run edisonmcps config show                           # full config
+uv run edisonmcps config get llm_config.cache_enabled   # single value
+uv run edisonmcps config set logging.verbose false      # write override
 ```
 
 [Full configuration docs](manual_docs/configuration.md)
@@ -230,8 +230,8 @@ This software uses the following tools:
 
 ## About the Core Contributors
 
-<a href="https://github.com/Miyamura80/MCP-Template/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Miyamura80/MCP-Template" />
+<a href="https://github.com/Edison-Watch/Custom-MCPs/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Edison-Watch/Custom-MCPs" />
 </a>
 
 Made with [contrib.rocks](https://contrib.rocks).

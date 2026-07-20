@@ -1,9 +1,9 @@
 {
   "mcpServers": {
-    "mymcp": {
+    "edisonmcps": {
       "command": "uvx",
       "args": [
-        "mymcp-mcp"
+        "edisonmcps-mcp"
       ],
       "env": {}
     }
