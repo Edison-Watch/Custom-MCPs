@@ -70,6 +70,20 @@ The skill's source of truth lives in [`skills/gmail-mcp/SKILL.md`](skills/gmail-
 - A dashboard that uses the same MCP layer
 - Open source
 
+## Direction
+
+This repo is transitioning from a single Gmail MCP into a **fleet of small,
+utilitarian, streamable-HTTP MCP servers** that Edison hosts as first-party,
+open-source connectors — commodity capabilities (image preview & hosting, PDF,
+and more) wired cleanly for the AI era. The default runtime for new servers is
+**TypeScript on Cloudflare Workers**; this Python / FastMCP template remains the
+home for Gmail and heavy-dependency servers, and can also be self-hosted or
+Edison-hosted with per-user auth.
+
+Full plan — topology, runtime choice, MCP-UI, and the Edison auth/catalog
+integration — lives in
+[`docs/mcp_commodity_fleet_strategy.md`](docs/mcp_commodity_fleet_strategy.md).
+
 ## Key Features
 
 | Feature | Stack |
