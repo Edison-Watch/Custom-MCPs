@@ -24,4 +24,4 @@ for the full strategy and [`../shared/`](../shared) for the shared pieces.
 
 | Server | Runtime | Status | Auth (v1) |
 |--------|---------|--------|-----------|
-| [`image-host/`](./image-host) | TS · Cloudflare Worker + R2 | scaffolded | `bearer` |
+| [`image-host/`](./image-host) | TS · Cloudflare Worker + R2 | built + tested (unit + workerd integration) | `bearer` |

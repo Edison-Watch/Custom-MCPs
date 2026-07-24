@@ -36,6 +36,12 @@ export interface Env {
 const IMAGE_PATH_PREFIX = "/i/";
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
+/** Request-scoped data injected by the fetch handler into the Durable Object. */
+interface Props extends Record<string, unknown> {
+  /** Origin the client connected on, used as the URL base when PUBLIC_BASE_URL is unset. */
+  baseUrl?: string;
+}
+
 function parsePositiveInt(value: string | undefined): number | null {
   if (!value) return null;
   // `Number` (not `parseInt`) so lenient junk like "10MB" is rejected as bad
@@ -54,7 +60,7 @@ function textError(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
 }
 
-export class ImageHostMCP extends McpAgent<Env> {
+export class ImageHostMCP extends McpAgent<Env, unknown, Props> {
   server = new McpServer({ name: "image-host", version: "0.1.0" });
 
   async init(): Promise<void> {
@@ -83,12 +89,14 @@ export class ImageHostMCP extends McpAgent<Env> {
       },
       async ({ content_base64, filename, content_type, prefix }) => {
         // Resolve the absolute base up front: the tool's whole promise is an
-        // embeddable URL, so if we can't build one, fail loud rather than
-        // hand back a broken relative path.
-        const base = resolvePublicBase(this.env);
+        // embeddable URL, so if we can't build one, fail loud rather than hand
+        // back a broken relative path. Explicit PUBLIC_BASE_URL wins (e.g. a
+        // custom domain); otherwise fall back to the origin the client
+        // connected on, injected via props by the fetch handler.
+        const base = resolvePublicBase(this.env) ?? this.props?.baseUrl ?? null;
         if (!base) {
           return textError(
-            "server misconfigured: PUBLIC_BASE_URL is not set, so no absolute, embeddable URL can be returned",
+            "server misconfigured: could not resolve a public base URL (set PUBLIC_BASE_URL)",
           );
         }
 
@@ -192,6 +200,9 @@ export default {
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="image-host"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
+      // Inject the connected origin so upload_image can build absolute URLs
+      // without requiring PUBLIC_BASE_URL to be configured first.
+      (ctx as ExecutionContext & { props?: Props }).props = { baseUrl: url.origin };
       return ImageHostMCP.serve("/mcp").fetch(request, env, ctx);
     }
 

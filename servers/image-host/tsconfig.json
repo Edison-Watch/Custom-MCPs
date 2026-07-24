@@ -13,5 +13,6 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/unit/**/*.ts"],
+  "exclude": ["test/integration"]
 }

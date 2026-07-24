@@ -67,14 +67,24 @@ defaults to `open` (self-host friendly). See
 ```bash
 bun install
 cp .dev.vars.example .dev.vars   # set AUTH_TOKEN, PUBLIC_BASE_URL
-bun run test                     # pure-logic unit tests (offline, no workerd)
+bun run test                     # unit tier — pure logic, offline, no workerd
+bun run test:integration         # integration tier — real Worker in workerd
 bun run typecheck                # tsc --noEmit (needs `bun install` first)
 bun run dev                      # wrangler dev — local Worker + local R2
 ```
 
-Unit tests cover the pure logic (validation, key generation, auth) and run with
-zero network / no `node_modules`. End-to-end behavior (R2 put/get, the `/mcp`
-handshake) is exercised under `wrangler dev`.
+Two test tiers:
+
+- **Unit** (`bun test test/unit`) — the pure logic (validation, key generation,
+  auth). Zero network, no `node_modules` needed for the runner.
+- **Integration** (`vitest run`, `test/integration/`) — the real Worker running
+  in **workerd** (via `@cloudflare/vitest-pool-workers`) with real R2 + Durable
+  Object bindings from `wrangler.jsonc`. Drives the full MCP streamable-HTTP
+  handshake over `SELF.fetch` and asserts the wire format, the origin-derived
+  URL, R2 round-trip, `nosniff`, and the auth gate.
+
+`PUBLIC_BASE_URL` is intentionally left empty in the test env so the integration
+tier exercises the request-origin fallback.
 
 ## Deploy checklist
 

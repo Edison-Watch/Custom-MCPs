@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { checkAuth, extractBearer, resolveAuthMode, timingSafeEqual } from "../src/auth";
+import { checkAuth, extractBearer, resolveAuthMode, timingSafeEqual } from "../../src/auth";
 
 function req(headers: Record<string, string> = {}) {
   return { headers: new Headers(headers) };

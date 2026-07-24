@@ -45,3 +45,6 @@ jobs:
 
       - name: Typecheck
         run: bun run typecheck
+
+      - name: Integration tests (workerd + real R2/DO bindings)
+        run: bun run test:integration
