@@ -1,0 +1,47 @@
+name: TS Fleet Servers
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'servers/**'
+      - 'shared/**'
+      - '.github/workflows/servers_ts.yaml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'servers/**'
+      - 'shared/**'
+      - '.github/workflows/servers_ts.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.server }} (typecheck + test)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - image-host
+    defaults:
+      run:
+        working-directory: servers/${{ matrix.server }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Unit tests (offline pure logic)
+        run: bun run test
+
+      - name: Typecheck
+        run: bun run typecheck
