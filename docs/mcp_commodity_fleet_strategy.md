@@ -20,26 +20,29 @@ as SEO / blog-post material. First wave: **image preview & hosting**.
 
 | # | Decision | Choice |
 |---|----------|--------|
-| 1 | Topology | Polyglot **monorepo, per-server deploy**. "One process, many mounts" survives only as an option for the Python subset. |
+| 1 | Topology | Polyglot **monorepo, per-server deploy** — **this repo is refactored in place** into that monorepo (not a greenfield repo). "One process, many mounts" survives only as an option for the Python subset. |
 | 2 | Hosting / tenancy | **Edison-hosted multi-tenant is primary, but code is fully OSS / self-hostable.** Auth + state are pluggable so the same code runs hosted (identity ON) or self-hosted (identity OFF / BYO). |
-| 3 | Default runtime | **TypeScript on Cloudflare Workers** for new commodity servers. **Python/FastMCP** kept for Gmail and heavy-dependency servers. |
+| 3 | Default runtime | **TypeScript on Cloudflare Workers** for new commodity servers. **Python/FastMCP** kept first-class for Gmail and heavy-dependency servers. |
 | 4 | MCP-UI | First-class, via a **shared React component library** consumed by both runtimes. |
 | 5 | Auth | **Edison-minted per-user JWT**, injected by the gateway (no end-user consent screen), verified statelessly at each server. Pluggable modes; v1 ships static bearer. |
 | 6 | Edison listing | New **`edison_hosted`** catalog flag (distinct from generic `is_official`), plus build-time **catalog generation**. |
-| 7 | Gmail | Stays its **own repo, existing shape** (Python/FastMCP), but publishes a catalog entry the same way as every other server. |
+| 7 | Gmail | Stays in its **existing shape** (Python/FastMCP) as a co-tenant of this monorepo; publishes a catalog entry the same way as every other server. |
 | 8 | Wave 1 | **Image preview & hosting** (Cloudflare Worker + R2). |
 
 ## 3. Target architecture
 
 ```
-        MCP-SERVERS MONOREPO  (dev-time home; each server deploys independently)
+        THIS REPO, refactored into a polyglot monorepo (each server deploys independently)
   +--------------------------------------------------------------------------+
-  | servers/image-host/   TypeScript . Cloudflare Worker . R2 binding  ---> CF
-  | servers/pdf/          TypeScript . Worker                          ---> CF
-  | servers/qr/           TypeScript . Worker                          ---> CF
-  | servers/<py-utils>/   Python . FastMCP  (MAY co-deploy as one process)     |
-  |                          one container, /mcp/a  /mcp/b                     |
-  |  shared/                                                                   |
+  | services/ mcp_server/ api_server/   existing Python/Gmail app (root deploy)|
+  |                                                                            |
+  | servers/                                                                   |
+  |   image-host/   TypeScript . Cloudflare Worker . R2 binding        ---> CF |
+  |   pdf/          TypeScript . Worker                                ---> CF |
+  |   qr/           TypeScript . Worker                                ---> CF |
+  |   <py-utils>/   Python . FastMCP  (MAY co-deploy as one process)           |
+  |                    one container, /mcp/a  /mcp/b                            |
+  | shared/                                                                    |
   |   +-- ui/       React MCP-UI component library (both runtimes)             |
   |   +-- auth/     JWT verify middleware (TS + Py ports)                      |
   |   +-- catalog/  catalog-entry generator + schema                          |
@@ -47,13 +50,13 @@ as SEO / blog-post material. First wave: **image preview & hosting**.
                                     | each server emits a catalog entry
                                     v
              edison-watch marketplace  --  is_official + edison_hosted:true
-
-  Gmail MCP (separate repo, Python/FastMCP, "existing shape")  --> same catalog contract
 ```
 
-Two things keep a polyglot, per-deploy fleet coherent: a **catalog-generation
-contract** (how a server advertises itself to Edison) and an **auth contract**
-(how a caller is identified). Everything else is per-server.
+Grown **additively**: `servers/` + `shared/` are added around the existing
+Python app, whose deploy is untouched. Two things keep a polyglot, per-deploy
+fleet coherent: a **catalog-generation contract** (how a server advertises
+itself to Edison) and an **auth contract** (how a caller is identified).
+Everything else is per-server.
 
 ## 4. Runtime: why TS/Workers is the default
 
@@ -74,7 +77,8 @@ native-C-extension packages (SQLAlchemy, DSPy) and has TS-first MCP tooling.
 
 **Rule of thumb:** new commodity server → TS/Workers. Needs heavy Python deps or
 already exists in Python → FastMCP/container. Gmail is the lone Python outlier,
-so the two-toolchain cost is cheap.
+so the two-toolchain cost (uv/ruff/ty + bun/wrangler/eslint in one repo) is the
+main tax of refactoring in place — accepted.
 
 ## 5. MCP-UI stays consistent across the split
 
@@ -159,25 +163,30 @@ separately; the acceptance criteria in brief:
 
 This server is a good first proof precisely because it exercises **state (R2
 blobs)** and the **base64/remote-transport** constraints without yet needing UI
-or the JWT issuer.
+or the JWT issuer. It also lands as `servers/image-host/`, exercising the
+new monorepo layout end to end.
 
 ## 9. Roadmap
 
-1. Stand up the monorepo skeleton (`servers/`, `shared/{ui,auth,catalog}`, CI,
-   conventions) — TS-first, room for a Python server.
-2. Ship **image-host** on `bearer` mode end-to-end (deploy -> claude.ai
-   connector -> URL renders in a GitHub issue).
+1. Refactor this repo into the monorepo skeleton **additively**: add `servers/`
+   (TS Workers) + `shared/{ui,auth,catalog}` + dual-runtime CI/prek, leaving the
+   existing Python app in place.
+2. Ship **image-host** (`servers/image-host/`) on `bearer` mode end-to-end
+   (deploy -> claude.ai connector -> URL renders in a GitHub issue).
 3. Build the **catalog generator** + `edison_hosted` flag; land image-host as a
    first-party Edison connector.
-4. Build the **Edison JWT issuer** + JWKS; flip image-host to `edison-jwt`;
-   wire per-user usage metering.
+4. Build the **Edison JWT issuer** + JWKS; flip image-host to `edison-jwt`; wire
+   per-user usage metering.
 5. Wave 2 servers (pdf, qr, screenshot, ...) reuse `shared/` end to end.
-6. Fold Gmail's catalog entry into the same contract (repo stays separate).
+6. Emit Gmail's catalog entry via the same contract; optionally relocate the
+   existing Python app to `servers/gmail/` for layout symmetry (touches deploy
+   configs — deferred).
 
 ## 10. Open questions
 
-- Monorepo: brand-new repo, or refactor this one into it? (Leaning: new repo;
-  Gmail/this stays separate but conforms to the catalog contract.)
+- Layout timing: relocate the existing Python app under `servers/gmail/` now, or
+  leave it at root and grow `servers/` around it? (Leaning: leave at root now;
+  relocate later — avoids disturbing the current deploy/packaging.)
 - JWT signing: shared HS256 secret (simplest) vs RS256/EdDSA + JWKS (rotatable,
   no shared secret at the edge). Leaning JWKS for a public edge fleet.
 - Usage sink: push events back to Edison vs per-Worker D1 / Analytics Engine.
