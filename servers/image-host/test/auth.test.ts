@@ -16,6 +16,10 @@ describe("resolveAuthMode", () => {
     expect(resolveAuthMode({ AUTH_MODE: "open", AUTH_TOKEN: "x" })).toBe("open");
     expect(resolveAuthMode({ AUTH_MODE: "edison-jwt" })).toBe("edison-jwt");
   });
+
+  test("passes an unknown mode through verbatim (checkAuth rejects it)", () => {
+    expect(resolveAuthMode({ AUTH_MODE: "totally-made-up" })).toBe("totally-made-up");
+  });
 });
 
 describe("extractBearer", () => {

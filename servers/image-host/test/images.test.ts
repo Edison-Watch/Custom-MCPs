@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  base64PayloadTooLarge,
   decodeBase64,
   generateKey,
   normalizeType,
@@ -89,6 +90,26 @@ describe("validateImage", () => {
     expect(validateImage({ bytes: JPEG, declaredType: "image/jpg" })).toMatchObject({
       contentType: "image/jpeg",
     });
+  });
+});
+
+describe("base64PayloadTooLarge", () => {
+  test("passes payloads that could plausibly fit under the cap", () => {
+    // ~1MB of base64 chars, cap 10 MiB -> comfortably under.
+    expect(base64PayloadTooLarge("a".repeat(1_000_000), 10 * 1024 * 1024)).toBe(false);
+  });
+
+  test("rejects payloads that cannot fit even at best packing", () => {
+    // 1MB of base64 decodes to ~750KB, over a 4-byte cap.
+    expect(base64PayloadTooLarge("a".repeat(1_000_000), 4)).toBe(true);
+  });
+
+  test("allows slack for line-wrap newlines and a data: prefix", () => {
+    // A payload exactly at the char-count for maxBytes plus modest wrapping
+    // must not be rejected by the pre-decode guard.
+    const maxBytes = 1024;
+    const exactChars = Math.ceil(maxBytes / 3) * 4;
+    expect(base64PayloadTooLarge("a".repeat(exactChars + 40), maxBytes)).toBe(false);
   });
 });
 

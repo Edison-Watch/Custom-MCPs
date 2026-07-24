@@ -92,8 +92,8 @@ handshake) is exercised under `wrangler dev`.
    ```
 4. **Set `PUBLIC_BASE_URL`** to the deployed worker URL (or a custom domain) in
    `wrangler.jsonc` `vars`, then `wrangler deploy` again so returned URLs are
-   absolute. (Left blank, uploads still succeed but the URL comes back as a
-   path.)
+   absolute. **Required:** until it's set, `upload_image` fails loudly rather
+   than returning a non-embeddable relative path.
 5. **Register as a connector** — add the `https://<worker>/mcp` URL as a custom
    remote MCP connector (e.g. in claude.ai connector settings) with the bearer
    token. Smoke test: `upload_image` a PNG and confirm the returned URL renders

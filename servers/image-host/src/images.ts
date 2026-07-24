@@ -52,6 +52,19 @@ export function decodeBase64(input: string): Uint8Array {
 }
 
 /**
+ * Cheap pre-decode size guard. Base64 for N bytes is ~ceil(N/3)*4 characters,
+ * so an input far larger than that can't possibly fit under `maxBytes` (short
+ * of being mostly whitespace, which is itself abuse). Rejecting here avoids the
+ * ~3x peak allocation that `atob` + the byte copy would otherwise incur before
+ * the exact post-decode check in `validateImage` ever runs. Slack: +10% for
+ * line-wrap newlines, +64 for a `data:` URL prefix.
+ */
+export function base64PayloadTooLarge(input: string, maxBytes: number): boolean {
+  const maxChars = Math.ceil(maxBytes / 3) * 4;
+  return input.length > maxChars + Math.ceil(maxChars * 0.1) + 64;
+}
+
+/**
  * Identify an image by its magic bytes. This is the security-relevant check:
  * we trust the bytes, not the caller's declared content type, so a caller
  * cannot smuggle an SVG/HTML payload behind an `image/png` label. Returns null

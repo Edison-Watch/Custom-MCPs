@@ -40,12 +40,18 @@ export interface HeaderCarrier {
 /**
  * Resolve the effective auth mode. Explicit `AUTH_MODE` wins; otherwise default
  * to `bearer` when a token is configured and `open` when it isn't (self-host
- * friendly — a fresh clone with no secrets just works, read-only-ish).
+ * friendly). NOTE: `open` requires NO auth yet still exposes the mutating tools
+ * (upload_image, delete_image) — only default to it for a trusted/self-hosted
+ * deploy, never a public one.
+ *
+ * Returns `AuthMode | string`: an unrecognized `AUTH_MODE` is passed through as
+ * a raw string so `checkAuth` rejects it explicitly (fail closed) rather than
+ * this cast smuggling an invalid value into the `AuthMode` type.
  */
-export function resolveAuthMode(env: AuthEnv): AuthMode {
+export function resolveAuthMode(env: AuthEnv): AuthMode | string {
   const raw = (env.AUTH_MODE ?? "").trim().toLowerCase();
   if (raw === "open" || raw === "bearer" || raw === "edison-jwt") return raw;
-  if (raw) return raw as AuthMode; // unknown value: surfaced as an explicit reject in checkAuth
+  if (raw) return raw; // unknown value: surfaced as an explicit reject in checkAuth
   return env.AUTH_TOKEN ? "bearer" : "open";
 }
 

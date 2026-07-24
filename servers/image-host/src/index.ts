@@ -15,7 +15,13 @@ import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
 import { checkAuth } from "./auth";
-import { DEFAULT_MAX_UPLOAD_BYTES, decodeBase64, generateKey, validateImage } from "./images";
+import {
+  DEFAULT_MAX_UPLOAD_BYTES,
+  base64PayloadTooLarge,
+  decodeBase64,
+  generateKey,
+  validateImage,
+} from "./images";
 
 export interface Env {
   IMAGE_BUCKET: R2Bucket;
@@ -32,8 +38,10 @@ const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
 function parsePositiveInt(value: string | undefined): number | null {
   if (!value) return null;
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
+  // `Number` (not `parseInt`) so lenient junk like "10MB" is rejected as bad
+  // config instead of silently truncating to 10.
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** Absolute base for returned URLs, e.g. `https://image-host.acme.workers.dev`. */
@@ -74,7 +82,21 @@ export class ImageHostMCP extends McpAgent<Env> {
         },
       },
       async ({ content_base64, filename, content_type, prefix }) => {
+        // Resolve the absolute base up front: the tool's whole promise is an
+        // embeddable URL, so if we can't build one, fail loud rather than
+        // hand back a broken relative path.
+        const base = resolvePublicBase(this.env);
+        if (!base) {
+          return textError(
+            "server misconfigured: PUBLIC_BASE_URL is not set, so no absolute, embeddable URL can be returned",
+          );
+        }
+
         const maxBytes = parsePositiveInt(this.env.MAX_UPLOAD_BYTES) ?? DEFAULT_MAX_UPLOAD_BYTES;
+        // Reject oversized inputs before decoding to avoid the ~3x allocation.
+        if (base64PayloadTooLarge(content_base64, maxBytes)) {
+          return textError(`image exceeds the ${maxBytes}-byte limit`);
+        }
 
         let bytes: Uint8Array;
         try {
@@ -92,8 +114,7 @@ export class ImageHostMCP extends McpAgent<Env> {
           httpMetadata: { contentType: validated.contentType, cacheControl: IMMUTABLE_CACHE },
         });
 
-        const base = resolvePublicBase(this.env);
-        const url = `${base ?? ""}${IMAGE_PATH_PREFIX}${key}`;
+        const url = `${base}${IMAGE_PATH_PREFIX}${key}`;
         const structuredContent = {
           url,
           key,
@@ -115,10 +136,13 @@ export class ImageHostMCP extends McpAgent<Env> {
         outputSchema: { deleted: z.boolean(), key: z.string() },
       },
       async ({ key }) => {
+        // R2 `delete` is a no-op on a missing key and resolves either way, so
+        // check existence first to report an honest `deleted` boolean.
+        const existed = (await this.env.IMAGE_BUCKET.head(key)) !== null;
         await this.env.IMAGE_BUCKET.delete(key);
         return {
-          content: [{ type: "text" as const, text: `Deleted ${key}` }],
-          structuredContent: { deleted: true, key },
+          content: [{ type: "text" as const, text: existed ? `Deleted ${key}` : `No object found for ${key}` }],
+          structuredContent: { deleted: existed, key },
         };
       },
     );
@@ -128,7 +152,14 @@ export class ImageHostMCP extends McpAgent<Env> {
 /** Serve a stored object straight from R2 (Mode A: no public bucket required). */
 async function serveImage(rawKey: string, env: Env): Promise<Response> {
   if (!rawKey) return new Response("Not found", { status: 404 });
-  const key = decodeURIComponent(rawKey);
+  let key: string;
+  try {
+    key = decodeURIComponent(rawKey);
+  } catch {
+    // Malformed percent-encoding (e.g. `/i/%ZZ`) — treat as a missing object,
+    // not a 500 on this public unauthenticated endpoint.
+    return new Response("Not found", { status: 404 });
+  }
   const object = await env.IMAGE_BUCKET.get(key);
   if (!object) return new Response("Not found", { status: 404 });
 
@@ -136,6 +167,9 @@ async function serveImage(rawKey: string, env: Env): Promise<Response> {
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
   headers.set("cache-control", IMMUTABLE_CACHE);
+  // Defense-in-depth: we serve user-supplied bytes from the app origin, so pin
+  // the declared (byte-sniffed) content type and forbid MIME sniffing.
+  headers.set("x-content-type-options", "nosniff");
   return new Response(object.body, { headers });
 }
 

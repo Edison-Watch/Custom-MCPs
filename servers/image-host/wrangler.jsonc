@@ -13,7 +13,8 @@
     // AUTH_TOKEN is a SECRET — set it with `wrangler secret put AUTH_TOKEN`, never here.
     "AUTH_MODE": "bearer",
     "KEY_PREFIX": "img",
-    // Fill in after the first deploy: your worker URL or a custom domain.
+    // REQUIRED before upload_image works: your worker URL or a custom domain.
+    // While blank, upload_image fails loudly instead of returning a relative URL.
     // e.g. "https://image-host.<account>.workers.dev"
     "PUBLIC_BASE_URL": ""
   },
