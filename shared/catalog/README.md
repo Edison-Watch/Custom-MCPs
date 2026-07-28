@@ -1,35 +1,47 @@
 # `shared/catalog` — the Edison catalog contract
 
 How a fleet server advertises itself to the Edison marketplace. Each server
-emits one connector entry as a build artifact; CI upserts those into
-edison-watch's static catalog.
+declares one `servers/<id>/catalog-entry.json`; edison-watch's sync upserts
+those into its static catalog and badges the Edison-hosted ones.
 
-Planned entry shape (superset of edison-watch's existing marketplace entry):
+## Contract
 
-```jsonc
-{
-  "id": "image-host",
-  "name": "Image Host",
-  "url": "https://image-host.<host>/mcp",
-  "transport": "http",
-  "auth_mode": "bearer",              // open | bearer | edison-jwt
-  "is_official": true,
-  "edison_hosted": true,              // NEW: first-party, Edison-operated
-  "author": "Edison",
-  "icon": "image-host.svg",
-  "tools_configurations": [ /* per-tool ACL defaults: PUBLIC | PRIVATE | SECRET */ ]
-}
+- **Schema:** [`schema.json`](./schema.json) — the entry shape (draft 2020-12).
+- **Validator/aggregator:** [`aggregate.py`](./aggregate.py) — validates every
+  `servers/*/catalog-entry.json` against the schema's constraints (re-expressed
+  in stdlib Python so CI needs no dependency) and builds the combined
+  `dist/catalog.json`. `dist/` is a gitignored build convenience.
+- **Author-side:** a server ships `catalog-entry.json` + its `<id>.svg` icon,
+  co-located. See [`../../servers/image-host/`](../../servers/image-host) for the
+  worked example. `id` must equal the directory name and the icon basename.
+
+```
+  servers/image-host/
+    ├─ catalog-entry.json   # this server's connector spec (source of truth)
+    └─ image-host.svg       # icon, copied into the marketplace by the sync
 ```
 
-## Status
+## Sync (edison-watch side)
 
-Placeholder. When the generator lands here it will:
+The fleet is the source of truth; edison-watch mirrors it one-way. Its
+`scripts/sync_fleet_connectors.py` reads the per-server `catalog-entry.json`
+**source** files directly from a fleet checkout (not `dist/`, to avoid build
+coupling), upserts them into `scripts/marketplace_connectors.json`, copies icons
+into `frontend-v2/public/marketplace/icons/`, and runs the existing
+`scripts/generate_marketplace_entries.py`. A scheduled/dispatch workflow opens
+the update PR. Third-party (non-fleet) catalog entries are never touched.
 
-1. Read each server's declared metadata (name, url, auth mode, icon, per-tool
-   ACL defaults) and emit `dist/<id>.json`.
-2. Feed edison-watch's `scripts/generate_marketplace_entries.py` +
-   `scripts/marketplace_connectors.json`, and drop icons under
-   `frontend-v2/public/marketplace/icons/`.
+Full spec: `edison-watch/dev-docs/architecture/first_party_mcp_integration.md`
+§(1)–(2); fleet strategy `../../docs/mcp_commodity_fleet_strategy.md` §7.
 
-The **`edison_hosted`** flag and the sync are edison-watch changes, specified in
-`edison-watch/dev-docs/architecture/first_party_mcp_integration.md` §(1)–(2).
+## CI
+
+`make catalog_check` (wired into `make ci`) runs `aggregate.py --check`, failing
+the build on any invalid entry.
+
+## Not here yet
+
+- `edison-jwt` auth mode: entries declare `auth: token` (v1 static bearer); the
+  fleet→Edison JWT issuer is a later phase (strategy §6, roadmap step 4).
+- Per-tool ACL defaults (`tools_configurations`): entries omit them today, so
+  installs use Edison's autoconfig path; bake them in once reviewed.
