@@ -43,33 +43,49 @@ describe("timingSafeEqual", () => {
 });
 
 describe("checkAuth", () => {
-  test("open mode admits everyone", () => {
-    expect(checkAuth(req(), {})).toMatchObject({ ok: true, mode: "open", subject: "anonymous" });
+  test("open mode admits everyone", async () => {
+    expect(await checkAuth(req(), {})).toMatchObject({ ok: true, mode: "open", subject: "anonymous" });
   });
 
-  test("bearer mode: missing, wrong, and correct tokens", () => {
+  test("bearer mode: missing, wrong, and correct tokens", async () => {
     const env = { AUTH_TOKEN: "s3cret" };
-    expect(checkAuth(req(), env)).toMatchObject({ ok: false, status: 401 });
-    expect(checkAuth(req({ authorization: "Bearer nope" }), env)).toMatchObject({ ok: false, status: 401 });
-    expect(checkAuth(req({ authorization: "Bearer s3cret" }), env)).toMatchObject({
+    expect(await checkAuth(req(), env)).toMatchObject({ ok: false, status: 401 });
+    expect(await checkAuth(req({ authorization: "Bearer nope" }), env)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    expect(await checkAuth(req({ authorization: "Bearer s3cret" }), env)).toMatchObject({
       ok: true,
       subject: "bearer",
     });
   });
 
-  test("bearer mode with no configured token is a 500 misconfig", () => {
-    expect(checkAuth(req({ authorization: "Bearer x" }), { AUTH_MODE: "bearer" })).toMatchObject({
+  test("bearer mode with no configured token is a 500 misconfig", async () => {
+    expect(await checkAuth(req({ authorization: "Bearer x" }), { AUTH_MODE: "bearer" })).toMatchObject({
       ok: false,
       status: 500,
     });
   });
 
-  test("edison-jwt is not implemented yet (501)", () => {
-    expect(checkAuth(req(), { AUTH_MODE: "edison-jwt" })).toMatchObject({ ok: false, status: 501 });
+  test("edison-jwt with incomplete config fails closed (500), never admits", async () => {
+    // Missing JWKS/issuer/audience must not fall through to allowing traffic.
+    expect(await checkAuth(req({ authorization: "Bearer x" }), { AUTH_MODE: "edison-jwt" })).toMatchObject(
+      { ok: false, status: 500 },
+    );
   });
 
-  test("an unknown mode is rejected, never admitted", () => {
-    const result = checkAuth(req(), { AUTH_MODE: "totally-made-up" });
+  test("edison-jwt with full config but no token is a 401", async () => {
+    const env = {
+      AUTH_MODE: "edison-jwt",
+      EDISON_JWKS_URL: "https://edison.example/.well-known/jwks.json",
+      EDISON_JWT_ISSUER: "https://edison.example",
+      EDISON_JWT_AUDIENCE: "image-host",
+    };
+    expect(await checkAuth(req(), env)).toMatchObject({ ok: false, status: 401 });
+  });
+
+  test("an unknown mode is rejected, never admitted", async () => {
+    const result = await checkAuth(req(), { AUTH_MODE: "totally-made-up" });
     expect(result.ok).toBe(false);
   });
 });

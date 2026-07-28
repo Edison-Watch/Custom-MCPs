@@ -28,6 +28,10 @@ export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
   AUTH_TOKEN?: string;
   AUTH_MODE?: string;
+  // edison-jwt mode (see ./auth, ./jwt): JWKS source + claims to enforce.
+  EDISON_JWKS_URL?: string;
+  EDISON_JWT_ISSUER?: string;
+  EDISON_JWT_AUDIENCE?: string;
   PUBLIC_BASE_URL?: string;
   MAX_UPLOAD_BYTES?: string;
   KEY_PREFIX?: string;
@@ -194,7 +198,7 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      const auth = checkAuth(request, env);
+      const auth = await checkAuth(request, env);
       if (!auth.ok) {
         const headers: Record<string, string> = { "content-type": "application/json" };
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="image-host"';

@@ -11,11 +11,17 @@
  * server. See ../../../docs/mcp_commodity_fleet_strategy.md (§6 Auth model).
  */
 
+import { verifyEdisonJwt } from "./jwt";
+
 export type AuthMode = "open" | "bearer" | "edison-jwt";
 
 export interface AuthEnv {
   AUTH_MODE?: string;
   AUTH_TOKEN?: string;
+  // edison-jwt mode: where to fetch Edison's JWKS and the claims to enforce.
+  EDISON_JWKS_URL?: string;
+  EDISON_JWT_ISSUER?: string;
+  EDISON_JWT_AUDIENCE?: string;
 }
 
 export interface AuthOk {
@@ -78,7 +84,7 @@ export function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /** Authenticate a request under the server's configured mode. */
-export function checkAuth(request: HeaderCarrier, env: AuthEnv): AuthResult {
+export async function checkAuth(request: HeaderCarrier, env: AuthEnv): Promise<AuthResult> {
   const mode = resolveAuthMode(env);
   switch (mode) {
     case "open":
@@ -94,10 +100,29 @@ export function checkAuth(request: HeaderCarrier, env: AuthEnv): AuthResult {
       }
       return { ok: true, mode, subject: "bearer" };
     }
-    case "edison-jwt":
-      // TODO(fleet): verify the Edison-minted JWT via the published JWKS and set
-      // subject = the token's `sub` claim for per-user usage attribution.
-      return { ok: false, status: 501, message: "auth mode 'edison-jwt' is not implemented yet" };
+    case "edison-jwt": {
+      // Verify the Edison-minted JWT via the published JWKS; subject = `sub`
+      // claim for per-user usage attribution. All three config values are
+      // required — a missing one fails closed rather than admitting traffic.
+      const { EDISON_JWKS_URL, EDISON_JWT_ISSUER, EDISON_JWT_AUDIENCE } = env;
+      if (!EDISON_JWKS_URL || !EDISON_JWT_ISSUER || !EDISON_JWT_AUDIENCE) {
+        return {
+          ok: false,
+          status: 500,
+          message:
+            "server misconfigured: edison-jwt needs EDISON_JWKS_URL, EDISON_JWT_ISSUER, EDISON_JWT_AUDIENCE",
+        };
+      }
+      const presented = extractBearer(request.headers.get("authorization"));
+      if (!presented) return { ok: false, status: 401, message: "missing bearer token" };
+      const result = await verifyEdisonJwt(presented, {
+        jwksUrl: EDISON_JWKS_URL,
+        issuer: EDISON_JWT_ISSUER,
+        audience: EDISON_JWT_AUDIENCE,
+      });
+      if (!result.ok) return { ok: false, status: result.status, message: result.message };
+      return { ok: true, mode, subject: result.sub };
+    }
     default:
       return { ok: false, status: 500, message: `unknown auth mode: ${mode}` };
   }

@@ -12,6 +12,11 @@
   "vars": {
     // AUTH_TOKEN is a SECRET — set it with `wrangler secret put AUTH_TOKEN`, never here.
     "AUTH_MODE": "bearer",
+    // To flip to Edison-minted JWTs (see src/jwt.ts), set AUTH_MODE to "edison-jwt"
+    // and fill all three below (none are secrets — they're public config):
+    //   "EDISON_JWKS_URL": "https://<edison-host>/.well-known/jwks.json",
+    //   "EDISON_JWT_ISSUER": "https://<edison-host>",
+    //   "EDISON_JWT_AUDIENCE": "image-host",
     "KEY_PREFIX": "img",
     // REQUIRED before upload_image works: your worker URL or a custom domain.
     // While blank, upload_image fails loudly instead of returning a relative URL.
