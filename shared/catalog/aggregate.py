@@ -50,7 +50,7 @@ REQUIRED = (
     "auth",
     "icon",
 )
-AUTH_MODES = ("none", "token", "oauth")
+AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
 
 
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
@@ -87,6 +87,10 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
         (
             entry["auth"] == "token" and "template_fields" not in entry,
             "auth 'token' requires 'template_fields'",
+        ),
+        (
+            entry["auth"] == "edison-jwt" and not entry.get("edison_hosted"),
+            "auth 'edison-jwt' requires 'edison_hosted': true",
         ),
         (
             hosted is not None and not isinstance(hosted, bool),

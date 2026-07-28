@@ -59,9 +59,10 @@
       "enum": [
         "none",
         "token",
-        "oauth"
+        "oauth",
+        "edison-jwt"
       ],
-      "description": "edison-watch mount auth mode. 'token' resolves {PLACEHOLDER}s from template_fields.env; 'oauth' is 401-discovered; 'none' is open. (The fleet-side bearer/edison-jwt distinction maps onto 'token' here.)"
+      "description": "edison-watch mount auth mode. 'token' resolves {PLACEHOLDER}s from template_fields.env; 'oauth' is 401-discovered; 'none' is open; 'edison-jwt' means Edison mints a per-user JWT and injects it (first-party servers only; requires edison_hosted, no user token). The fleet server's bearer mode maps onto 'token'."
     },
     "headers": {
       "type": "object",
