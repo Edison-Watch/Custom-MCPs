@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 
-import { type EdisonJwtConfig, type Jwks, verifyJwtWithJwks } from "../../src/jwt";
+import {
+  __resetJwksCacheForTest,
+  type EdisonJwtConfig,
+  type Jwks,
+  verifyEdisonJwt,
+  verifyJwtWithJwks,
+} from "../../src/jwt";
 
 // Deterministic clock so exp/nbf checks don't depend on wall time.
 const NOW = 1_000_000_000;
@@ -25,9 +31,12 @@ let jwks: Jwks;
 
 async function sign(
   claims: Record<string, unknown>,
-  opts: { kid?: string; alg?: string } = {},
+  opts: { kid?: string | null; alg?: string } = {},
 ): Promise<string> {
-  const header = b64urlStr(JSON.stringify({ alg: opts.alg ?? "RS256", kid: opts.kid ?? KID, typ: "JWT" }));
+  // opts.kid === null omits the kid header entirely (to test rejection).
+  const headerObj: Record<string, unknown> = { alg: opts.alg ?? "RS256", typ: "JWT" };
+  if (opts.kid !== null) headerObj.kid = opts.kid ?? KID;
+  const header = b64urlStr(JSON.stringify(headerObj));
   const payload = b64urlStr(JSON.stringify(claims));
   const signingInput = `${header}.${payload}`;
   const sig = await crypto.subtle.sign(
@@ -94,6 +103,11 @@ describe("verifyJwtWithJwks", () => {
     expect(await verifyJwtWithJwks(token, jwks, CONFIG, NOW)).toMatchObject({ ok: false, status: 401 });
   });
 
+  test("rejects a token with no kid (Edison always sets one)", async () => {
+    const token = await sign(validClaims(), { kid: null });
+    expect(await verifyJwtWithJwks(token, jwks, CONFIG, NOW)).toMatchObject({ ok: false, status: 401 });
+  });
+
   test("rejects a tampered signature", async () => {
     const token = await sign(validClaims());
     const tampered = token.slice(0, -3) + (token.endsWith("AAA") ? "BBB" : "AAA");
@@ -103,5 +117,39 @@ describe("verifyJwtWithJwks", () => {
   test("rejects a structurally malformed token", async () => {
     expect(await verifyJwtWithJwks("not.a.jwt.at.all", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
     expect(await verifyJwtWithJwks("onlyonepart", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
+  });
+});
+
+describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
+  // Claims must be valid under the real clock — verifyEdisonJwt uses Date.now().
+  function realClaims(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const now = Math.floor(Date.now() / 1000);
+    return { iss: CONFIG.issuer, aud: CONFIG.audience, sub: "user-42", iat: now, exp: now + 300, ...overrides };
+  }
+
+  test("fetches JWKS once, then rate-limits attacker-driven kid-miss refetches", async () => {
+    __resetJwksCacheForTest();
+    let fetches = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetches++;
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const ok = await verifyEdisonJwt(await sign(realClaims()), CONFIG);
+      expect(ok).toMatchObject({ ok: true, sub: "user-42" });
+      expect(fetches).toBe(1);
+
+      // A burst of unknown, attacker-chosen kids must not each hit the network.
+      for (let i = 0; i < 5; i++) {
+        await verifyEdisonJwt(await sign(realClaims(), { kid: `attacker-${i}` }), CONFIG);
+      }
+      expect(fetches).toBe(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

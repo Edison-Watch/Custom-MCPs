@@ -47,15 +47,18 @@ export interface Jwks {
 
 const CLOCK_SKEW_SEC = 60;
 const JWKS_TTL_MS = 5 * 60 * 1000;
+const JWKS_MIN_REFETCH_MS = 30 * 1000;
 
 // Module-scoped JWKS cache. A cold isolate refetches; within an isolate we
 // avoid a fetch per request but still pick up rotations within JWKS_TTL_MS (and
-// immediately on a kid miss, see ensureJwks).
+// on a kid miss, subject to the refetch cooldown — see ensureJwks).
 let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
+let lastFetchAt = 0;
 
 /** Reset the JWKS cache. Test-only. */
 export function __resetJwksCacheForTest(): void {
   jwksCache = null;
+  lastFetchAt = 0;
 }
 
 function fail(status: number, message: string): JwtFail {
@@ -143,11 +146,11 @@ export async function verifyJwtWithJwks(
     return fail(401, "unreadable token");
   }
   if (header.alg !== "RS256") return fail(401, `unsupported alg: ${header.alg}`);
+  // Edison always sets `kid` (mcp_jwt.py), so a kid-less token is not one Edison
+  // minted. Require it, and match on it exactly — no "try every key" fallback.
+  if (!header.kid) return fail(401, "missing kid");
 
-  // Match by kid when present; otherwise fall back to any RSA signing key.
-  const candidates = jwks.keys.filter(
-    (k) => k.kty === "RSA" && (header.kid ? k.kid === header.kid : true),
-  );
+  const candidates = jwks.keys.filter((k) => k.kty === "RSA" && k.kid === header.kid);
   if (candidates.length === 0) return fail(401, "no matching signing key");
 
   let signature: Uint8Array;
@@ -188,6 +191,12 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   const fresh = jwksCache && jwksCache.url === url && now - jwksCache.fetchedAt < JWKS_TTL_MS;
   const hasKid = wantKid ? jwksCache?.jwks.keys.some((k) => k.kid === wantKid) : true;
   if (fresh && hasKid) return jwksCache!.jwks;
+
+  // Rate-limit refetches so an attacker-chosen `kid` can't force one upstream
+  // JWKS GET per request. Until the cooldown lapses, serve the cached set (a kid
+  // miss then 401s) rather than hammering Edison's /.well-known/jwks.json.
+  if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return jwksCache ? jwksCache.jwks : null;
+  lastFetchAt = now;
 
   const jwks = await fetchJwks(url);
   if (!jwks) return fresh ? jwksCache!.jwks : null; // network blip: fall back to a cached set if we have one
