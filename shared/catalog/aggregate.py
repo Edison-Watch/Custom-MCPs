@@ -113,7 +113,9 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             f"id '{entry['id']}' must equal dir '{server_dir.name}'",
         ),
         (
-            not isinstance(entry["id"], str) or not ID_RE.match(str(entry["id"])),
+            # fullmatch, not match: Python's `$` also matches just before a
+            # trailing newline, so `match` would accept 'image-host\n'.
+            not isinstance(entry["id"], str) or not ID_RE.fullmatch(str(entry["id"])),
             f"id '{entry['id']}' must match {ID_RE.pattern}",
         ),
         (
