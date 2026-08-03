@@ -121,7 +121,7 @@ describe("verifyJwtWithJwks", () => {
 });
 
 describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
-  // Claims must be valid under the real clock — verifyEdisonJwt uses Date.now().
+  // Claims must be valid under the real clock - verifyEdisonJwt uses Date.now().
   function realClaims(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     const now = Math.floor(Date.now() / 1000);
     return { iss: CONFIG.issuer, aud: CONFIG.audience, sub: "user-42", iat: now, exp: now + 300, ...overrides };

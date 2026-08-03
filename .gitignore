@@ -183,7 +183,7 @@ cython_debug/
 # MCPJam conformance run artifacts (make mcp_conformance)
 mcp_conformance_results/
 
-# TypeScript MCP fleet (servers/*, shared/*) — Cloudflare Workers toolchain
+# TypeScript MCP fleet (servers/*, shared/*) - Cloudflare Workers toolchain
 node_modules/
 servers/**/.wrangler/
 servers/**/.dev.vars

@@ -104,6 +104,9 @@
   "allOf": [
     {
       "if": {
+        "required": [
+          "auth"
+        ],
         "properties": {
           "auth": {
             "const": "token"
@@ -115,6 +118,28 @@
           "headers",
           "template_fields"
         ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "const": "edison-jwt"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "edison_hosted"
+        ],
+        "properties": {
+          "edison_hosted": {
+            "const": true
+          }
+        }
       }
     }
   ]

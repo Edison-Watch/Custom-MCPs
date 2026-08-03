@@ -1,10 +1,10 @@
 /**
  * Pluggable auth for fleet servers.
  *
- * v1 ships `open` and `bearer`. `edison-jwt` — where Edison mints a per-user
- * JWT and injects it as the Authorization header (no end-user consent screen,
- * attributable `sub`) — is the planned drop-in and is intentionally stubbed so
- * that *selecting* the mode fails loudly rather than silently allowing traffic.
+ * Ships `open`, `bearer`, and `edison-jwt` - where Edison mints a per-user JWT
+ * and injects it as the Authorization header (no end-user consent screen,
+ * attributable `sub`), verified statelessly against Edison's published JWKS
+ * (see ./jwt.ts).
  *
  * The verify layer lives here (not in the Durable Object) so a caller is
  * identified before any work happens, and so the same seam serves every fleet
@@ -38,17 +38,22 @@ export interface AuthFail {
 
 export type AuthResult = AuthOk | AuthFail;
 
-/** Minimal structural shape of the bits of `Request` we need — keeps this testable. */
+/** Minimal structural shape of the bits of `Request` we need - keeps this testable. */
 export interface HeaderCarrier {
   headers: { get(name: string): string | null };
 }
 
 /**
  * Resolve the effective auth mode. Explicit `AUTH_MODE` wins; otherwise default
- * to `bearer` when a token is configured and `open` when it isn't (self-host
- * friendly). NOTE: `open` requires NO auth yet still exposes the mutating tools
- * (upload_image, delete_image) — only default to it for a trusted/self-hosted
- * deploy, never a public one.
+ * to `bearer` when `AUTH_TOKEN` is *present* and `open` only when it is entirely
+ * absent (self-host friendly). NOTE: `open` requires NO auth yet still exposes
+ * the mutating tools (upload_image, delete_image) - only default to it for a
+ * trusted/self-hosted deploy, never a public one.
+ *
+ * A defined-but-empty `AUTH_TOKEN` (e.g. `AUTH_TOKEN=""`) must NOT collapse to
+ * `open`: an operator who set the var clearly meant to require auth, so we keep
+ * them in `bearer` where `checkAuth` fails closed with a 500 misconfig rather
+ * than silently serving unauthenticated. Only a truly unset token means `open`.
  *
  * Returns `AuthMode | string`: an unrecognized `AUTH_MODE` is passed through as
  * a raw string so `checkAuth` rejects it explicitly (fail closed) rather than
@@ -58,7 +63,9 @@ export function resolveAuthMode(env: AuthEnv): AuthMode | string {
   const raw = (env.AUTH_MODE ?? "").trim().toLowerCase();
   if (raw === "open" || raw === "bearer" || raw === "edison-jwt") return raw;
   if (raw) return raw; // unknown value: surfaced as an explicit reject in checkAuth
-  return env.AUTH_TOKEN ? "bearer" : "open";
+  // Distinguish absent (undefined -> open) from present-but-empty ("" -> bearer,
+  // which then 500s as misconfigured) so an empty token never disables auth.
+  return env.AUTH_TOKEN !== undefined ? "bearer" : "open";
 }
 
 /** Pull the token out of an `Authorization: Bearer <token>` header. */
@@ -90,7 +97,7 @@ export async function checkAuth(request: HeaderCarrier, env: AuthEnv): Promise<A
     case "open":
       return { ok: true, mode, subject: "anonymous" };
     case "bearer": {
-      if (!env.AUTH_TOKEN) {
+      if (!env.AUTH_TOKEN?.trim()) {
         return { ok: false, status: 500, message: "server misconfigured: AUTH_TOKEN not set for bearer mode" };
       }
       const presented = extractBearer(request.headers.get("authorization"));
@@ -103,7 +110,7 @@ export async function checkAuth(request: HeaderCarrier, env: AuthEnv): Promise<A
     case "edison-jwt": {
       // Verify the Edison-minted JWT via the published JWKS; subject = `sub`
       // claim for per-user usage attribution. All three config values are
-      // required — a missing one fails closed rather than admitting traffic.
+      // required - a missing one fails closed rather than admitting traffic.
       const { EDISON_JWKS_URL, EDISON_JWT_ISSUER, EDISON_JWT_AUDIENCE } = env;
       if (!EDISON_JWKS_URL || !EDISON_JWT_ISSUER || !EDISON_JWT_AUDIENCE) {
         return {

@@ -2,9 +2,9 @@
  * Stateless verification of Edison-minted per-user JWTs (the `edison-jwt` auth
  * mode). Edison signs a short-lived RS256 token per user and injects it as the
  * Authorization header on proxied calls; this server verifies the signature
- * against Edison's published JWKS — no per-request callback to Edison.
+ * against Edison's published JWKS - no per-request callback to Edison.
  *
- * Contract (both sides must agree — Edison mint side is
+ * Contract (both sides must agree - Edison mint side is
  * edison-watch `src/mcp_jwt.py`):
  *   header:  { alg: "RS256", kid, typ: "JWT" }
  *   claims:  { iss, aud, sub, iat, exp }   // aud = this server's id
@@ -51,7 +51,7 @@ const JWKS_MIN_REFETCH_MS = 30 * 1000;
 
 // Module-scoped JWKS cache. A cold isolate refetches; within an isolate we
 // avoid a fetch per request but still pick up rotations within JWKS_TTL_MS (and
-// on a kid miss, subject to the refetch cooldown — see ensureJwks).
+// on a kid miss, subject to the refetch cooldown - see ensureJwks).
 let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
 let lastFetchAt = 0;
 
@@ -119,8 +119,14 @@ async function verifySignature(
   signature: Uint8Array,
 ): Promise<boolean> {
   const algo = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" };
-  const key = await crypto.subtle.importKey("jwk", jwk, algo, false, ["verify"]);
-  return crypto.subtle.verify(algo, key, signature, new TextEncoder().encode(signingInput));
+  try {
+    const key = await crypto.subtle.importKey("jwk", jwk, algo, false, ["verify"]);
+    return await crypto.subtle.verify(algo, key, signature, new TextEncoder().encode(signingInput));
+  } catch {
+    // A malformed/unsupported JWK makes importKey/verify throw. Treat it as a
+    // failed verification (401), never an uncaught rejection that escapes to 500.
+    return false;
+  }
 }
 
 /**
@@ -147,10 +153,13 @@ export async function verifyJwtWithJwks(
   }
   if (header.alg !== "RS256") return fail(401, `unsupported alg: ${header.alg}`);
   // Edison always sets `kid` (mcp_jwt.py), so a kid-less token is not one Edison
-  // minted. Require it, and match on it exactly — no "try every key" fallback.
+  // minted. Require it, and match on it exactly - no "try every key" fallback.
   if (!header.kid) return fail(401, "missing kid");
 
-  const candidates = jwks.keys.filter((k) => k.kty === "RSA" && k.kid === header.kid);
+  // Require the public RSA params too, so a malformed JWKS entry can't reach importKey.
+  const candidates = jwks.keys.filter(
+    (k) => k.kty === "RSA" && k.kid === header.kid && k.n && k.e,
+  );
   if (candidates.length === 0) return fail(401, "no matching signing key");
 
   let signature: Uint8Array;
@@ -176,10 +185,16 @@ export async function verifyJwtWithJwks(
 }
 
 async function fetchJwks(url: string): Promise<Jwks | null> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
-  if (!res.ok) return null;
-  const body = (await res.json()) as Jwks;
-  return Array.isArray(body?.keys) ? body : null;
+  try {
+    const res = await fetch(url, { headers: { accept: "application/json" } });
+    if (!res.ok) return null;
+    const body = (await res.json()) as Jwks;
+    return Array.isArray(body?.keys) ? body : null;
+  } catch {
+    // Network error or unparseable body: report "no JWKS" (caller 503s) rather
+    // than letting the rejection escape verifyEdisonJwt/checkAuth to a 500.
+    return null;
+  }
 }
 
 /**
@@ -192,14 +207,20 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   const hasKid = wantKid ? jwksCache?.jwks.keys.some((k) => k.kid === wantKid) : true;
   if (fresh && hasKid) return jwksCache!.jwks;
 
+  // Only the cache fetched from THIS url is a valid fallback - never serve a set
+  // fetched for a different jwksUrl (which would verify against the wrong issuer).
+  const cachedForUrl = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
+
   // Rate-limit refetches so an attacker-chosen `kid` can't force one upstream
-  // JWKS GET per request. Until the cooldown lapses, serve the cached set (a kid
-  // miss then 401s) rather than hammering Edison's /.well-known/jwks.json.
-  if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return jwksCache ? jwksCache.jwks : null;
-  lastFetchAt = now;
+  // JWKS GET per request. Until the cooldown lapses, serve the cached set for
+  // this url (a kid miss then 401s) rather than hammering /.well-known/jwks.json.
+  if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return cachedForUrl;
 
   const jwks = await fetchJwks(url);
-  if (!jwks) return fresh ? jwksCache!.jwks : null; // network blip: fall back to a cached set if we have one
+  if (!jwks) return cachedForUrl; // network blip: fall back to a same-url cached set, else null (503)
+  // Advance the cooldown only after a *successful* fetch, so a failed fetch can
+  // retry on the next request instead of being suppressed for the whole window.
+  lastFetchAt = now;
   jwksCache = { url, jwks, fetchedAt: now };
   return jwks;
 }

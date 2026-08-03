@@ -8,7 +8,7 @@ GitHub issue, Markdown, or a chat message. Runs as a **Cloudflare Worker** with
 > Why base64 in / URL out? The server is remote, so it can't read a caller's
 > local filesystem (base64 in), and consumers like GitHub's Camo proxy fetch the
 > image server-side with no credentials, so the URL must be plainly public
-> (URL out) — not an S3 API call or a presigned, expiring link.
+> (URL out) - not an S3 API call or a presigned, expiring link.
 
 ## Tools
 
@@ -28,7 +28,7 @@ Returns `{ url, key, bytes, content_type }`.
 - **Format is sniffed from the bytes**, so a mislabeled payload can't slip
   through; a `content_type` you supply must agree with the bytes.
 - **Size cap:** `MAX_UPLOAD_BYTES` (default 10 MiB).
-- **Keys are unguessable** — `${prefix}/${16-hex}-${slug}.${ext}`. There is no
+- **Keys are unguessable** - `${prefix}/${16-hex}-${slug}.${ext}`. There is no
   listing endpoint; obscurity is the privacy model.
 
 ### `delete_image`
@@ -37,14 +37,14 @@ Takes `{ key }`, returns `{ deleted, key }`.
 
 ## Endpoints
 
-- `POST /mcp` — MCP streamable HTTP (guarded by auth; see below).
-- `GET /i/<key>` — serves the stored object straight from R2 (immutable cache).
-- `GET /health` — liveness JSON.
+- `POST /mcp` - MCP streamable HTTP (guarded by auth; see below).
+- `GET /i/<key>` - serves the stored object straight from R2 (immutable cache).
+- `GET /health` - liveness JSON.
 
 ## Auth
 
 Pluggable via [`src/auth.ts`](./src/auth.ts): `open` | `bearer` | `edison-jwt`.
-v1 ships **`bearer`** — set `AUTH_TOKEN` and clients send
+v1 ships **`bearer`** - set `AUTH_TOKEN` and clients send
 `Authorization: Bearer <token>`. `edison-jwt` (Edison mints a per-user JWT and
 injects it, no consent screen) is stubbed as an explicit drop-in and returns
 `501` until the Edison issuer exists. With no token configured the server
@@ -67,17 +67,17 @@ defaults to `open` (self-host friendly). See
 ```bash
 bun install
 cp .dev.vars.example .dev.vars   # set AUTH_TOKEN, PUBLIC_BASE_URL
-bun run test                     # unit tier — pure logic, offline, no workerd
-bun run test:integration         # integration tier — real Worker in workerd
+bun run test                     # unit tier - pure logic, offline, no workerd
+bun run test:integration         # integration tier - real Worker in workerd
 bun run typecheck                # tsc --noEmit (needs `bun install` first)
-bun run dev                      # wrangler dev — local Worker + local R2
+bun run dev                      # wrangler dev - local Worker + local R2
 ```
 
 Two test tiers:
 
-- **Unit** (`bun test test/unit`) — the pure logic (validation, key generation,
+- **Unit** (`bun test test/unit`) - the pure logic (validation, key generation,
   auth). Zero network, no `node_modules` needed for the runner.
-- **Integration** (`vitest run`, `test/integration/`) — the real Worker running
+- **Integration** (`vitest run`, `test/integration/`) - the real Worker running
   in **workerd** (via `@cloudflare/vitest-pool-workers`) with real R2 + Durable
   Object bindings from `wrangler.jsonc`. Drives the full MCP streamable-HTTP
   handshake over `SELF.fetch` and asserts the wire format, the origin-derived
@@ -104,7 +104,7 @@ tier exercises the request-origin fallback.
    `wrangler.jsonc` `vars`, then `wrangler deploy` again so returned URLs are
    absolute. **Required:** until it's set, `upload_image` fails loudly rather
    than returning a non-embeddable relative path.
-5. **Register as a connector** — add the `https://<worker>/mcp` URL as a custom
+5. **Register as a connector** - add the `https://<worker>/mcp` URL as a custom
    remote MCP connector (e.g. in claude.ai connector settings) with the bearer
    token. Smoke test: `upload_image` a PNG and confirm the returned URL renders
    inline in a GitHub issue.
@@ -117,6 +117,6 @@ src/
   images.ts   pure: base64 decode, format sniff, validation, key generation
   auth.ts     pure: pluggable auth modes (open | bearer | edison-jwt)
 test/
-  images.test.ts   bun:test — offline
-  auth.test.ts     bun:test — offline
+  images.test.ts   bun:test - offline
+  auth.test.ts     bun:test - offline
 ```

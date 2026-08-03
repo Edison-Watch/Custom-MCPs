@@ -1,5 +1,5 @@
 /**
- * image-host — an Edison first-party MCP server.
+ * image-host - an Edison first-party MCP server.
  *
  * Accepts an image as base64 (the server is remote and cannot read a caller's
  * filesystem) and returns a public, non-expiring URL suitable for embedding in
@@ -168,7 +168,7 @@ async function serveImage(rawKey: string, env: Env): Promise<Response> {
   try {
     key = decodeURIComponent(rawKey);
   } catch {
-    // Malformed percent-encoding (e.g. `/i/%ZZ`) — treat as a missing object,
+    // Malformed percent-encoding (e.g. `/i/%ZZ`) - treat as a missing object,
     // not a 500 on this public unauthenticated endpoint.
     return new Response("Not found", { status: 404 });
   }

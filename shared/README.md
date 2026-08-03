@@ -1,4 +1,4 @@
-# `shared/` — cross-fleet contracts
+# `shared/` - cross-fleet contracts
 
 Code and schemas shared across every server in [`../servers/`](../servers),
 regardless of runtime (TypeScript on Workers or Python/FastMCP). Three pieces:

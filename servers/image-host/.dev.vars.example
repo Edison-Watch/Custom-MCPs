@@ -7,6 +7,13 @@ AUTH_TOKEN="dev-local-token-change-me"
 PUBLIC_BASE_URL="http://localhost:8787"
 
 # Optional overrides:
-# AUTH_MODE="bearer"            # open | bearer | edison-jwt (edison-jwt not yet implemented)
+# AUTH_MODE="bearer"            # open | bearer | edison-jwt
 # KEY_PREFIX="img"
 # MAX_UPLOAD_BYTES="10485760"   # 10 MiB
+
+# edison-jwt mode (Edison mints a per-user JWT and injects it; verified against
+# Edison's published JWKS - see src/jwt.ts). Set AUTH_MODE="edison-jwt" and all
+# three below (none are secrets - public config):
+# EDISON_JWKS_URL="https://<edison-host>/.well-known/jwks.json"
+# EDISON_JWT_ISSUER="https://<edison-host>"
+# EDISON_JWT_AUDIENCE="image-host"

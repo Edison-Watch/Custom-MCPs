@@ -10,10 +10,10 @@
   },
   "r2_buckets": [{ "binding": "IMAGE_BUCKET", "bucket_name": "edison-image-host" }],
   "vars": {
-    // AUTH_TOKEN is a SECRET — set it with `wrangler secret put AUTH_TOKEN`, never here.
+    // AUTH_TOKEN is a SECRET - set it with `wrangler secret put AUTH_TOKEN`, never here.
     "AUTH_MODE": "bearer",
     // To flip to Edison-minted JWTs (see src/jwt.ts), set AUTH_MODE to "edison-jwt"
-    // and fill all three below (none are secrets — they're public config):
+    // and fill all three below (none are secrets - they're public config):
     //   "EDISON_JWKS_URL": "https://<edison-host>/.well-known/jwks.json",
     //   "EDISON_JWT_ISSUER": "https://<edison-host>",
     //   "EDISON_JWT_AUDIENCE": "image-host",

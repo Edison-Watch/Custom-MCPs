@@ -9,7 +9,7 @@ const MCP_HEADERS = {
   authorization: AUTH,
 };
 
-// 12 bytes: PNG signature + filler — enough for magic-byte sniffing + round-trip.
+// 12 bytes: PNG signature + filler - enough for magic-byte sniffing + round-trip.
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
 function toBase64(bytes: Uint8Array): string {
@@ -30,7 +30,7 @@ function extractMessage(buffer: string): Record<string, any> | null {
       const msg = JSON.parse(json);
       if (msg && (msg.result !== undefined || msg.error !== undefined)) return msg;
     } catch {
-      // JSON split across chunks — wait for the next read.
+      // JSON split across chunks - wait for the next read.
     }
   }
   return null;
@@ -50,7 +50,7 @@ async function initSession(): Promise<string> {
   expect(res.status).toBe(200);
   const sessionId = res.headers.get("mcp-session-id");
   expect(sessionId).toBeTruthy();
-  // NB: the initialize response is a long-lived SSE stream — do not read it to
+  // NB: the initialize response is a long-lived SSE stream - do not read it to
   // completion (it never ends) and do not cancel it (that aborts the session).
   // Leaving it open holds one connection; we establish exactly one session for
   // the whole file to keep that to a single held connection.
@@ -70,7 +70,7 @@ async function callTool(sessionId: string, name: string, args: Record<string, un
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } }),
   });
   expect(res.status).toBe(200);
-  // Read only until the result event arrives, then stop — the response SSE
+  // Read only until the result event arrives, then stop - the response SSE
   // stream otherwise stays open until an idle timeout (~10s).
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();

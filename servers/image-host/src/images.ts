@@ -68,7 +68,7 @@ export function base64PayloadTooLarge(input: string, maxBytes: number): boolean 
  * Identify an image by its magic bytes. This is the security-relevant check:
  * we trust the bytes, not the caller's declared content type, so a caller
  * cannot smuggle an SVG/HTML payload behind an `image/png` label. Returns null
- * for anything not on the allowlist (SVG included — it has no binary magic and
+ * for anything not on the allowlist (SVG included - it has no binary magic and
  * is an XSS vector when served inline).
  */
 export function sniffContentType(bytes: Uint8Array): string | null {
@@ -77,14 +77,26 @@ export function sniffContentType(bytes: Uint8Array): string | null {
     bytes[0] === 0x89 &&
     bytes[1] === 0x50 &&
     bytes[2] === 0x4e &&
-    bytes[3] === 0x47
+    bytes[3] === 0x47 && // "\x89PNG"
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a // full 8-byte PNG signature (CRLF/EOF/LF), not just "PNG"
   ) {
     return "image/png";
   }
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return "image/jpeg";
   }
-  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 && // "GIF8"
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61 // full "GIF87a" / "GIF89a" signature, not just "GIF"
+  ) {
     return "image/gif";
   }
   if (
@@ -137,7 +149,12 @@ export function validateImage(args: ValidateArgs): ValidatedImage | ValidationEr
 
   if (args.declaredType) {
     const declared = normalizeType(args.declaredType);
-    if (declared && declared !== sniffed) {
+    if (!declared) {
+      // A declared type we can't normalize (svg, html, garbage) is a caller
+      // error: reject it rather than silently serving under the sniffed type.
+      return { error: `unsupported declared content_type '${args.declaredType}'` };
+    }
+    if (declared !== sniffed) {
       return { error: `declared content_type ${declared} does not match the actual bytes (${sniffed})` };
     }
   }
@@ -190,7 +207,7 @@ export interface KeyArgs {
 
 /**
  * Build an unguessable object key: `${prefix}/${16-hex}-${slug}.${ext}`.
- * Obscurity is the privacy model — there is no listing endpoint — so the random
+ * Obscurity is the privacy model - there is no listing endpoint - so the random
  * component must stay in the key.
  */
 export function generateKey(args: KeyArgs): string {

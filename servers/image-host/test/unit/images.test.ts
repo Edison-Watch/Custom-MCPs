@@ -35,6 +35,15 @@ describe("sniffContentType", () => {
     expect(sniffContentType(SVG)).toBeNull();
     expect(sniffContentType(new Uint8Array([0, 1, 2, 3]))).toBeNull();
   });
+
+  test("requires the FULL png/gif signature, not just the ascii prefix", () => {
+    // "\x89PNG" followed by the wrong trailing 4 bytes is not a real PNG.
+    const fakePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00]);
+    expect(sniffContentType(fakePng)).toBeNull();
+    // "GIF" but not "GIF87a"/"GIF89a".
+    const fakeGif = new Uint8Array([0x47, 0x49, 0x46, 0x30, 0x30, 0x30]);
+    expect(sniffContentType(fakeGif)).toBeNull();
+  });
 });
 
 describe("normalizeType", () => {
@@ -90,6 +99,13 @@ describe("validateImage", () => {
     expect(validateImage({ bytes: JPEG, declaredType: "image/jpg" })).toMatchObject({
       contentType: "image/jpeg",
     });
+  });
+
+  test("rejects a declared type we can't normalize instead of silently sniffing", () => {
+    // svg / html / garbage declarations are caller errors: fail, don't fall
+    // back to the sniffed type as if the declaration were absent.
+    expect(validateImage({ bytes: PNG, declaredType: "image/svg+xml" })).toHaveProperty("error");
+    expect(validateImage({ bytes: PNG, declaredType: "text/html" })).toHaveProperty("error");
   });
 });
 

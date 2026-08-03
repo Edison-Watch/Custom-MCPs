@@ -20,6 +20,13 @@ describe("resolveAuthMode", () => {
   test("passes an unknown mode through verbatim (checkAuth rejects it)", () => {
     expect(resolveAuthMode({ AUTH_MODE: "totally-made-up" })).toBe("totally-made-up");
   });
+
+  test("a defined-but-empty token stays bearer (never silently open)", () => {
+    // AUTH_TOKEN="" is a misconfig, not a request for open mode: keep it in
+    // bearer so checkAuth 500s rather than serving unauthenticated traffic.
+    expect(resolveAuthMode({ AUTH_TOKEN: "" })).toBe("bearer");
+    expect(resolveAuthMode({ AUTH_TOKEN: "   " })).toBe("bearer");
+  });
 });
 
 describe("extractBearer", () => {
@@ -62,6 +69,18 @@ describe("checkAuth", () => {
 
   test("bearer mode with no configured token is a 500 misconfig", async () => {
     expect(await checkAuth(req({ authorization: "Bearer x" }), { AUTH_MODE: "bearer" })).toMatchObject({
+      ok: false,
+      status: 500,
+    });
+  });
+
+  test("a defined-but-empty token 500s (misconfig), never admits as open", async () => {
+    // No AUTH_MODE + AUTH_TOKEN="" must resolve to bearer and fail closed.
+    expect(await checkAuth(req({ authorization: "Bearer anything" }), { AUTH_TOKEN: "" })).toMatchObject({
+      ok: false,
+      status: 500,
+    });
+    expect(await checkAuth(req({ authorization: "Bearer anything" }), { AUTH_TOKEN: "   " })).toMatchObject({
       ok: false,
       status: 500,
     });

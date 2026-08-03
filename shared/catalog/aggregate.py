@@ -14,7 +14,7 @@ Edison lists). This script is the fleet-side half of the catalog contract in
 3. emits the combined `shared/catalog/dist/catalog.json` build artifact.
 
 edison-watch's `scripts/sync_fleet_connectors.py` reads the per-server source
-entries directly (no build coupling), so `dist/catalog.json` is gitignored — a
+entries directly (no build coupling), so `dist/catalog.json` is gitignored - a
 local/consumer convenience, not the sync input. This script's job in CI is
 therefore **validation**, not artifact freshness.
 
@@ -53,6 +53,14 @@ REQUIRED = (
 AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
 
 
+def _url_is_bad(url: str) -> bool:
+    """True unless url is https://<non-empty-host>/<...>/mcp with a real host."""
+    if not url.startswith("https://") or not url.endswith("/mcp"):
+        return True
+    host = url[len("https://") :].split("/", 1)[0]
+    return not host  # reject 'https:///mcp' (empty host)
+
+
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
     """(is_bad, message) pairs for one entry, assuming required keys are present."""
     icon = str(entry["icon"])
@@ -71,13 +79,20 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             f"auth '{entry['auth']}' not in {AUTH_MODES}",
         ),
         (
-            not str(entry["url"]).startswith("https://")
-            or not str(entry["url"]).endswith("/mcp"),
-            f"url must be https://…/mcp, got '{entry['url']}'",
+            _url_is_bad(str(entry["url"])),
+            f"url must be https://<host>/…/mcp, got '{entry['url']}'",
         ),
         (not icon.endswith(".svg"), f"icon '{icon}' must be an .svg"),
         (
-            icon.endswith(".svg") and not (server_dir / icon).is_file(),
+            icon != Path(icon).name,
+            f"icon '{icon}' must be a bare filename (no path separators)",
+        ),
+        (
+            icon != f"{server_dir.name}.svg",
+            f"icon '{icon}' must be '{server_dir.name}.svg' (id + .svg)",
+        ),
+        (
+            icon == Path(icon).name and not (server_dir / icon).is_file(),
             f"icon file '{icon}' not found",
         ),
         (
@@ -120,6 +135,14 @@ def collect() -> tuple[list[dict[str, Any]], list[str]]:
         except json.JSONDecodeError as exc:
             errors.append(
                 f"{entry_path.parent.name}/catalog-entry.json: invalid JSON ({exc})"
+            )
+            continue
+        if not isinstance(entry, dict):
+            # A top-level array/string/number would crash every `entry[...]`
+            # access below; reject it as a whole-entry error and skip it.
+            errors.append(
+                f"{entry_path.parent.name}/catalog-entry.json: "
+                f"top-level value must be a JSON object, got {type(entry).__name__}"
             )
             continue
         errors.extend(_validate(entry, entry_path.parent))

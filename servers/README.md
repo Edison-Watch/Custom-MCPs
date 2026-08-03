@@ -1,4 +1,4 @@
-# `servers/` — the first-party MCP fleet
+# `servers/` - the first-party MCP fleet
 
 Each subdirectory is one small, utilitarian, **streamable-HTTP MCP server** that
 Edison hosts as a first-party, open-source connector. Servers deploy
@@ -11,10 +11,10 @@ independently and are polyglot by design:
 
 Two contracts keep the fleet coherent regardless of language:
 
-1. **Auth contract** — every server speaks the same pluggable auth modes
+1. **Auth contract** - every server speaks the same pluggable auth modes
    (`open` | `bearer` | `edison-jwt`). v1 servers ship `bearer`; `edison-jwt`
    (Edison mints a per-user JWT and injects it, no consent screen) is a drop-in.
-2. **Catalog contract** — every server advertises itself to the Edison
+2. **Catalog contract** - every server advertises itself to the Edison
    marketplace the same way (see `../shared/catalog`).
 
 See [`../docs/mcp_commodity_fleet_strategy.md`](../docs/mcp_commodity_fleet_strategy.md)

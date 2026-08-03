@@ -1,4 +1,4 @@
-# `shared/catalog` — the Edison catalog contract
+# `shared/catalog` - the Edison catalog contract
 
 How a fleet server advertises itself to the Edison marketplace. Each server
 declares one `servers/<id>/catalog-entry.json`; edison-watch's sync upserts
@@ -6,8 +6,8 @@ those into its static catalog and badges the Edison-hosted ones.
 
 ## Contract
 
-- **Schema:** [`schema.json`](./schema.json) — the entry shape (draft 2020-12).
-- **Validator/aggregator:** [`aggregate.py`](./aggregate.py) — validates every
+- **Schema:** [`schema.json`](./schema.json) - the entry shape (draft 2020-12).
+- **Validator/aggregator:** [`aggregate.py`](./aggregate.py) - validates every
   `servers/*/catalog-entry.json` against the schema's constraints (re-expressed
   in stdlib Python so CI needs no dependency) and builds the combined
   `dist/catalog.json`. `dist/` is a gitignored build convenience.
@@ -39,9 +39,19 @@ Full spec: `edison-watch/dev-docs/architecture/first_party_mcp_integration.md`
 `make catalog_check` (wired into `make ci`) runs `aggregate.py --check`, failing
 the build on any invalid entry.
 
+## Auth modes
+
+- `token` (v1 static bearer) is what live entries declare today, including
+  `image-host`. The install-time bearer secret is resolved from
+  `template_fields.env`.
+- `edison-jwt` is implemented end to end: Edison mints a per-user RS256 JWT
+  (`edison-watch/src/mcp_jwt.py`) and the fleet server verifies it statelessly
+  against the published JWKS (`servers/image-host/src/jwt.ts`). The schema and
+  `aggregate.py` enforce that `auth: edison-jwt` implies `edison_hosted: true`.
+  An entry flips to it once its server is deployed behind Edison's issuer URL;
+  see `first_party_mcp_integration.md` for the cutover runbook.
+
 ## Not here yet
 
-- `edison-jwt` auth mode: entries declare `auth: token` (v1 static bearer); the
-  fleet→Edison JWT issuer is a later phase (strategy §6, roadmap step 4).
 - Per-tool ACL defaults (`tools_configurations`): entries omit them today, so
   installs use Edison's autoconfig path; bake them in once reviewed.
