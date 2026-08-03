@@ -1,6 +1,5 @@
 {
   "name": "@edison/mcp-image-host",
-  "version": "0.1.0",
   "private": true,
   "description": "Edison first-party MCP server: upload an image, get a public non-expiring URL. Cloudflare Worker + R2.",
   "type": "module",

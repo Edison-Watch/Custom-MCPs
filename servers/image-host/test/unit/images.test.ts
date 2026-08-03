@@ -107,6 +107,12 @@ describe("validateImage", () => {
     expect(validateImage({ bytes: PNG, declaredType: "image/svg+xml" })).toHaveProperty("error");
     expect(validateImage({ bytes: PNG, declaredType: "text/html" })).toHaveProperty("error");
   });
+
+  test("rejects an explicitly-supplied empty declared type", () => {
+    // "" is a declaration, not an omission: reject it like any other
+    // unsupported value rather than silently serving under the sniffed type.
+    expect(validateImage({ bytes: PNG, declaredType: "" })).toHaveProperty("error");
+  });
 });
 
 describe("base64PayloadTooLarge", () => {

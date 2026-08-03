@@ -152,4 +152,50 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  test("coalesces a concurrent cold-start burst into a single JWKS fetch", async () => {
+    __resetJwksCacheForTest();
+    let fetches = 0;
+    const realFetch = globalThis.fetch;
+    // A deliberately slow fetch so all requests overlap the same in-flight GET.
+    globalThis.fetch = (async () => {
+      fetches++;
+      await new Promise((r) => setTimeout(r, 20));
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const tokens = await Promise.all(Array.from({ length: 8 }, () => sign(realClaims())));
+      const results = await Promise.all(tokens.map((t) => verifyEdisonJwt(t, CONFIG)));
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect(fetches).toBe(1); // 8 concurrent requests, one upstream GET
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a failed fetch does not suppress the next request's retry", async () => {
+    __resetJwksCacheForTest();
+    let fetches = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetches++;
+      if (fetches === 1) throw new Error("transient network blip");
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const first = await verifyEdisonJwt(await sign(realClaims()), CONFIG);
+      expect(first).toMatchObject({ ok: false, status: 503 }); // fetch failed -> 503
+      const second = await verifyEdisonJwt(await sign(realClaims()), CONFIG);
+      expect(second).toMatchObject({ ok: true }); // retried immediately, not suppressed
+      expect(fetches).toBe(2);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

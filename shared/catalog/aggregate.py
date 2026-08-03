@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,9 @@ REQUIRED = (
     "icon",
 )
 AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
+# Mirror of schema.json `properties` (additionalProperties:false) + the id regex.
+ALLOWED_KEYS = frozenset(REQUIRED) | {"edison_hosted", "headers", "template_fields"}
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 def _url_is_bad(url: str) -> bool:
@@ -59,6 +63,44 @@ def _url_is_bad(url: str) -> bool:
         return True
     host = url[len("https://") :].split("/", 1)[0]
     return not host  # reject 'https:///mcp' (empty host)
+
+
+def _tags_bad(tags: Any) -> bool:
+    """schema: non-empty array of non-empty strings."""
+    if not isinstance(tags, list) or not tags:
+        return True
+    return any(not isinstance(t, str) or not t for t in tags)
+
+
+def _headers_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object mapping string -> string."""
+    if "headers" not in entry:
+        return False
+    headers = entry["headers"]
+    if not isinstance(headers, dict):
+        return True
+    return any(not isinstance(v, str) for v in headers.values())
+
+
+def _template_fields_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object whose optional `env` maps names to
+    objects carrying a required string `description` (+ optional `example`)."""
+    if "template_fields" not in entry:
+        return False
+    tf = entry["template_fields"]
+    if not isinstance(tf, dict):
+        return True
+    env = tf.get("env", {})
+    if not isinstance(env, dict):
+        return True
+    for field in env.values():
+        if not isinstance(field, dict):
+            return True
+        if not isinstance(field.get("description"), str) or not field["description"]:
+            return True
+        if "example" in field and not isinstance(field["example"], str):
+            return True
+    return False
 
 
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
@@ -71,8 +113,17 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             f"id '{entry['id']}' must equal dir '{server_dir.name}'",
         ),
         (
-            not isinstance(entry["tags"], list) or not entry["tags"],
-            "'tags' must be a non-empty list",
+            not isinstance(entry["id"], str) or not ID_RE.match(str(entry["id"])),
+            f"id '{entry['id']}' must match {ID_RE.pattern}",
+        ),
+        (
+            _tags_bad(entry["tags"]),
+            "'tags' must be a non-empty list of non-empty strings",
+        ),
+        (_headers_bad(entry), "'headers' must be an object of string values"),
+        (
+            _template_fields_bad(entry),
+            "'template_fields.env' entries need a non-empty string 'description' (+ optional string 'example')",
         ),
         (
             entry["auth"] not in AUTH_MODES,
@@ -122,7 +173,13 @@ def _validate(entry: dict[str, Any], server_dir: Path) -> list[str]:
     ]
     if missing:
         return missing  # further checks assume the required keys exist
-    return [f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad]
+    # additionalProperties:false - reject keys the schema doesn't define.
+    unknown = [
+        f"{where}: unknown field '{k}' (schema is additionalProperties:false)"
+        for k in entry
+        if k not in ALLOWED_KEYS
+    ]
+    return unknown + [f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad]
 
 
 def collect() -> tuple[list[dict[str, Any]], list[str]]:

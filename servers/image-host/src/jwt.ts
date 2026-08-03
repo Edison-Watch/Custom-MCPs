@@ -54,11 +54,15 @@ const JWKS_MIN_REFETCH_MS = 30 * 1000;
 // on a kid miss, subject to the refetch cooldown - see ensureJwks).
 let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
 let lastFetchAt = 0;
+// A single outstanding fetch, so a cold/stale-cache burst coalesces into ONE
+// upstream GET instead of one per concurrent request (see ensureJwks).
+let inFlight: { url: string; promise: Promise<Jwks | null> } | null = null;
 
 /** Reset the JWKS cache. Test-only. */
 export function __resetJwksCacheForTest(): void {
   jwksCache = null;
   lastFetchAt = 0;
+  inFlight = null;
 }
 
 function fail(status: number, message: string): JwtFail {
@@ -211,12 +215,26 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   // fetched for a different jwksUrl (which would verify against the wrong issuer).
   const cachedForUrl = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
 
-  // Rate-limit refetches so an attacker-chosen `kid` can't force one upstream
-  // JWKS GET per request. Until the cooldown lapses, serve the cached set for
-  // this url (a kid miss then 401s) rather than hammering /.well-known/jwks.json.
+  // If a fetch for this url is already outstanding, join it rather than opening
+  // a second upstream GET. This is what actually bounds a concurrent burst: the
+  // cooldown below only throttles *sequential* requests, so without dedup every
+  // request in a cold-isolate burst would fetch (lastFetchAt only advances after
+  // success). Failures don't advance the cooldown, so the next request retries.
+  if (inFlight && inFlight.url === url) return (await inFlight.promise) ?? cachedForUrl;
+
+  // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
+  // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
+  // set for this url (a kid miss then 401s) rather than hammering the endpoint.
   if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return cachedForUrl;
 
-  const jwks = await fetchJwks(url);
+  const promise = fetchJwks(url);
+  inFlight = { url, promise };
+  let jwks: Jwks | null;
+  try {
+    jwks = await promise;
+  } finally {
+    if (inFlight && inFlight.promise === promise) inFlight = null;
+  }
   if (!jwks) return cachedForUrl; // network blip: fall back to a same-url cached set, else null (503)
   // Advance the cooldown only after a *successful* fetch, so a failed fetch can
   // retry on the next request instead of being suppressed for the whole window.

@@ -147,7 +147,10 @@ export function validateImage(args: ValidateArgs): ValidatedImage | ValidationEr
     return { error: "unrecognized image format (allowed: png, jpeg, webp, gif; svg is rejected)" };
   }
 
-  if (args.declaredType) {
+  if (args.declaredType !== undefined) {
+    // `!== undefined` (not truthiness): an explicitly-supplied empty string is a
+    // declaration too, and must be rejected like any other unsupported value -
+    // not silently treated as "omitted" and served under the sniffed type.
     const declared = normalizeType(args.declaredType);
     if (!declared) {
       // A declared type we can't normalize (svg, html, garbage) is a caller
