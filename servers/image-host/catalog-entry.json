@@ -1,0 +1,29 @@
+{
+  "id": "image-host",
+  "displayName": "Image Host",
+  "description": "Turn an image into a public, non-expiring URL you can paste into a GitHub issue, Markdown, or chat. Send base64, get back a URL.",
+  "author": "Edison",
+  "edison_hosted": true,
+  "category": "development",
+  "tags": [
+    "image",
+    "hosting",
+    "screenshots",
+    "upload",
+    "edison"
+  ],
+  "url": "https://image-host.eito-2d5.workers.dev/mcp",
+  "auth": "token",
+  "headers": {
+    "Authorization": "Bearer {IMAGE_HOST_TOKEN}"
+  },
+  "template_fields": {
+    "env": {
+      "IMAGE_HOST_TOKEN": {
+        "description": "Bearer token for your Edison image-host deployment (the AUTH_TOKEN secret set on the Worker)",
+        "example": "paste-your-image-host-bearer-token"
+      }
+    }
+  },
+  "icon": "image-host.svg"
+}

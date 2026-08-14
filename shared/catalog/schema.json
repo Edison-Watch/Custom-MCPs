@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edison.watch/schemas/fleet-catalog-entry.json",
+  "title": "Fleet catalog entry",
+  "description": "How one fleet server advertises itself to the Edison marketplace. Each servers/<id>/catalog-entry.json is one entry; edison-watch's sync upserts these into scripts/marketplace_connectors.json. Keep in lockstep with the structural checks in aggregate.py and with edison-watch's index_entry()/server_file() in scripts/generate_marketplace_entries.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "displayName",
+    "description",
+    "author",
+    "category",
+    "tags",
+    "url",
+    "auth",
+    "icon"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Stable connector id; must equal the server directory name and the icon basename."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1
+    },
+    "edison_hosted": {
+      "type": "boolean",
+      "description": "First-party server Edison itself hosts and operates. Drives the Edison-hosted badge. Omit or false for OSS/self-host-only servers."
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https://.+/mcp$",
+      "description": "Public streamable-HTTP MCP endpoint. Ends in /mcp."
+    },
+    "auth": {
+      "enum": [
+        "none",
+        "token",
+        "oauth",
+        "edison-jwt"
+      ],
+      "description": "edison-watch mount auth mode. 'token' resolves {PLACEHOLDER}s from template_fields.env; 'oauth' is 401-discovered; 'none' is open; 'edison-jwt' means Edison mints a per-user JWT and injects it (first-party servers only; requires edison_hosted, no user token). The fleet server's bearer mode maps onto 'token'."
+    },
+    "headers": {
+      "type": "object",
+      "description": "Required when auth == 'token'. Values may contain {PLACEHOLDER} tokens resolved from template_fields.env.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "template_fields": {
+      "type": "object",
+      "description": "Required when auth == 'token'. Install-time fields the user supplies.",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "description"
+            ],
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "example": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "icon": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*\\.svg$",
+      "description": "Icon filename, co-located in this server directory; sync copies it into frontend-v2/public/marketplace/icons/."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "const": "token"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "headers",
+          "template_fields"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "const": "edison-jwt"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "edison_hosted"
+        ],
+        "properties": {
+          "edison_hosted": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}
