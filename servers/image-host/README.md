@@ -83,8 +83,9 @@ Two test tiers:
   handshake over `SELF.fetch` and asserts the wire format, the origin-derived
   URL, R2 round-trip, `nosniff`, and the auth gate.
 
-`PUBLIC_BASE_URL` is intentionally left empty in the test env so the integration
-tier exercises the request-origin fallback.
+`PUBLIC_BASE_URL` is blanked in the test env (a binding override in
+`vitest.config.ts`) so the integration tier exercises the request-origin
+fallback even though production pins a custom domain.
 
 ## Deploy checklist
 
@@ -100,10 +101,14 @@ tier exercises the request-origin fallback.
    ```bash
    wrangler deploy
    ```
-4. **Set `PUBLIC_BASE_URL`** to the deployed worker URL (or a custom domain) in
-   `wrangler.jsonc` `vars`, then `wrangler deploy` again so returned URLs are
-   absolute. **Required:** until it's set, `upload_image` fails loudly rather
-   than returning a non-embeddable relative path.
+4. **Custom domain + `PUBLIC_BASE_URL`**: `wrangler.jsonc` pins a custom
+   domain via `routes` (`custom_domain: true`) and sets `PUBLIC_BASE_URL` to
+   match. The zone must live in the same Cloudflare account; `wrangler deploy`
+   then provisions the DNS record and certificate automatically. Prefer a
+   custom domain over `*.workers.dev`: Cloudflare applies non-tunable bot
+   protections to `workers.dev` that can intermittently `403` legitimate
+   server-to-server callers. **Required:** with neither set, `upload_image`
+   fails loudly rather than returning a non-embeddable relative path.
 5. **Register as a connector** - add the `https://<worker>/mcp` URL as a custom
    remote MCP connector (e.g. in claude.ai connector settings) with the bearer
    token. Smoke test: `upload_image` a PNG and confirm the returned URL renders
