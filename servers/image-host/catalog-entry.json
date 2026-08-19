@@ -13,17 +13,6 @@
     "sealgate"
   ],
   "url": "https://image-host.eito-2d5.workers.dev/mcp",
-  "auth": "token",
-  "headers": {
-    "Authorization": "Bearer {IMAGE_HOST_TOKEN}"
-  },
-  "template_fields": {
-    "env": {
-      "IMAGE_HOST_TOKEN": {
-        "description": "Bearer token for your SealGate image-host deployment (the AUTH_TOKEN secret set on the Worker)",
-        "example": "paste-your-image-host-bearer-token"
-      }
-    }
-  },
+  "auth": "edison-jwt",
   "icon": "image-host.svg"
 }

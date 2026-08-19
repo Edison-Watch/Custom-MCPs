@@ -34,7 +34,11 @@ export default defineWorkersConfig({
           // wrangler.jsonc leaves PUBLIC_BASE_URL empty on purpose so the
           // integration tests exercise the request-origin fallback; provide the
           // bearer secret (a real deploy sets it via `wrangler secret put`).
-          bindings: { AUTH_TOKEN: "test-token" },
+          // AUTH_MODE is pinned to bearer so this tier stays deterministic
+          // regardless of the production default in wrangler.jsonc (now
+          // edison-jwt, which would 401 the static test token; the JWT verify
+          // path has its own real-crypto coverage in test/unit/jwt.test.ts).
+          bindings: { AUTH_MODE: "bearer", AUTH_TOKEN: "test-token" },
         },
       },
     },
