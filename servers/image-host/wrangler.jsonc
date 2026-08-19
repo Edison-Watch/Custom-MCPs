@@ -11,12 +11,14 @@
   "r2_buckets": [{ "binding": "IMAGE_BUCKET", "bucket_name": "edison-image-host" }],
   "vars": {
     // AUTH_TOKEN is a SECRET - set it with `wrangler secret put AUTH_TOKEN`, never here.
-    "AUTH_MODE": "bearer",
-    // To flip to Edison-minted JWTs (see src/jwt.ts), set AUTH_MODE to "edison-jwt"
-    // and fill all three below (none are secrets - they're public config):
-    //   "EDISON_JWKS_URL": "https://<edison-host>/.well-known/jwks.json",
-    //   "EDISON_JWT_ISSUER": "https://<edison-host>",
-    //   "EDISON_JWT_AUDIENCE": "image-host",
+    // (Unused in edison-jwt mode; safe to leave set as a rollback path to "bearer".)
+    "AUTH_MODE": "edison-jwt",
+    // Edison/SealGate-minted JWT verify config (see src/jwt.ts). None are secrets -
+    // they're public config. ISSUER must byte-match the SEALGATE_MCP_JWT_ISSUER value
+    // set on the issuing deploy (currently the demo trust domain).
+    "EDISON_JWKS_URL": "https://demo-dashboard.sealgate.ai/.well-known/jwks.json",
+    "EDISON_JWT_ISSUER": "https://demo-dashboard.sealgate.ai",
+    "EDISON_JWT_AUDIENCE": "image-host",
     "KEY_PREFIX": "img",
     // REQUIRED before upload_image works: your worker URL or a custom domain.
     // While blank, upload_image fails loudly instead of returning a relative URL.
