@@ -12,7 +12,7 @@
     "upload",
     "sealgate"
   ],
-  "url": "https://image-host.eito-2d5.workers.dev/mcp",
+  "url": "https://image-host.sealgate.ai/mcp",
   "auth": "edison-jwt",
   "icon": "image-host.svg"
 }

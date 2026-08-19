@@ -31,14 +31,15 @@ export default defineWorkersConfig({
           // The pool's bundled workerd supports compat dates up to 2025-04-17;
           // pin the test runtime there (production uses wrangler.jsonc's date).
           compatibilityDate: "2025-04-17",
-          // wrangler.jsonc leaves PUBLIC_BASE_URL empty on purpose so the
-          // integration tests exercise the request-origin fallback; provide the
-          // bearer secret (a real deploy sets it via `wrangler secret put`).
+          // PUBLIC_BASE_URL is pinned to the custom domain in wrangler.jsonc
+          // for production; blank it here so the integration tests keep
+          // exercising the request-origin fallback. Provide the bearer secret
+          // (a real deploy sets it via `wrangler secret put`).
           // AUTH_MODE is pinned to bearer so this tier stays deterministic
           // regardless of the production default in wrangler.jsonc (now
           // edison-jwt, which would 401 the static test token; the JWT verify
           // path has its own real-crypto coverage in test/unit/jwt.test.ts).
-          bindings: { AUTH_MODE: "bearer", AUTH_TOKEN: "test-token" },
+          bindings: { AUTH_MODE: "bearer", AUTH_TOKEN: "test-token", PUBLIC_BASE_URL: "" },
         },
       },
     },
