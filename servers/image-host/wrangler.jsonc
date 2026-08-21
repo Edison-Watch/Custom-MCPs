@@ -10,11 +10,14 @@
   },
   "r2_buckets": [{ "binding": "IMAGE_BUCKET", "bucket_name": "edison-image-host" }],
   // Company-owned hostname (zone must live in the same Cloudflare account).
-  // workers.dev stays enabled as a fallback during cutover; Cloudflare applies
-  // non-tunable bot protections to *.workers.dev that intermittently 403
-  // legitimate server-to-server callers (observed from the Railway gateway),
-  // which a custom domain on our own zone avoids.
+  // Cloudflare applies non-tunable bot protections to *.workers.dev that
+  // intermittently 403 legitimate server-to-server callers (observed from the
+  // Railway gateway), which a custom domain on our own zone avoids.
   "routes": [{ "pattern": "image-host.sealgate.ai", "custom_domain": true }],
+  // Explicitly off (wrangler already disables it when custom-domain routes
+  // exist): the custom domain image-host.sealgate.ai is the only intended
+  // endpoint.
+  "workers_dev": false,
   "vars": {
     // AUTH_TOKEN is a SECRET - set it with `wrangler secret put AUTH_TOKEN`, never here.
     // (Unused in edison-jwt mode; safe to leave set as a rollback path to "bearer".)
