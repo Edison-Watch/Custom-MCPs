@@ -2,7 +2,7 @@
 
 **Status:** accepted 2026-07-17; relocated here + revised 2026-08-26 (was edison-watch#1078)
 **Problem:** paste OpenAPI spec URL → hosted streamable-HTTP MCP in Edison marketplace, minimal human/agent effort. Hard part: OAuth (Xero archetype)
-**Home:** connectors = `servers/<name>/` fleet packages; this repo = the "`edison-connectors`" repo the original design proposed
+**Home:** connectors = `servers/<name>/` fleet packages (§0.3)
 **Related:** [`mcp_commodity_fleet_strategy.md`](./mcp_commodity_fleet_strategy.md) (runtimes, auth contract, catalog contract), [`../servers/README.md`](../servers/README.md); edison-watch: `dev-docs/architecture/first_party_mcp_integration.md`
 
 ## 0. Decisions (single source of truth)
@@ -22,7 +22,6 @@ Market context (#6):
 
 - ~108 marketplace entries, all vendor-hosted first-party HTTP MCPs (`mcp.stripe.com`, `mcp.linear.app`, ...)
 - generator market = complement: high-demand APIs, no vendor remote MCP, likely never
-- first-party covers head; generator manufactures long tail
 
 ---
 
@@ -50,14 +49,14 @@ Missing in both repos: OpenAPI→MCP generation. Greenfield.
 - **FastMCP `from_openapi`** (Py): runtime proxy; ordered `RouteMap`s (method/path-regex/tag); auth via pre-configured `httpx.AsyncClient`; mature since ~2.14, provider in 3.x; no answer to tool-count explosion, pagination, response shaping. Docs: gofastmcp.com/integrations/openapi
 - **Speakeasy Gram**: hosted; spec → catalog → human-curated "toolsets"; OAuth 2.1 proxy (DCR/PKCE toward clients). Docs: www.speakeasy.com/docs/gram
 - **Stainless**: codegen; dynamic-tools mode (3 meta-tools: `list_api_endpoints`/`get_api_endpoint_schema`/`invoke_api_endpoint`); client-specific schema adaptation (Cursor ~40-tool cap, OpenAI quirks). Docs: www.stainless.com/docs/mcp/
-- **TS OpenAPI→MCP libs (re-survey 2026-08-26): gap closed.** July assumption "community libs thin" no longer holds:
+- **TS OpenAPI→MCP libs (re-survey 2026-08-26): gap closed.**
   - `mcp-from-openapi` (npm v2.5.x, active): runtime spec → tool definitions; param-conflict resolution; request-mapper hook; closest TS analog to FastMCP
   - `openapi-mcp-generator` (v3.x): codegen, typed TS server; Zod validation; streamable HTTP via Hono; operation filtering (`excludeOperationIds`, `filterFn`); fits CI compile step
   - CF Agents SDK `openApiMcpServer()`: first-party, Workers-native; search/execute meta-tools over whole spec; auth stays in host Worker; spec stays out of model context
   - none curates: `connector.yaml` + response shaping stay ours
   - Docs: www.npmjs.com/package/mcp-from-openapi, github.com/harsha-iiiv/openapi-mcp-generator, developers.cloudflare.com/agents/model-context-protocol/guides/build-codemode-openapi-mcp-server/
 - **Vendor consensus**: naive 1:1 endpoint→tool fails past ~40-50 endpoints (context bloat, client caps, thin descriptions → hallucinated calls); every serious pipeline curates; pagination + response trimming on us. See www.speakeasy.com/mcp/tool-design/generate-mcp-tools-from-openapi, www.stainless.com/blog/lessons-from-openapi-to-mcp-server-conversion/
-- **MCP spec timing**: stable 2025-11-25; 2026-07-28 release = stateless (no `initialize`, no `Mcp-Session-Id`, identity in `_meta`); build connectors stateless-first: plain load balancing, no sticky sessions. RC: blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/; changelog: modelcontextprotocol.io/specification/draft/changelog
+- **MCP spec timing**: stable 2025-11-25; 2026-07-28 release = stateless (no `initialize`, no `Mcp-Session-Id`, identity in `_meta`); build connectors stateless-first. RC: blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/; changelog: modelcontextprotocol.io/specification/draft/changelog
 - **Dual-role OAuth pattern** (CF `workers-oauth-provider`; Atlassian/Sentry/Linear remote MCPs): OAuth 2.1 AS+RS toward MCP client, OAuth 2.0 client toward upstream; upstream tokens in server vault, never handed to MCP client. Ref: github.com/cloudflare/workers-oauth-provider; modelcontextprotocol.io/specification/draft/basic/authorization
 
 ### Xero (motivating hard case)
@@ -103,8 +102,8 @@ Sequencing: Phase 1 needs none of A2; A1 in reserve for deliberately-public conn
 #### Auth header planes (flagged 2026-08-26; wire format → §7)
 
 - fleet contract authenticates **caller**: `Authorization: Bearer <edison-jwt>`, JWKS verify ([strategy §6](./mcp_commodity_fleet_strategy.md))
-- A2 wants same header for **upstream** token; one header, two claims: collision
-- resolution: caller keeps `Authorization` (fleet modes `open`|`bearer`|`edison-jwt` unchanged); upstream creds ride `X-Upstream-*` namespace (`X-Upstream-Authorization`, `X-Upstream-Xero-Tenant-Id`); connector rewrites onto outbound call, forwards never stores
+- A2 wants same header for **upstream** token: collision
+- resolution: caller keeps `Authorization` (fleet modes `open`|`bearer`|`edison-jwt` unchanged); upstream creds ride `X-Upstream-*` namespace (`X-Upstream-Authorization`, `X-Upstream-Xero-Tenant-Id`); connector rewrites onto outbound call
 - final naming + Phase-2 sequencing open (§6.5); §7 validation must demo both planes coexisting
 
 ### B. Kit shape: runtime proxy vs codegen
@@ -123,7 +122,7 @@ Sequencing: Phase 1 needs none of A2; A1 in reserve for deliberately-public conn
   ```
 
 - generation = fetch spec → validate/dereference → draft `connector.yaml`, every route, heuristic names/descriptions
-- human/agent step = curation pass over YAML (≤ ~40 tools, rewrite descriptions, set shaping), not server writing
+- human/agent step = curation pass over YAML (≤ ~40 tools, rewrite descriptions, set shaping)
 - `overrides.ts` absorbs ~10% of APIs needing real code
 
 ### C. Hosting mechanics (resolution: §0.3)
@@ -215,7 +214,6 @@ Marketplace flow unchanged:
 - **Phase 1**: API-key connectors + generator skeleton; zero OAuth work
   - kit + compiler CLI; per-server deploys; response shaping; CI (tool budget, spec-drift check)
   - ship 2-3 `auth: "token"` connectors through *unchanged* gateway (`headers` + `template_fields` + encrypted `EnvArgsTemplateValues`); lineup §0.6
-  - proves pipeline + curation workflow
 - **Phase 2**: upstream OAuth broker; gateway work; Xero flagship
   - configured-OAuth mode in `oauth_manager`/`oauth_web_flow`; `RefreshingHeaderAuth`; per-user refresh lock; `oauth_upstream` entry variant + provider-metadata schema
   - edison-watch mirror doc written here
