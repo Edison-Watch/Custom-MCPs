@@ -202,6 +202,10 @@ describe("MCP tools", () => {
 
     const result = await callTool(sessionId, "delete_image", { key });
     expect(result.isError).toBe(true);
+    // Pin the *ownership* refusal specifically: delete_image also errors on the
+    // fail-closed "subject missing" branch, so assert the message so a plumbing
+    // error can't masquerade as a passing ownership test.
+    expect(result.content?.[0]?.text).toContain("not authorized");
     // Refusal must not delete: the object is still there.
     expect(await env.IMAGE_BUCKET.head(key)).not.toBeNull();
   });
