@@ -2,7 +2,9 @@
 
 **Status:** Draft / decisions locked, implementation not started
 **Owners:** Edison
-**Related:** `dev-docs/architecture/first_party_mcp_integration.md` (edison-watch side)
+**Related:** `dev-docs/architecture/first_party_mcp_integration.md` (edison-watch side);
+[`openapi_connector_generator.md`](./openapi_connector_generator.md) (OpenAPI→MCP
+generated connectors - the pipeline that manufactures long-tail fleet servers)
 
 ## 1. Goal
 

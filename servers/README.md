@@ -18,7 +18,9 @@ Two contracts keep the fleet coherent regardless of language:
    marketplace the same way (see `../shared/catalog`).
 
 See [`../docs/mcp_commodity_fleet_strategy.md`](../docs/mcp_commodity_fleet_strategy.md)
-for the full strategy and [`../shared/`](../shared) for the shared pieces.
+for the full strategy and [`../shared/`](../shared) for the shared pieces. Generated
+OpenAPI→MCP connectors also land here as fleet servers - design in
+[`../docs/openapi_connector_generator.md`](../docs/openapi_connector_generator.md).
 
 ## Servers
 
