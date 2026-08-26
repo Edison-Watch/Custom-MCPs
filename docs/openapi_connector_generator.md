@@ -1,289 +1,165 @@
 # OpenAPI → Streamable-HTTP MCP Connector Generator
 
-**Status:** Design accepted 2026-07-17; revised 2026-08-26 on relocation into this repo
-(from edison-watch PR #1078). Kit language resolved 2026-08-26: **TypeScript on
-Cloudflare Workers**, pending a 2-3 day schema-fidelity validation (§7).
-**Home:** generated connectors are `servers/<name>/` packages in **this repo's fleet** -
-this repo *is* the "`edison-connectors` repo" the original design proposed to create.
-**Related:** [`mcp_commodity_fleet_strategy.md`](./mcp_commodity_fleet_strategy.md)
-(fleet strategy: runtimes, auth contract, catalog contract),
-[`../servers/README.md`](../servers/README.md); edison-watch side:
-`dev-docs/architecture/first_party_mcp_integration.md`.
-**Problem:** We want to point at an OpenAPI spec URL and - with minimal human/coding-agent
-effort - produce a hosted streamable-HTTP MCP server that can be listed in the Edison
-marketplace. The hard part is OAuth: many valuable APIs (concrete example: Xero) ship
-stdio-only MCP servers with awkward auth, or no MCP server at all.
+**Status:** accepted 2026-07-17; relocated here + revised 2026-08-26 (was edison-watch#1078)
+**Problem:** paste OpenAPI spec URL → hosted streamable-HTTP MCP in Edison marketplace, minimal human/agent effort. Hard part: OAuth (Xero archetype)
+**Home:** connectors = `servers/<name>/` fleet packages; this repo = the "`edison-connectors`" repo the original design proposed
+**Related:** [`mcp_commodity_fleet_strategy.md`](./mcp_commodity_fleet_strategy.md) (runtimes, auth contract, catalog contract), [`../servers/README.md`](../servers/README.md); edison-watch: `dev-docs/architecture/first_party_mcp_integration.md`
 
-## 0. Resolved decisions (2026-07-17, revised 2026-08-26)
+## 0. Decisions (single source of truth)
 
-Settled in a design interview; rationale in the sections referenced. Rows marked
-*superseded* were revised 2026-08-26 when the doc moved into this repo, whose
-[fleet strategy](./mcp_commodity_fleet_strategy.md) had meanwhile locked the
-repo-topology and default-runtime questions; the original 2026-07-17 resolutions
-are kept for provenance.
+Settled 2026-07-17 design interview. *Was:* entries = original resolutions, superseded 2026-08-26 on relocation; kept for provenance.
 
 | # | Decision | Resolution |
 |---|---|---|
-| 1 | Audience | **Edison-only** - connectors are always fronted by the gateway, never standalone public MCPs. Locks in Edison-as-broker (A2, §3). |
-| 2 | Kit language | *Was (2026-07-17):* two-arm spike (Python/FastMCP vs TypeScript/MCP SDK), ties to TS. **Resolved 2026-08-26: TypeScript on Cloudflare Workers.** The TS OpenAPI→MCP library gap that motivated the spike has closed (§2 re-survey), so the spike collapses to a 2-3 day schema-fidelity validation with FastMCP as the named fallback; see §7. |
-| 3 | Hosting / repo | *Was (2026-07-17):* new `edison-connectors` repo; CF worker-per-connector if TS wins, Railway shared host if Python wins. **Superseded 2026-08-26:** connectors are **`servers/<name>/` packages in this repo's fleet** with per-server deploys; runtime follows fleet decision #3 (TS/Workers default, Python/FastMCP container first-class for heavy cases). Either way, specs compile to small registries at build time (§4a). |
-| 4 | Upstream OAuth apps | **Edison-owned per provider per env, with per-org BYO client_id/secret override** via existing encrypted template fields. |
-| 5 | Token custody | Broker-held upstream tokens follow the existing `OAuthTokenStore` precedent (server-readable, outside the zero-knowledge path - required for refresh), **plus application-layer encryption at rest with a server/KMS-held key**, and the carve-out documented in security docs. |
-| 6 | Phase-1 lineup | Principle, not a fixed list: **2–3 API-key connectors from the back-office gap cluster** (e.g. Zendesk, Twilio, SendGrid, Greenhouse, BambooHR), each verified at kickoff to still lack a first-party remote MCP. |
+| 1 | Audience | **Edison-only**, always behind gateway; locks Edison-as-broker (§3A) |
+| 2 | Kit language | **TypeScript on Cloudflare Workers** (2026-08-26): TS OpenAPI→MCP lib gap closed (§2); 2-3 day validation remains, FastMCP-container fallback (§7). *Was:* two-arm Py-vs-TS spike, ties to TS |
+| 3 | Hosting / repo | **`servers/<name>/` packages here, per-server deploys** (2026-08-26); runtime per fleet decision #3; specs compile to registries at build (§3C). *Was:* new `edison-connectors` repo, CF-if-TS vs Railway-if-Py |
+| 4 | Upstream OAuth apps | **Edison-owned per provider per env**; per-org BYO client_id/secret via existing encrypted template fields |
+| 5 | Token custody | `OAuthTokenStore` precedent: server-readable, outside zero-knowledge path (refresh requires); + app-layer encryption at rest, server/KMS key; carve-out documented in security docs |
+| 6 | Phase-1 lineup | Principle, not list: **2-3 API-key connectors, back-office gap cluster** (Zendesk, Twilio, SendGrid, Greenhouse, BambooHR); each re-verified at kickoff: still no first-party remote MCP |
 
-Context for #6: all ~108 current marketplace entries point at *vendor-hosted first-party*
-HTTP MCPs (`mcp.stripe.com`, `mcp.linear.app`, …). The generator's addressable market is
-the complement - high-demand APIs whose vendors haven't shipped (and likely won't ship) a
-remote MCP. First-party MCPs cover the head; the generator manufactures the long tail.
-Xero is the archetype.
+Market context (#6):
+
+- ~108 marketplace entries, all vendor-hosted first-party HTTP MCPs (`mcp.stripe.com`, `mcp.linear.app`, ...)
+- generator market = complement: high-demand APIs, no vendor remote MCP, likely never
+- first-party covers head; generator manufactures long tail
 
 ---
 
-## 1. What we already have (survey of existing machinery)
+## 1. Existing machinery (edison-watch gateway paths unless noted)
 
-The good news: almost everything downstream of "a hosted HTTP MCP exists" is already
-built. Paths in this table are **edison-watch (gateway) paths** unless noted otherwise.
+Everything downstream of "hosted HTTP MCP exists": already built.
 
 | Piece | Where | Relevance |
 |---|---|---|
-| Marketplace catalog | `frontend-v2/public/marketplace/{index.json,servers/*.json}`, generated by `scripts/generate_marketplace_entries.py` from `scripts/marketplace_connectors.json` | A generated connector is just one more entry with `auth: "token"` or `auth: "oauth"`. Every shipping entry is already HTTP; stdio fields are vestigial. |
-| Install → mount path | `src/api/v1/routes/servers_crud_create.py` → `src/mcp_config/_create.py:provision_server` → `TemplateMcpServerDefinitions` (`transport_type='http'`, `url`, `headers`) → `src/single_user_mcp_mount.py` | Zero proxy changes needed for a new HTTP connector. |
-| Per-user secret injection | `EnvArgsTemplateValues` (AES-256-GCM, zero-knowledge, `src/secrets_encryption.py`); `{PLACEHOLDER}` substitution into `url` **and** `headers` at mount time (`src/db/accessors/server_config_retrieval.py:_resolve_direct_templates`) | API-key connectors work today with no new code. |
-| MCP OAuth client stack | `src/oauth_manager.py` (401/WWW-Authenticate discovery, `DatabaseBearerAuth` with auto-refresh via `src/oauth_refresh.py`), `src/oauth_cimd.py` (DCR + CIMD), `src/oauth_web_flow.py`, callback `/api/v1/mcp/oauth/callback`, per-user `OAuthTokenStore` | Edison already speaks the full MCP authorization spec *as a client*. |
-| `*_authenticate` stub tools | `src/single_user_mcp_auth_stub.py` | NEEDS_AUTH servers mount a single click-through auth tool instead of failing. Works unchanged for generated OAuth connectors. |
-| Hosted-MCP precedent | This repo: the root Python/Gmail app plus the `servers/` fleet (image-host on CF Workers), each a separate deployment outside the gateway repo | Generated connectors follow this precedent directly - they land as `servers/<name>/` packages here. |
-| ACL classification | Autoconfig (`src/api/v1/routes/autoconfig.py`) | Generated connectors get PUBLIC/PRIVATE/SECRET recommendations for free. |
-| Code mode | `builtin_code_mode` + `codegen-oss` (MCP → typed TS client) | Lets us keep the curated tool count small; long-tail endpoints stay reachable through code mode. Note: codegen-oss goes MCP→code, i.e. the *opposite* direction - it is a consumer of this feature, not an implementation of it. |
+| Marketplace catalog | `frontend-v2/public/marketplace/{index.json,servers/*.json}`, generated by `scripts/generate_marketplace_entries.py` from `scripts/marketplace_connectors.json` | generated connector = one more entry, `auth: "token"`/`"oauth"`; every shipping entry already HTTP, stdio fields vestigial |
+| Install → mount | `src/api/v1/routes/servers_crud_create.py` → `src/mcp_config/_create.py:provision_server` → `TemplateMcpServerDefinitions` (`transport_type='http'`, `url`, `headers`) → `src/single_user_mcp_mount.py` | zero proxy changes for new HTTP connector |
+| Per-user secret injection | `EnvArgsTemplateValues` (AES-256-GCM, zero-knowledge, `src/secrets_encryption.py`); `{PLACEHOLDER}` substitution into `url` + `headers` at mount (`src/db/accessors/server_config_retrieval.py:_resolve_direct_templates`) | API-key connectors work today, no new code |
+| MCP OAuth client stack | `src/oauth_manager.py` (401/WWW-Authenticate discovery, `DatabaseBearerAuth` auto-refresh via `src/oauth_refresh.py`), `src/oauth_cimd.py` (DCR + CIMD), `src/oauth_web_flow.py`, callback `/api/v1/mcp/oauth/callback`, per-user `OAuthTokenStore` | Edison speaks full MCP authorization spec as client, today |
+| `*_authenticate` stubs | `src/single_user_mcp_auth_stub.py` | NEEDS_AUTH → single click-through auth tool; unchanged for generated OAuth connectors |
+| Hosted-MCP precedent | this repo: root Python/Gmail app + `servers/` fleet (image-host, CF Workers) | generated connectors land the same way: `servers/<name>/` |
+| ACL classification | autoconfig, `src/api/v1/routes/autoconfig.py` | PUBLIC/PRIVATE/SECRET recommendations free |
+| Code mode | `builtin_code_mode` + `codegen-oss` (MCP → typed TS client) | curated tool count stays small, long tail via code mode; codegen-oss = MCP→code, opposite direction: consumer, not implementation |
 
-**What does not exist in either repo:** OpenAPI→MCP generation. That part is greenfield.
+Missing in both repos: OpenAPI→MCP generation. Greenfield.
 
 ---
 
 ## 2. External landscape (mid-2026)
 
-- **FastMCP `FastMCP.from_openapi`** (Python): runtime proxy - parse spec, map routes to
-  tools via ordered `RouteMap`s (include/exclude by method/path-regex/tag), inject auth via
-  a pre-configured `httpx.AsyncClient`. Mature since ~2.14; in FastMCP 3.x it's a provider.
-  No built-in answer to tool-count explosion, pagination, or response-size shaping.
-  Docs: gofastmcp.com/integrations/openapi
-- **Speakeasy Gram**: hosted platform; spec → tool catalog → human-curated "toolsets";
-  hosts an OAuth 2.1 proxy (DCR/PKCE toward MCP clients even when upstream lacks them).
-  Docs: www.speakeasy.com/docs/gram
-- **Stainless**: code-generates the MCP server; notable for **dynamic-tools mode**
-  (3 meta-tools: `list_api_endpoints` / `get_api_endpoint_schema` / `invoke_api_endpoint`)
-  and client-specific schema adaptation (Cursor's ~40-tool cap, OpenAI schema quirks).
-  Docs: www.stainless.com/docs/mcp/
-- **TS OpenAPI→MCP libraries (re-surveyed 2026-08-26):** the gap the July design assumed
-  ("community libs are thin") has closed. `mcp-from-openapi` (npm, v2.5.x, actively
-  released) converts specs to MCP tool definitions at runtime, with parameter-conflict
-  resolution and an explicit request-mapper hook - the closest TS analog to FastMCP
-  `from_openapi`. `openapi-mcp-generator` (v3.x) code-generates a fully typed TS MCP
-  server (Zod input validation, streamable HTTP via Hono) with operation filtering
-  (`excludeOperationIds`, custom `filterFn`) - a natural fit for our CI compile step.
-  And Cloudflare's Agents SDK ships first-party `openApiMcpServer()`: Workers-native
-  search/execute code-mode meta-tools over an entire spec, auth kept in the host Worker,
-  spec kept out of model context. None of them does curation for us - `connector.yaml`
-  and response shaping stay ours - but the TS arm no longer starts from zero.
-  Docs: www.npmjs.com/package/mcp-from-openapi,
-  github.com/harsha-iiiv/openapi-mcp-generator,
-  developers.cloudflare.com/agents/model-context-protocol/guides/build-codemode-openapi-mcp-server/
-- **Consensus across all vendors:** naive 1:1 endpoint→tool conversion fails past
-  ~40–50 endpoints (context bloat, client tool caps, thin descriptions → hallucinated
-  calls). Every serious pipeline has a **curation layer**. Generators handle neither
-  pagination nor response trimming - that's on us.
-  See www.speakeasy.com/mcp/tool-design/generate-mcp-tools-from-openapi and
-  www.stainless.com/blog/lessons-from-openapi-to-mcp-server-conversion/
-- **MCP spec timing:** stable spec is 2025-11-25; the **2026-07-28 release finalizes in
-  days** and makes the protocol **stateless** (no `initialize` handshake, no
-  `Mcp-Session-Id`, identity/capabilities ride in `_meta`). Build connectors
-  stateless-first - this is a gift for a "generate and host many small servers" pipeline
-  (plain load balancing, no sticky sessions).
-  RC: blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/;
-  changelog: modelcontextprotocol.io/specification/draft/changelog
-- **The dual-role OAuth pattern** (Cloudflare `workers-oauth-provider`, Atlassian/Sentry/
-  Linear remote MCPs): MCP server = OAuth 2.1 **authorization+resource server** toward the
-  MCP client, OAuth 2.0 **client** toward the upstream API; upstream tokens live in a
-  server-side vault and are *never* handed to the MCP client.
-  Reference impl: github.com/cloudflare/workers-oauth-provider;
-  authorization spec: modelcontextprotocol.io/specification/draft/basic/authorization
+- **FastMCP `from_openapi`** (Py): runtime proxy; ordered `RouteMap`s (method/path-regex/tag); auth via pre-configured `httpx.AsyncClient`; mature since ~2.14, provider in 3.x; no answer to tool-count explosion, pagination, response shaping. Docs: gofastmcp.com/integrations/openapi
+- **Speakeasy Gram**: hosted; spec → catalog → human-curated "toolsets"; OAuth 2.1 proxy (DCR/PKCE toward clients). Docs: www.speakeasy.com/docs/gram
+- **Stainless**: codegen; dynamic-tools mode (3 meta-tools: `list_api_endpoints`/`get_api_endpoint_schema`/`invoke_api_endpoint`); client-specific schema adaptation (Cursor ~40-tool cap, OpenAI quirks). Docs: www.stainless.com/docs/mcp/
+- **TS OpenAPI→MCP libs (re-survey 2026-08-26): gap closed.** July assumption "community libs thin" no longer holds:
+  - `mcp-from-openapi` (npm v2.5.x, active): runtime spec → tool definitions; param-conflict resolution; request-mapper hook; closest TS analog to FastMCP
+  - `openapi-mcp-generator` (v3.x): codegen, typed TS server; Zod validation; streamable HTTP via Hono; operation filtering (`excludeOperationIds`, `filterFn`); fits CI compile step
+  - CF Agents SDK `openApiMcpServer()`: first-party, Workers-native; search/execute meta-tools over whole spec; auth stays in host Worker; spec stays out of model context
+  - none curates: `connector.yaml` + response shaping stay ours
+  - Docs: www.npmjs.com/package/mcp-from-openapi, github.com/harsha-iiiv/openapi-mcp-generator, developers.cloudflare.com/agents/model-context-protocol/guides/build-codemode-openapi-mcp-server/
+- **Vendor consensus**: naive 1:1 endpoint→tool fails past ~40-50 endpoints (context bloat, client caps, thin descriptions → hallucinated calls); every serious pipeline curates; pagination + response trimming on us. See www.speakeasy.com/mcp/tool-design/generate-mcp-tools-from-openapi, www.stainless.com/blog/lessons-from-openapi-to-mcp-server-conversion/
+- **MCP spec timing**: stable 2025-11-25; 2026-07-28 release = stateless (no `initialize`, no `Mcp-Session-Id`, identity in `_meta`); build connectors stateless-first: plain load balancing, no sticky sessions. RC: blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/; changelog: modelcontextprotocol.io/specification/draft/changelog
+- **Dual-role OAuth pattern** (CF `workers-oauth-provider`; Atlassian/Sentry/Linear remote MCPs): OAuth 2.1 AS+RS toward MCP client, OAuth 2.0 client toward upstream; upstream tokens in server vault, never handed to MCP client. Ref: github.com/cloudflare/workers-oauth-provider; modelcontextprotocol.io/specification/draft/basic/authorization
 
-### Xero, the motivating hard case
+### Xero (motivating hard case)
 
-- Access tokens live **30 minutes**; refresh tokens are **single-use and rotating**
-  (used token stays valid ~30 min as a grace window; unused refresh tokens die after
-  60 days). Refresh **must be serialized per user** or multi-worker deployments race and
-  hit `invalid_grant`.
-- Multi-org: every API call needs an `xero-tenant-id` header chosen from the connections
-  endpoint → tenant selection must surface in the UX.
-- No DCR on Xero's IdP → someone must pre-register a static Xero app.
-- Scope migration to granular "V2" scopes is underway (custom connections created after
-  2026-04-29 already require them) → new integrations should use V2 scopes from day one.
-- Official `XeroAPI/xero-mcp-server` is stdio-only: client-credentials "Custom Connections"
-  (paid, single-org) or a raw bearer token you must mint and refresh yourself. No official
-  remote MCP found as of 2026-07.
-- Sources: developer.xero.com/documentation/guides/oauth2/auth-flow/,
-  developer.xero.com/documentation/guides/oauth2/custom-connections/,
-  github.com/XeroAPI/xero-mcp-server
+- access tokens 30 min; refresh tokens single-use, rotating; used token ~30 min grace; unused refresh dies 60 days
+- refresh must serialize per user, else multi-worker `invalid_grant` races
+- multi-org: every call needs `xero-tenant-id` header from connections endpoint → tenant selection in UX
+- no DCR on IdP → static app pre-registration required
+- V2 granular scopes required for custom connections after 2026-04-29 → V2 from day one
+- official `XeroAPI/xero-mcp-server` stdio-only; no official remote MCP as of 2026-07
+- Sources: developer.xero.com/documentation/guides/oauth2/auth-flow/, developer.xero.com/documentation/guides/oauth2/custom-connections/, github.com/XeroAPI/xero-mcp-server
 
 ---
 
-## 3. Architecture decisions and tradeoffs
+## 3. Architecture
 
-### Decision A - who runs the upstream OAuth? (the crux)
+### A. Upstream OAuth custody (the crux)
 
-Three options, from "buy" to "build twice":
+**A1: connector-side OAuth** (dual-role, like gmailmcp): each connector fronts own AS + token vault
 
-**A1. Connector-side OAuth (dual-role pattern, like gmailmcp).** Each generated connector
-embeds/fronts an OAuth 2.1 AS (WorkOS/AuthKit or a shared library) toward MCP clients and
-keeps its own upstream token vault.
+- ✅ gmailmcp precedent; gateway machinery unchanged (`auth: "oauth"` entry)
+- ✅ usable by any MCP client, not only Edison
+- ❌ N token vaults, N attack surfaces, N refresh-lock implementations
+- ❌ per-connector AS setup = exactly the bespoke effort this feature kills
 
-- ✅ Matches the existing gmailmcp precedent; Edison's `oauth_manager` + auth-stub machinery
-  works completely unchanged (`auth: "oauth"` entry, done).
-- ✅ Connector is usable by *any* MCP client, not only through Edison - matters if we ever
-  want the connectors to be a public asset.
-- ❌ Every connector holds user tokens → N token vaults, N attack surfaces, N places to
-  implement Xero's refresh-rotation locking correctly. For a security-gateway company this
-  is a lot of distributed secret custody.
-- ❌ Per-connector AS setup (AuthKit config, callback URLs, client metadata) is exactly the
-  kind of bespoke effort the feature is meant to eliminate.
+**A2: Edison-as-broker** (chosen, §0.1): broker runs upstream auth-code flow, stores per-user tokens, stamps fresh headers per request; connector = stateless credential-less translator (shape conversion + header rewrite)
 
-**A2. Edison-as-broker (recommended).** Edison - which already owns per-user encrypted
-secrets and an OAuth web flow - runs the upstream (e.g. Xero) auth-code flow itself,
-stores upstream access+refresh tokens in the existing per-user token store, and injects a
-fresh `Authorization: Bearer …` (+ provider extras like `xero-tenant-id`) into the headers
-of the proxied connection. The connector becomes a **stateless, credential-less
-translator**: OpenAPI→MCP shape conversion + header passthrough, nothing else.
+- ✅ one vault, one refresh-lock implementation, one callback URL
+- ✅ connectors trivially generatable, stateless (2026-07-28 aligned); compromised connector ≈ zero stored secrets
+- ✅ product story: credential custody belongs in gateway
+- ❌ needs `oauth_manager` **configured-OAuth mode**: upstream = plain OAuth 2.0, no PRM/DCR discovery; marketplace entry carries provider metadata (authorize/token URLs, scopes, client id; secret env/GCP); web flow + callback + refresh path reusable, discovery not
+- ❌ mount-time `{PLACEHOLDER}` insufficient for 30-min tokens: needs per-request `httpx.Auth` (`RefreshingHeaderAuth`, generalized `DatabaseBearerAuth` + extra headers) on upstream `StreamableHttpTransport`
+- ❌ connector Edison-only (acceptable per §0.1)
 
-- ✅ One token vault (the one we already audit), one correct implementation of
-  refresh-rotation locking, one callback URL.
-- ✅ Connectors are trivially generatable and stateless - aligned with the 2026-07-28 spec.
-  Blast radius of a compromised connector ≈ zero stored secrets.
-- ✅ This *is* the product story: Edison is the security gateway; credential custody
-  belongs in the gateway, not scattered across connectors.
-- ❌ Requires extending `oauth_manager` with a **configured-OAuth mode**: today it
-  *discovers* OAuth via the MCP 401/PRM dance; upstream APIs like Xero are plain OAuth 2.0
-  with no PRM/DCR, so the marketplace entry must carry provider metadata (authorize/token
-  URLs, scopes, static client id; secret from env/GCP). The web flow, callback, and
-  `DatabaseBearerAuth`/`build_refresh_fn` refresh path are reusable; discovery is not.
-- ❌ Mount-time `{PLACEHOLDER}` substitution is not enough for 30-minute tokens - header
-  injection must be **per-request/refreshable**, i.e. attach an `httpx.Auth` (a
-  generalized `DatabaseBearerAuth` that also emits extra headers) to the upstream
-  `StreamableHttpTransport` instead of baking headers at mount.
-- ❌ Connector is only useful behind Edison (acceptable: the marketplace *is* Edison's).
+**A3: third-party vault** (Auth0 Token Vault, Nango, Arcade, Composio)
 
-**A3. Third-party token vault (Auth0 Token Vault, Nango, Arcade, Composio).**
+- ✅ fastest; Nango covers 400+ providers incl. Xero rotation quirks
+- ❌ customer tokens + traffic transit third party: antithetical to data-firewall pitch; recurring per-connection cost
+- rejected for core path; ok as internal prototyping accelerator
 
-- ✅ Fastest to ship; Nango alone covers 400+ providers including Xero's rotation quirks.
-- ❌ Customer tokens and API traffic transit a third party - directly antithetical to the
-  data-firewall pitch, and a recurring per-connection cost. Rejected for the core path;
-  possibly fine as an internal accelerator for prototyping.
+Sequencing: Phase 1 needs none of A2; A1 in reserve for deliberately-public connectors.
 
-**Recommendation:** A2 as the destination, phased so that Phase 1 (API-key connectors)
-needs none of it, with A1 kept in reserve for connectors we deliberately want to expose to
-non-Edison clients.
+#### Auth header planes (flagged 2026-08-26; wire format → §7)
 
-#### A2 vs the fleet caller-auth contract (flagged 2026-08-26, wire format deferred)
+- fleet contract authenticates **caller**: `Authorization: Bearer <edison-jwt>`, JWKS verify ([strategy §6](./mcp_commodity_fleet_strategy.md))
+- A2 wants same header for **upstream** token; one header, two claims: collision
+- resolution: caller keeps `Authorization` (fleet modes `open`|`bearer`|`edison-jwt` unchanged); upstream creds ride `X-Upstream-*` namespace (`X-Upstream-Authorization`, `X-Upstream-Xero-Tenant-Id`); connector rewrites onto outbound call, forwards never stores
+- final naming + Phase-2 sequencing open (§6.5); §7 validation must demo both planes coexisting
 
-The fleet's auth contract ([strategy §6](./mcp_commodity_fleet_strategy.md),
-[`servers/README.md`](../servers/README.md)) authenticates the **caller**: hosted servers
-run `edison-jwt`, where the gateway injects `Authorization: Bearer <edison-jwt>` and the
-server verifies it via Edison's JWKS. A2 as originally written also wants `Authorization`
-- for the **upstream** token (`Bearer <xero access token>`). One header cannot carry both.
+### B. Kit shape: runtime proxy vs codegen
 
-Resolution direction (normative intent, exact wire format deferred to the §7 validation):
-
-- **Caller identity keeps `Authorization`.** Generated connectors speak the fleet
-  contract unchanged (`open` | `bearer` | `edison-jwt`); hosted = `edison-jwt`.
-- **Upstream credentials ride a distinct header namespace** stamped by the broker,
-  e.g. `X-Upstream-Authorization` plus per-provider extras
-  (`X-Upstream-Xero-Tenant-Id`); the connector's only job is rewriting them onto the
-  outbound API request (`X-Upstream-Authorization` → `Authorization`, etc.). This keeps
-  the connector credential-less and stateless - it forwards, never stores.
-
-The §7 validation must demo the two header planes coexisting end-to-end. Final header
-naming, and whether `edison-jwt` and upstream injection ship together in Phase 2 or
-`edison-jwt` lands first, are open (§6.5).
-
-### Decision B - runtime proxy vs code generation
-
-- **Pure runtime** (one service dynamically loads any pasted spec): fastest demo, but
-  curation becomes remote config, per-API quirks (Xero tenant header, pagination styles)
-  get hacky, and quality is the known failure mode of every naive converter.
-- **Pure codegen** (Stainless-style, emit a bespoke server per API): maximal control,
-  maximal per-connector maintenance.
-- **Recommended hybrid:** a shared **connector kit** library (thin layer over
-  `FastMCP.from_openapi`) + a small **generated config package per connector**:
+- pure runtime (one service loads any pasted spec): fastest demo; curation becomes remote config; per-API quirks hacky; known naive-converter failure mode
+- pure codegen (Stainless-style, bespoke server per API): max control, max per-connector maintenance
+- **chosen hybrid**: shared connector kit + small generated config package per connector:
 
   ```
-  servers/xero/         # one fleet entry per connector, in this repo
+  servers/xero/         # one fleet entry per connector
     spec.json           # pinned, dereferenced OpenAPI snapshot
     connector.yaml      # route map: include/exclude, tool names, description overrides,
                         # tool-count budget, response-shaping rules
     auth.yaml           # none | api_key(header/query template) | oauth2(provider metadata)
-    overrides.py        # optional escape hatch: hand-written tools, request/response hooks
+    overrides.ts        # optional escape hatch: hand-written tools, request/response hooks
   ```
 
-  Generation = fetch spec → validate/dereference → emit a *draft* `connector.yaml` with
-  every route listed and heuristic names/descriptions. The "minimal effort with coding
-  agents" step is a curation pass over that YAML (pick ≤ ~40 tools, rewrite descriptions,
-  set response shaping), not writing a server. `overrides.py` absorbs the 10% of APIs that
-  need real code.
+- generation = fetch spec → validate/dereference → draft `connector.yaml`, every route, heuristic names/descriptions
+- human/agent step = curation pass over YAML (≤ ~40 tools, rewrite descriptions, set shaping), not server writing
+- `overrides.ts` absorbs ~10% of APIs needing real code
 
-### Decision C - hosting topology
+### C. Hosting mechanics (resolution: §0.3)
 
-**Resolved (§0.3, revised 2026-08-26): connectors are `servers/<name>/` packages in this
-repo's fleet, deployed per-server.** The kit runs TypeScript on Cloudflare Workers
-(§0.2), with the Python/FastMCP container documented as the §7 fallback - both are
-first-class fleet runtimes per fleet decision #3. The shared connector kit and
-the generator/compiler CLI live under `shared/` once a second connector needs them,
-following the `shared/{auth,catalog,ui}` promotion convention.
+Compiled registries:
 
-*(Original 2026-07-17 resolution - new `edison-connectors` repo, CF-if-TS-wins vs
-Railway-shared-if-Python-wins - is superseded; the per-platform scaling analysis that
-drove it survives in edison-watch PR #1078. Its conclusion carries over: per-connector
-failure domains and independent deploys beat a shared host as N grows, and the fleet's
-per-server-deploy monorepo delivers that on either runtime.)*
-
-#### C-a. Compiled registries (applies to both runtimes)
-
-The runtime never parses raw OpenAPI specs. CI compiles `spec.json` + `connector.yaml` +
-overrides into a small artifact (curated tool definitions + request templates, ~100s of KB
-vs multi-MB specs). This keeps boot/cold-start fast, makes worker bundle limits a
-non-issue, and - because connectors are just build artifacts - keeps a later platform
-switch cheap in either direction.
+- runtime never parses raw specs
+- CI compiles `spec.json` + `connector.yaml` + overrides → `registry.json` (~100s KB vs multi-MB specs)
+- fast cold start; Worker bundle limits non-issue; platform switch cheap either direction
 
 ```
-BUILD TIME (CI, once per connector change)          RUN TIME (either platform)
+BUILD TIME (CI, once per connector change)          RUN TIME
 spec.json (MBs) ──┐                                 ┌──────────────────────┐
 connector.yaml ───┼─► compile ─► registry.json ────►│ load 100s of KB,     │
 overrides ────────┘             (curated tools,     │ translate, call API  │
                                  KBs not MBs)       └──────────────────────┘
 ```
 
-#### C-b. Deploy shape
+Deploy shape:
 
-Each connector deploys like any other fleet server: `wrangler deploy` for Workers,
-container (Railway) for Python - independent failure domains and independent deploys by
-construction, which is the property the original platform analysis was optimizing for.
-The only connector-specific addition is the compile step (C-a) in front of deploy.
+- per fleet convention: `wrangler deploy` (Workers); container for Py fallback
+- independent failure domains + independent deploys by construction
+- only connector-specific addition: compile step before deploy
+- kit + generator/compiler CLI promote to `shared/` at second connector (per `shared/{auth,catalog,ui}` convention)
+- full 2026-07 Railway-vs-CF scaling analysis: edison-watch#1078 history
 
-### Decision D - taming big specs
+### D. Taming big specs (layered, in order)
 
-Layered, in order of preference:
-
-1. **Curated allowlist** in `connector.yaml` with a hard tool-count budget (~40) enforced
-   in CI - the primary quality lever.
-2. **Response shaping** in the kit: max-bytes truncation with a "narrow your query" hint,
-   optional field-projection per tool (Xero payloads are huge).
-3. **Code mode for the long tail:** Edison's `builtin_code_mode` already turns mounted
-   tools into a typed TS library - curated tools stay few, complex multi-call workflows
-   compose in the sandbox.
-4. (Optional, later) Stainless-style **dynamic meta-tools** (`list_endpoints` /
-   `get_schema` / `invoke`) as a `connector.yaml` mode for genuinely long-tail admin APIs.
+1. **curated allowlist**: `connector.yaml`, hard ~40-tool budget, CI-enforced; primary quality lever
+2. **response shaping** in kit: max-bytes truncation + "narrow your query" hint; optional per-tool field projection (Xero payloads huge)
+3. **code mode long tail**: `builtin_code_mode` turns mounted tools into typed TS lib; multi-call workflows compose in sandbox
+4. optional, later: **dynamic meta-tools** mode per `connector.yaml` (CF `openApiMcpServer()` natural fit); genuinely long-tail admin APIs only
 
 ---
 
-## 4. Recommended architecture (target state)
+## 4. Target architecture
 
 ```
                                   EDISON GATEWAY (edison-watch)
@@ -318,105 +194,57 @@ Layered, in order of preference:
               └───────────────────────────────┘
 ```
 
-Marketplace flow stays exactly as today: entry in `scripts/marketplace_connectors.json`
-(new `auth: "oauth_upstream"` variant carrying provider metadata) → generated catalog →
-install → `provision_server` → mount. Un-authenticated users see the existing
-`xero_authenticate` stub tool; clicking through runs Edison's web flow against Xero
-instead of against an MCP AS.
+Marketplace flow unchanged:
 
-### Xero worked example (end-to-end)
+- entry (new `auth: "oauth_upstream"` variant + provider metadata) → generated catalog → install → `provision_server` → mount
+- unauthenticated → `xero_authenticate` stub → Edison web flow vs Xero IdP, not MCP AS
 
-1. Edison pre-registers **one** Xero app per deploy env (granular V2 scopes; secret in the
-   env's GCP secrets, never in the DB).
-2. Generator ingests Xero's accounting OpenAPI spec (large); curation pass keeps ~30 tools
-   (invoices, contacts, payments, reports…); the rest reachable via code mode.
-3. User installs Xero from the marketplace → NEEDS_AUTH → `xero_authenticate` tool →
-   browser flow on Xero → callback stores tokens per user.
-4. First real call: broker fetches Xero `connections`; if >1 org, the connector's
-   `xero_list_tenants` / `xero_set_tenant` tools (from `overrides.py`) surface selection;
-   choice persists per user; broker injects `xero-tenant-id` thereafter.
-5. Every request: `RefreshingHeaderAuth` checks expiry (30-min tokens), refreshes under a
-   per-`(user, provider)` DB lock (single-use rotating refresh tokens), retries once
-   on 401.
+### Xero end-to-end
+
+1. one Edison Xero app per env; V2 scopes; secret in env GCP, never DB
+2. generator ingests accounting spec; curation keeps ~30 tools (invoices, contacts, payments, reports); rest via code mode
+3. install → NEEDS_AUTH → `xero_authenticate` → browser flow → callback stores per-user tokens
+4. first call: broker fetches `connections`; >1 org → `xero_list_tenants`/`xero_set_tenant` (overrides) surface selection; choice persists; broker injects tenant header after
+5. every request: `RefreshingHeaderAuth` checks 30-min expiry; refresh under per-`(user, provider)` DB lock; retry once on 401
 
 ---
 
 ## 5. Phasing
 
-**Phase 0 - TS kit validation (§7).** A 2-3 day schema-fidelity validation of the
-resolved TS toolchain on the Xero build; produces the Phase-1 skeleton. Hosting is
-settled (§0.3); the FastMCP-container fallback is documented in §7.
-
-**Phase 1 - API-key connectors + generator skeleton (no OAuth work at all).**
-Connector kit + generator/compiler CLI in this repo (`servers/<name>/`, kit promoted to
-`shared/` at the second connector), per-server deploys per the fleet convention,
-response shaping, CI (tool-count budget, spec-drift check). Ship 2–3 `auth: "token"`
-connectors end-to-end through the *unchanged* gateway (`headers` + `template_fields` +
-encrypted `EnvArgsTemplateValues`). Lineup per §0.6: back-office gap cluster, each
-verified at kickoff to still lack a first-party remote MCP. Proves the pipeline and the
-curation workflow.
-
-**Phase 2 - upstream OAuth broker (the Xero unlock).**
-Gateway changes: configured-OAuth provider mode in `oauth_manager`/`oauth_web_flow`,
-`RefreshingHeaderAuth` (generalize `DatabaseBearerAuth` to per-request header injection),
-per-user refresh locking, `oauth_upstream` marketplace-entry variant + provider-metadata
-schema. Ship Xero as the flagship.
-
-**Phase 3 - polish and scale.**
-Dashboard "paste a spec URL" flow that opens a PR against this repo (the coding
-agent runs the curation checklist); autoconfig-driven ACL defaults on install; optional
-dynamic meta-tools mode; evaluate A1 (connector-side AS) only if standalone/public
-connectors become a goal.
+- **Phase 0**: TS kit validation (§7); output = Phase-1 skeleton
+- **Phase 1**: API-key connectors + generator skeleton; zero OAuth work
+  - kit + compiler CLI; per-server deploys; response shaping; CI (tool budget, spec-drift check)
+  - ship 2-3 `auth: "token"` connectors through *unchanged* gateway (`headers` + `template_fields` + encrypted `EnvArgsTemplateValues`); lineup §0.6
+  - proves pipeline + curation workflow
+- **Phase 2**: upstream OAuth broker; gateway work; Xero flagship
+  - configured-OAuth mode in `oauth_manager`/`oauth_web_flow`; `RefreshingHeaderAuth`; per-user refresh lock; `oauth_upstream` entry variant + provider-metadata schema
+  - edison-watch mirror doc written here
+- **Phase 3**: polish + scale
+  - dashboard "paste spec URL" → PR against this repo; agent runs curation checklist
+  - autoconfig ACL defaults on install; optional meta-tools mode
+  - A1 re-evaluated only if public connectors become goal
 
 ## 6. Open questions
 
-1. ~~Xero app ownership~~ - resolved, §0.4 (Edison-owned + BYO override).
-2. ~~Zero-knowledge boundary~~ - resolved, §0.5 (documented carve-out + at-rest
-   encryption with a server/KMS key).
-3. **Spec drift:** pinned spec snapshots + a scheduled diff job that opens curation PRs,
-   or live re-parse at boot? (Recommend pinned; determinism beats freshness. Compiled
-   registries (§C-a) presuppose pinning.)
-4. **Tool budget number:** 40 comes from Cursor's practical cap; confirm against our own
-   client telemetry.
-5. **Auth header planes (§A2 note):** final `X-Upstream-*` header naming, and whether
-   `edison-jwt` caller auth and upstream injection ship together in Phase 2 or
-   `edison-jwt` lands first (the fleet already sequences `bearer` → `edison-jwt`).
+1. ~~Xero app ownership~~ resolved §0.4
+2. ~~zero-knowledge boundary~~ resolved §0.5
+3. **spec drift**: pinned snapshots + scheduled diff job opening curation PRs, vs live re-parse at boot; recommend pinned: determinism > freshness, registries (§3C) presuppose pinning
+4. **tool budget**: 40 = Cursor practical cap; confirm vs own client telemetry
+5. **auth header planes**: final `X-Upstream-*` naming; `edison-jwt` + upstream injection together in Phase 2, or `edison-jwt` first (fleet already sequences `bearer` → `edison-jwt`)
 
-## 7. Kit validation plan (was: two-arm spike; resolved to TypeScript 2026-08-26)
+## 7. Validation plan (2-3 days; TS rationale: §0.2)
 
-*History: the 2026-07-17 plan was a two-arm Python-vs-TS spike that also decided hosting.
-Relocation into this repo dissolved the hosting half (per-server polyglot deploys, fleet
-decision #3), and the 2026-08-26 re-survey of the TS ecosystem (§2) removed the Python
-arm's main advantage - TS OpenAPI→MCP conversion no longer has to be built from scratch.
-With every other axis already favoring TS (fleet default runtime, `servers/image-host/`
-precedent, per-connector Worker isolates, first-party CF `openApiMcpServer()` support),
-the kit language is resolved: **TypeScript on Cloudflare Workers.***
+- build `servers/xero/` candidate: compiled registry (§3C), ~10 curated tools (invoices, contacts, payments), official MCP TS SDK on Worker
+- evaluate `mcp-from-openapi` + `openapi-mcp-generator` (§2) as CI conversion step *before* writing own conversion code
+- drive through gateway; broker faked with hand-minted `X-Upstream-*` headers; demo both header planes (§3A)
+- **pass**: 10 tools' input/output schemas survive conversion, MCP Tester vs real Xero sandbox data; registry within Worker bundle limits
+- **fail → fallback**: unfixable schema-fidelity gaps revert §0.2 to FastMCP `from_openapi` container; registry artifacts carry over unchanged
+- output doubles as Phase-1 skeleton + first real connector
+- CF `openApiMcpServer()` reserved for §3D#4 meta-tools mode, not curated path
 
-What remains is a **2-3 day validation**, not a bake-off:
+### Kickoff prerequisites (owner: Eito)
 
-- Build the `servers/xero/` candidate: compiled registry (C-a) from Xero's accounting
-  spec, ~10 curated tools (invoices, contacts, payments…), served with the official MCP
-  TS SDK on a Worker. Evaluate `mcp-from-openapi` and `openapi-mcp-generator` (§2) as
-  the CI-side conversion step *before* writing any conversion code of our own.
-- Drive it end-to-end through the Edison gateway with hand-minted `X-Upstream-*` headers
-  (the broker is faked - it is not what's being tested), demoing the caller-auth and
-  upstream header planes coexisting (§A2 note).
-- **Pass:** the 10 tools' input/output schemas survive conversion - verified with MCP
-  Tester calls against real Xero sandbox data - and the compiled registry runs within
-  Worker bundle limits.
-- **Fail → fallback:** schema-fidelity gaps the TS toolchain can't close within the
-  timebox revert §0.2 to FastMCP `from_openapi` in a container (still a first-class
-  fleet runtime); the compiled-registry artifacts carry over unchanged.
-
-Either way the validated build doubles as the Phase-1 skeleton and the first real
-connector. CF's `openApiMcpServer()` stays reserved for the Decision D#4 dynamic
-meta-tools mode (long tail), not the curated path.
-
-### Kickoff prerequisites (owner: Eito - to be settled when the validation starts)
-
-- [ ] Register a Xero developer app (granular V2 scopes) + sandbox/demo org; share
-      client_id/secret + org credentials into the env secret store.
-- [x] ~~Pick the Cloudflare account for the TS arm's deploys~~ - settled: the fleet
-      already deploys `servers/image-host/` from this repo's CF account.
-- [x] ~~Approve creation of the `edison-connectors` repo~~ - settled: this repo is it.
-- [ ] Green-light the validation and assign it (coding-agent-driven or a teammate).
+- [ ] register Xero dev app (V2 scopes) + sandbox/demo org; client_id/secret + org creds → env secret store
+- [x] ~~pick CF account~~ settled: `servers/image-host/` already deploys from this repo's account
+- [x] ~~approve `edison-connectors` repo~~ settled: this repo is it
+- [ ] green-light validation + assign (agent or teammate)
