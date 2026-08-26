@@ -35,6 +35,15 @@ Returns `{ url, key, bytes, content_type }`.
 
 Takes `{ key }`, returns `{ deleted, key }`.
 
+- **Ownership-enforced:** a caller may delete only images it uploaded. Each
+  upload stamps the authenticated subject as the object's owner (private R2
+  `customMetadata`, never exposed on the public URL); a delete from a different
+  subject is refused. Under `edison-jwt` the subject is the per-user `sub`, so
+  users are isolated from each other; under single-tenant `bearer`/`open` every
+  caller shares one subject, so the check is a no-op. Images uploaded before
+  ownership tracking carry no owner and stay deletable by any authenticated
+  caller (the unguessable key remains their only guard).
+
 ## Endpoints
 
 - `POST /mcp` - MCP streamable HTTP (guarded by auth; see below).
