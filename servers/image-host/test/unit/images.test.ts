@@ -4,6 +4,7 @@ import {
   base64PayloadTooLarge,
   decodeBase64,
   generateKey,
+  isDeleteAuthorized,
   normalizeType,
   sanitizePrefix,
   slugify,
@@ -132,6 +133,29 @@ describe("base64PayloadTooLarge", () => {
     const maxBytes = 1024;
     const exactChars = Math.ceil(maxBytes / 3) * 4;
     expect(base64PayloadTooLarge("a".repeat(exactChars + 40), maxBytes)).toBe(false);
+  });
+});
+
+describe("isDeleteAuthorized", () => {
+  test("lets an owner delete their own object", () => {
+    expect(isDeleteAuthorized("user-123", "user-123")).toBe(true);
+  });
+
+  test("blocks a different caller from deleting someone else's object", () => {
+    expect(isDeleteAuthorized("user-123", "user-456")).toBe(false);
+  });
+
+  test("allows deletion of legacy/un-owned objects (obscurity-guarded by the key)", () => {
+    // undefined (pre-ownership uploads) or "" -> deletable by any authed caller.
+    expect(isDeleteAuthorized(undefined, "user-123")).toBe(true);
+    expect(isDeleteAuthorized("", "user-123")).toBe(true);
+  });
+
+  test("single-tenant constant subjects share ownership by construction", () => {
+    // bearer/open modes collapse every caller to one subject, so the check is a
+    // no-op there and never blocks a legitimate delete.
+    expect(isDeleteAuthorized("bearer", "bearer")).toBe(true);
+    expect(isDeleteAuthorized("anonymous", "anonymous")).toBe(true);
   });
 });
 

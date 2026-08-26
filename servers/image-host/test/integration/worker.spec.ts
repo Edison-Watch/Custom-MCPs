@@ -1,4 +1,4 @@
-import { SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
@@ -164,5 +164,45 @@ describe("MCP tools", () => {
   it("delete_image reports deleted:false for a key that never existed", async () => {
     const result = await callTool(sessionId, "delete_image", { key: "img/does-not-exist.png" });
     expect(result.structuredContent).toMatchObject({ deleted: false, key: "img/does-not-exist.png" });
+  });
+
+  it("upload_image stamps the authenticated caller as the object owner", async () => {
+    const uploaded = await callTool(sessionId, "upload_image", {
+      content_base64: toBase64(PNG_BYTES),
+      filename: "owned.png",
+    });
+    const key = uploaded.structuredContent.key as string;
+    // Ownership is recorded in private R2 customMetadata (never on the URL). The
+    // test env runs bearer mode, so every caller's subject is "bearer".
+    const stored = await env.IMAGE_BUCKET.head(key);
+    expect(stored?.customMetadata?.owner).toBe("bearer");
+  });
+
+  it("delete_image removes an image the same caller uploaded, then it 404s", async () => {
+    const uploaded = await callTool(sessionId, "upload_image", {
+      content_base64: toBase64(PNG_BYTES),
+      filename: "to-delete.png",
+    });
+    const key = uploaded.structuredContent.key as string;
+    expect(key).toBeTruthy();
+
+    const del = await callTool(sessionId, "delete_image", { key });
+    expect(del.structuredContent).toMatchObject({ deleted: true, key });
+
+    // The object is gone: the previously-working URL now 404s.
+    expect((await SELF.fetch(uploaded.structuredContent.url)).status).toBe(404);
+  });
+
+  it("delete_image refuses a caller who does not own the object", async () => {
+    // Seed an object owned by a DIFFERENT subject than the bearer test caller.
+    // (Bearer mode collapses every request to subject "bearer", so we can't get
+    // a second real subject through the transport - stamp the owner directly.)
+    const key = "img/owned-by-another-user.png";
+    await env.IMAGE_BUCKET.put(key, PNG_BYTES, { customMetadata: { owner: "another-user" } });
+
+    const result = await callTool(sessionId, "delete_image", { key });
+    expect(result.isError).toBe(true);
+    // Refusal must not delete: the object is still there.
+    expect(await env.IMAGE_BUCKET.head(key)).not.toBeNull();
   });
 });
