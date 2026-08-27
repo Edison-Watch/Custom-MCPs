@@ -1,4 +1,4 @@
-"""Tests for the reddit command (fail-fast, stdin, dry-run — no network)."""
+"""Tests for the reddit command (fail-fast, stdin, dry-run; no network)."""
 
 from unittest.mock import patch
 
