@@ -51,6 +51,8 @@ def main(
 ) -> None:
     """Scrape Reddit posts, comments, communities, or users."""
     search = resolve_value(search, use_stdin=use_stdin)
+    if search is not None:
+        search = search.strip() or None
     urls = url or []
 
     # Fail fast (or prompt only on a TTY) when neither target is given, rather

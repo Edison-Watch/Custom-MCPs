@@ -21,6 +21,14 @@ class TestRedditCmd(TestTemplate):
         assert result.exit_code == 1
         assert "provide a search term or --url" in result.output.lower()
 
+    def test_whitespace_search_fails_fast(self):
+        # A blank search must hit the actionable CLI error, not a traceback.
+        with patch("services.reddit_svc.reddit_scrape") as scrape:
+            result = runner.invoke(app, ["reddit", "   "])
+        assert result.exit_code == 1
+        assert "provide a search term or --url" in result.output.lower()
+        scrape.assert_not_called()
+
     def test_dry_run_makes_no_call(self):
         with patch("services.reddit_svc.reddit_scrape") as scrape:
             result = runner.invoke(app, ["--dry-run", "reddit", "rust"])
