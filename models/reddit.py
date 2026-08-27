@@ -52,6 +52,10 @@ class RedditScrapeInput(BaseModel):
 
     @model_validator(mode="after")
     def _require_a_target(self) -> "RedditScrapeInput":
+        # Normalize a blank/whitespace-only search to None so it fails the
+        # check below instead of being sent to Apify as a useless query.
+        if self.search is not None:
+            self.search = self.search.strip() or None
         if not self.search and not self.start_urls:
             raise ValueError(
                 "Provide either 'search' or at least one 'start_urls' entry."

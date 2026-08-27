@@ -70,15 +70,17 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
         )
 
     url = f"{_APIFY_BASE}/acts/{_ACTOR_ID}/run-sync-get-dataset-items"
-    params = {"token": token, "timeout": _RUN_TIMEOUT_S, "format": "json"}
+    params = {"timeout": _RUN_TIMEOUT_S, "format": "json"}
+    # Bearer header rather than a ?token= query param: Apify recommends it, and
+    # it keeps the secret out of URLs that proxies and servers may log.
+    headers = {"Authorization": f"Bearer {token}"}
     actor_input = _build_actor_input(input)
 
     log.info("reddit_scrape: starting Apify run for actor {}", _ACTOR_ID)
     try:
         with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-            resp = client.post(url, params=params, json=actor_input)
+            resp = client.post(url, params=params, headers=headers, json=actor_input)
         resp.raise_for_status()
-        items = resp.json()
     except httpx.HTTPStatusError as exc:
         # Apify puts a JSON {"error": {...}} body on 4xx/5xx; surface it.
         raise ApifyError(
@@ -87,8 +89,15 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
     except httpx.HTTPError as exc:
         raise ApifyError(f"Could not reach Apify: {type(exc).__name__}: {exc}") from exc
 
+    try:
+        items = resp.json()
+    except ValueError as exc:
+        raise ApifyError(f"Apify returned invalid JSON: {exc}") from exc
+
     if not isinstance(items, list):
         raise ApifyError(f"Unexpected Apify response shape: {type(items).__name__}")
+    if not all(isinstance(item, dict) for item in items):
+        raise ApifyError("Apify returned a dataset item that is not an object")
 
     log.info("reddit_scrape: run returned {} items", len(items))
     return RedditScrapeResult(count=len(items), items=items)

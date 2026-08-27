@@ -55,7 +55,9 @@ class TestRedditScrape(TestTemplate):
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured.update(json.loads(request.content))
-            assert request.url.params["token"] == "test-token"
+            # Token travels in the Authorization header, never the URL.
+            assert request.headers["Authorization"] == "Bearer test-token"
+            assert "token" not in request.url.params
             return httpx.Response(200, json=[])
 
         with _token("test-token"), _mock_http(handler):
@@ -78,9 +80,10 @@ class TestRedditScrape(TestTemplate):
         assert captured["skipComments"] is False  # include_comments=True
 
     def test_start_urls_only_is_valid(self):
+        body: dict = {}
+
         def handler(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
-            assert body["startUrls"] == [{"url": "https://www.reddit.com/r/python/"}]
+            body.update(json.loads(request.content))
             return httpx.Response(200, json=[])
 
         with _token("test-token"), _mock_http(handler):
@@ -88,9 +91,40 @@ class TestRedditScrape(TestTemplate):
                 RedditScrapeInput(start_urls=["https://www.reddit.com/r/python/"])
             )
 
+        assert body["startUrls"] == [{"url": "https://www.reddit.com/r/python/"}]
+
     def test_requires_search_or_urls(self):
         with pytest.raises(ValueError, match="Provide either"):
             RedditScrapeInput()
+
+    def test_whitespace_only_search_is_rejected(self):
+        with pytest.raises(ValueError, match="Provide either"):
+            RedditScrapeInput(search="   ")
+
+    def test_search_is_stripped(self):
+        assert RedditScrapeInput(search="  rust  ").search == "rust"
+
+    def test_invalid_json_is_wrapped(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"not json", headers={})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="invalid JSON"),
+        ):
+            reddit_scrape(RedditScrapeInput(search="rust"))
+
+    def test_non_dict_item_is_wrapped(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=[{"ok": 1}, "not-an-object"])
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="not an object"),
+        ):
+            reddit_scrape(RedditScrapeInput(search="rust"))
 
     def test_missing_token_raises(self):
         with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
