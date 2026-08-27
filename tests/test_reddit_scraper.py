@@ -35,7 +35,7 @@ def _mock_http(handler):
 
 @contextmanager
 def _token(value: str | None):
-    with patch.object(global_config, "APIFY_API_TOKEN", value):
+    with patch.object(global_config, "APIFY_API_KEY", value):
         yield
 
 
@@ -93,7 +93,7 @@ class TestRedditScrape(TestTemplate):
             RedditScrapeInput()
 
     def test_missing_token_raises(self):
-        with _token(None), pytest.raises(ApifyError, match="APIFY_API_TOKEN"):
+        with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
             reddit_scrape(RedditScrapeInput(search="rust"))
 
     def test_http_error_is_wrapped(self):

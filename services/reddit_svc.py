@@ -62,10 +62,10 @@ def _build_actor_input(inp: RedditScrapeInput) -> dict:
     output_model=RedditScrapeResult,
 )
 def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
-    token = global_config.APIFY_API_TOKEN
+    token = global_config.APIFY_API_KEY
     if not token:
         raise ApifyError(
-            "APIFY_API_TOKEN is not configured. Set it in your .env to use the "
+            "APIFY_API_KEY is not configured. Set it in your .env to use the "
             "Reddit scraper."
         )
 
