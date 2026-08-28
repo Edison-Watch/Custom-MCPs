@@ -44,8 +44,11 @@ jobs:
       # arbitrary (untrusted) branch.
       - name: Guard - manual runs only from main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        # Read the ref from the environment, never `${{ github.ref }}` inlined
+        # into the shell source: a ref like `x$(...)` would otherwise be
+        # interpolated and executed before this guard can exit.
         run: |
-          echo "::error::workflow_dispatch for this deploy is only allowed on main (got ${{ github.ref }})"
+          echo "::error::workflow_dispatch for this deploy is only allowed on main (got $GITHUB_REF)"
           exit 1
 
       - name: Checkout code
