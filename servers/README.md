@@ -25,3 +25,4 @@ for the full strategy and [`../shared/`](../shared) for the shared pieces.
 | Server | Runtime | Status | Auth (v1) |
 |--------|---------|--------|-----------|
 | [`image-host/`](./image-host) | TS · Cloudflare Worker + R2 | built + tested (unit + workerd integration) | `bearer` |
+| [`reddit/`](./reddit) | TS · Cloudflare Worker (Apify-backed) | built + tested (unit + workerd integration) | `edison-jwt` |
