@@ -99,6 +99,38 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*\\.svg$",
       "description": "Icon filename, co-located in this server directory; sync copies it into frontend-v2/public/marketplace/icons/."
+    },
+    "tools_configurations": {
+      "type": "object",
+      "description": "Reviewed per-tool ACL + lethal-trifecta defaults baked into the install. Keyed by the tool's native name as the server exposes it (e.g. 'reddit_scrape'). A tool omitted here (or an entry with no tools_configurations at all) installs with Edison's protective default (read_untrusted_public_data + SECRET), so drift fails closed. edison-watch's generate_marketplace_entries.py carries these into servers/<id>.json; servers_validate.py applies them at install.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "write_operation",
+          "read_private_data",
+          "read_untrusted_public_data",
+          "acl"
+        ],
+        "properties": {
+          "write_operation": {
+            "type": "boolean",
+            "description": "True if the tool can modify external state (create/update/delete/send)."
+          },
+          "read_private_data": {
+            "type": "boolean",
+            "description": "True if the tool can read private/sensitive data (not just public content)."
+          },
+          "read_untrusted_public_data": {
+            "type": "boolean",
+            "description": "True if the tool reads untrusted external content (web, scraped pages, third-party APIs)."
+          },
+          "acl": {
+            "enum": ["PUBLIC", "PRIVATE", "SECRET"],
+            "description": "Sensitivity of the data this tool handles."
+          }
+        }
+      }
     }
   },
   "allOf": [
