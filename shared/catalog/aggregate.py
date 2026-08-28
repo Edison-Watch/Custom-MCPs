@@ -53,7 +53,19 @@ REQUIRED = (
 )
 AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
 # Mirror of schema.json `properties` (additionalProperties:false) + the id regex.
-ALLOWED_KEYS = frozenset(REQUIRED) | {"edison_hosted", "headers", "template_fields"}
+ALLOWED_KEYS = frozenset(REQUIRED) | {
+    "edison_hosted",
+    "headers",
+    "template_fields",
+    "tools_configurations",
+}
+ACL_VALUES = ("PUBLIC", "PRIVATE", "SECRET")
+# The four trifecta/ACL keys every tools_configurations entry must carry.
+_TOOL_CONFIG_FLAGS = (
+    "write_operation",
+    "read_private_data",
+    "read_untrusted_public_data",
+)
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -103,6 +115,28 @@ def _template_fields_bad(entry: dict[str, Any]) -> bool:
     return False
 
 
+def _tools_configurations_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object mapping a tool name to an object carrying
+    boolean write_operation/read_private_data/read_untrusted_public_data and an
+    acl in PUBLIC/PRIVATE/SECRET (additionalProperties:false per tool)."""
+    if "tools_configurations" not in entry:
+        return False
+    configs = entry["tools_configurations"]
+    if not isinstance(configs, dict):
+        return True
+    allowed = frozenset(_TOOL_CONFIG_FLAGS) | {"acl"}
+    for cfg in configs.values():
+        if not isinstance(cfg, dict):
+            return True
+        if set(cfg) != allowed:  # every flag required, no extras
+            return True
+        if any(not isinstance(cfg[flag], bool) for flag in _TOOL_CONFIG_FLAGS):
+            return True
+        if cfg["acl"] not in ACL_VALUES:
+            return True
+    return False
+
+
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
     """(is_bad, message) pairs for one entry, assuming required keys are present."""
     icon = str(entry["icon"])
@@ -123,6 +157,12 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             "'tags' must be a non-empty list of non-empty strings",
         ),
         (_headers_bad(entry), "'headers' must be an object of string values"),
+        (
+            _tools_configurations_bad(entry),
+            "'tools_configurations' entries need boolean write_operation/"
+            "read_private_data/read_untrusted_public_data and an acl in "
+            f"{ACL_VALUES}",
+        ),
         (
             _template_fields_bad(entry),
             "'template_fields.env' entries need a non-empty string 'description' (+ optional string 'example')",

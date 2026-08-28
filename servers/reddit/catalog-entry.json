@@ -14,5 +14,13 @@
   ],
   "url": "https://reddit.sealgate.ai/mcp",
   "auth": "edison-jwt",
-  "icon": "reddit.svg"
+  "icon": "reddit.svg",
+  "tools_configurations": {
+    "reddit_scrape": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    }
+  }
 }

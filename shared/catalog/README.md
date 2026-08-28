@@ -51,7 +51,28 @@ the build on any invalid entry.
   An entry flips to it once its server is deployed behind Edison's issuer URL;
   see `first_party_mcp_integration.md` for the cutover runbook.
 
-## Not here yet
+## Per-tool ACL defaults (`tools_configurations`)
 
-- Per-tool ACL defaults (`tools_configurations`): entries omit them today, so
-  installs use Edison's autoconfig path; bake them in once reviewed.
+Optional. A reviewed classification baked into the install so a marketplace
+install doesn't fall back to Edison's protective default (every marketplace
+install skips autoconfig auto-labeling, so an unclassified tool mounts as
+`read_untrusted_public_data` + `SECRET` - correct-but-conservative, which trips
+the lethal-trifecta guard for a plain public reader). Key each entry by the
+tool's native name as the server exposes it; every entry carries all four flags:
+
+```jsonc
+"tools_configurations": {
+  "reddit_scrape": {
+    "write_operation": false,          // never writes back to Reddit
+    "read_private_data": false,        // only public content
+    "read_untrusted_public_data": true, // scraped web content is untrusted
+    "acl": "PUBLIC"                    // public data
+  }
+}
+```
+
+A tool omitted here (or an entry with no `tools_configurations` at all) still
+gets the protective default, so drift fails closed. edison-watch's
+`generate_marketplace_entries.py` carries these into `servers/<id>.json` and
+`servers_validate.py` applies them at install. Bake a classification in only
+once it has been reviewed.
