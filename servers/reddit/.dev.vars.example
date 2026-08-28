@@ -1,0 +1,20 @@
+# Copy to `.dev.vars` for `wrangler dev`. NEVER commit `.dev.vars` (it is gitignored).
+
+# Apify API token for the server's own account (console.apify.com - Settings -
+# Integrations). Sent to Apify as `Authorization: Bearer <token>`.
+APIFY_TOKEN="apify_api_xxxxxxxxxxxxxxxx"
+
+# Clients must present this as `Authorization: Bearer <token>` (bearer mode).
+AUTH_TOKEN="dev-local-token-change-me"
+
+# Optional overrides:
+# AUTH_MODE="bearer"                     # open | bearer | edison-jwt
+# APIFY_ACTOR_ID="trudax~reddit-scraper-lite"
+# APIFY_BASE_URL="https://api.apify.com/v2"
+
+# edison-jwt mode (Edison mints a per-user JWT and injects it; verified against
+# Edison's published JWKS - see src/jwt.ts). Set AUTH_MODE="edison-jwt" and all
+# three below (none are secrets - public config):
+# EDISON_JWKS_URL="https://<edison-host>/.well-known/jwks.json"
+# EDISON_JWT_ISSUER="https://<edison-host>"
+# EDISON_JWT_AUDIENCE="reddit"

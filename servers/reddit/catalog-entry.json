@@ -1,0 +1,18 @@
+{
+  "id": "reddit",
+  "displayName": "Reddit Scraper",
+  "description": "Search and scrape Reddit posts, comments, communities, and users. Query by term (optionally scoped to a subreddit) or point it at Reddit URLs; returns structured results.",
+  "author": "SealGate",
+  "edison_hosted": true,
+  "category": "data",
+  "tags": [
+    "reddit",
+    "social",
+    "web-scraping",
+    "search",
+    "apify"
+  ],
+  "url": "https://reddit.sealgate.ai/mcp",
+  "auth": "edison-jwt",
+  "icon": "reddit.svg"
+}

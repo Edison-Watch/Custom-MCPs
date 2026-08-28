@@ -25,6 +25,7 @@ jobs:
       matrix:
         server:
           - image-host
+          - reddit
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}
