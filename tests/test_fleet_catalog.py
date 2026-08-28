@@ -7,11 +7,17 @@ path and exercise the pure validators directly - no config, no MCP session.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_AGG_PATH = _REPO_ROOT / "shared" / "catalog" / "aggregate.py"
+_CATALOG_DIR = _REPO_ROOT / "shared" / "catalog"
+_AGG_PATH = _CATALOG_DIR / "aggregate.py"
+_SCHEMA_PATH = _CATALOG_DIR / "schema.json"
+_SERVERS_DIR = _REPO_ROOT / "servers"
 
 
 def _load_aggregate() -> Any:
@@ -88,3 +94,37 @@ def test_repository_entries_all_valid():
     """Every real servers/*/catalog-entry.json must pass the aggregator."""
     _entries, errors = _AGG.collect()
     assert errors == [], "\n".join(errors)
+
+
+def test_repository_entries_validate_against_json_schema():
+    """Every real entry must also pass shared/catalog/schema.json itself.
+
+    aggregate.py re-expresses the schema in stdlib Python; this validates the
+    *schema view* of the same contract directly, so an entry that satisfies one
+    view but not the other can't slip through.
+    """
+    schema = json.loads(_SCHEMA_PATH.read_text())
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls.check_schema(schema)  # the schema itself must be well-formed
+    validator = validator_cls(schema)
+    paths = sorted(_SERVERS_DIR.glob("*/catalog-entry.json"))
+    assert paths, "no catalog entries found"
+    for path in paths:
+        entry = json.loads(path.read_text())
+        errors = sorted(validator.iter_errors(entry), key=lambda e: list(e.path))
+        assert not errors, f"{path.parent.name}: " + "; ".join(
+            e.message for e in errors
+        )
+
+
+def test_schema_and_validator_allowed_keys_in_lockstep():
+    """The two views of the contract must agree on the set of allowed keys.
+
+    aggregate.py's docstring: the Python validation and the JSON Schema are "two
+    views of one contract; when you change one, change the other." A key added
+    to schema.json's `properties` but not to aggregate's ALLOWED_KEYS (or vice
+    versa) is exactly the drift this guards against.
+    """
+    schema = json.loads(_SCHEMA_PATH.read_text())
+    schema_keys = set(schema["properties"])
+    assert schema_keys == set(_AGG.ALLOWED_KEYS)
