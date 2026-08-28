@@ -53,11 +53,12 @@ the build on any invalid entry.
 
 ## Per-tool ACL defaults (`tools_configurations`)
 
-Optional. A reviewed classification baked into the install so a marketplace
-install doesn't fall back to Edison's protective default (every marketplace
-install skips autoconfig auto-labeling, so an unclassified tool mounts as
-`read_untrusted_public_data` + `SECRET` - correct-but-conservative, which trips
-the lethal-trifecta guard for a plain public reader). Key each entry by the
+**Mandatory for `edison_hosted` connectors** (`catalog_check` fails without it);
+optional for OSS/self-host entries. A reviewed classification baked into the
+install so a marketplace install doesn't fall back to Edison's protective
+default: every marketplace install skips autoconfig auto-labeling, so an
+unclassified tool mounts at the full-trifecta `SECRET` default - which trips the
+lethal-trifecta guard even for a plain public reader. Key each entry by the
 tool's native name as the server exposes it; every entry carries all four flags:
 
 ```jsonc
@@ -71,8 +72,20 @@ tool's native name as the server exposes it; every entry carries all four flags:
 }
 ```
 
-A tool omitted here (or an entry with no `tools_configurations` at all) still
-gets the protective default, so drift fails closed. edison-watch's
-`generate_marketplace_entries.py` carries these into `servers/<id>.json` and
-`servers_validate.py` applies them at install. Bake a classification in only
-once it has been reviewed.
+A tool left out of a present map still gets the protective default, so partial
+coverage fails closed - but ship a config for every tool an `edison_hosted`
+server exposes. edison-watch's `generate_marketplace_entries.py` carries these
+into `servers/<id>.json` and `servers_validate.py` applies them at install. Bake
+a classification in only once it has been reviewed.
+
+### Adding a connector
+
+```bash
+make new-connector id=<id>   # scaffold servers/<id>/ (skeleton, no classification yet)
+```
+
+The scaffold is deliberately left one step short - it ships no
+`tools_configurations`, so `catalog_check` stays red until you classify the
+server's tools (fail-closed by construction). The `add-fleet-connector` skill
+walks through the whole flow: scaffold -> fill the entry -> list the live
+server's tools -> classify each -> validate.

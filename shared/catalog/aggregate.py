@@ -137,6 +137,18 @@ def _tools_configurations_bad(entry: dict[str, Any]) -> bool:
     return False
 
 
+def _edison_hosted_unclassified(entry: dict[str, Any]) -> bool:
+    """True when an edison_hosted connector ships no classification.
+
+    edison_hosted connectors install via the marketplace, which skips autoconfig
+    auto-labeling: a tool with no config mounts at the protective default (full
+    trifecta + SECRET) and blocks. Require an explicit, reviewed
+    `tools_configurations` (non-empty) instead of shipping empty. `_tools_
+    configurations_bad` still validates the shape of whatever is present.
+    """
+    return entry.get("edison_hosted") is True and not entry.get("tools_configurations")
+
+
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
     """(is_bad, message) pairs for one entry, assuming required keys are present."""
     icon = str(entry["icon"])
@@ -162,6 +174,13 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             "'tools_configurations' entries need boolean write_operation/"
             "read_private_data/read_untrusted_public_data and an acl in "
             f"{ACL_VALUES}",
+        ),
+        (
+            _edison_hosted_unclassified(entry),
+            "'edison_hosted' connectors must declare a non-empty "
+            "'tools_configurations' (classify each tool, or run the "
+            "add-fleet-connector skill); an unclassified tool installs at the "
+            "SECRET + full-trifecta default and trips the lethal-trifecta guard",
         ),
         (
             _template_fields_bad(entry),
@@ -221,7 +240,9 @@ def _validate(entry: dict[str, Any], server_dir: Path) -> list[str]:
         for k in entry
         if k not in ALLOWED_KEYS
     ]
-    return unknown + [f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad]
+    return unknown + [
+        f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad
+    ]
 
 
 def collect() -> tuple[list[dict[str, Any]], list[str]]:
