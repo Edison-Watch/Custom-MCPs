@@ -208,6 +208,9 @@ class Config(BaseSettings):
     PERPLEXITY_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
 
+    # Apify (Reddit scraper and any future Actor-backed services)
+    APIFY_API_KEY: str | None = None
+
     # Agentic payments (observability only - the protocol reads these
     # via os.getenv() using the env var name from payments.yaml config,
     # not from these fields directly)
