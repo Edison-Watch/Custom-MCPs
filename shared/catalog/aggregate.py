@@ -143,10 +143,31 @@ def _edison_hosted_unclassified(entry: dict[str, Any]) -> bool:
     edison_hosted connectors install via the marketplace, which skips autoconfig
     auto-labeling: a tool with no config mounts at the protective default (full
     trifecta + SECRET) and blocks. Require an explicit, reviewed
-    `tools_configurations` (non-empty) instead of shipping empty. `_tools_
-    configurations_bad` still validates the shape of whatever is present.
+    `tools_configurations` (non-empty) instead of shipping empty.
+    `_tools_configurations_bad` still validates the shape of whatever is present.
     """
     return entry.get("edison_hosted") is True and not entry.get("tools_configurations")
+
+
+def _has_scaffold_placeholder(entry: dict[str, Any]) -> bool:
+    """True when a human-facing field still holds an unedited scaffold TODO.
+
+    `scripts/new_connector.py` seeds displayName/description/category/tags with
+    'TODO' sentinels. Classifying the one security field must not turn the entry
+    green while its catalog copy is still placeholder text - so an unmodified
+    scaffold stays red until every TODO is replaced. Validator-only hygiene rule,
+    like the icon-file-existence check; the JSON Schema deliberately doesn't
+    police copy. Matches only the exact scaffold sentinels ('TODO' or a
+    'TODO '-prefixed string) to avoid tripping a real name like 'Todoist'.
+    """
+
+    def _todo(value: Any) -> bool:
+        return isinstance(value, str) and (value == "TODO" or value.startswith("TODO "))
+
+    if any(_todo(entry.get(key)) for key in ("displayName", "description", "category")):
+        return True
+    tags = entry.get("tags")
+    return isinstance(tags, list) and any(_todo(tag) for tag in tags)
 
 
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
@@ -181,6 +202,11 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             "'tools_configurations' (classify each tool, or run the "
             "add-fleet-connector skill); an unclassified tool installs at the "
             "SECRET + full-trifecta default and trips the lethal-trifecta guard",
+        ),
+        (
+            _has_scaffold_placeholder(entry),
+            "entry still contains scaffold 'TODO' placeholders - fill in "
+            "displayName/description/category/tags before shipping",
         ),
         (
             _template_fields_bad(entry),

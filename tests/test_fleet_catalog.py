@@ -118,18 +118,66 @@ def test_non_hosted_without_tools_configurations_ok():
     )
 
 
-def test_scaffold_fails_closed_on_classification_gate():
-    """A freshly-scaffolded entry must trip exactly the classification gate.
+def test_scaffold_placeholder_copy_rejected():
+    # An unmodified scaffold must not pass just because tools_configurations got
+    # filled - the TODO catalog copy is still a placeholder.
+    assert (
+        _AGG._has_scaffold_placeholder(_NEW_CONNECTOR._scaffold_entry("sample")) is True
+    )
+    filled = dict(
+        _NEW_CONNECTOR._scaffold_entry("sample"),
+        displayName="Real Name",
+        description="A real one-line description.",
+        category="data",
+        tags=["real"],
+    )
+    assert _AGG._has_scaffold_placeholder(filled) is False
 
-    The scaffold ships an edison_hosted skeleton with no tools_configurations on
-    purpose, so `make catalog_check` stays red until the author classifies. This
-    pins that fail-closed contract: the skeleton is edison_hosted and carries no
-    classification.
+
+def test_scaffold_fails_closed_on_exactly_its_deliberate_gaps(tmp_path):
+    """A freshly-scaffolded entry is red on exactly its two deliberate gaps.
+
+    The scaffold ships an edison_hosted skeleton with (1) no tools_configurations
+    and (2) TODO placeholder copy - and must be valid in every *other* respect,
+    so the author's only catalog_check failures are the fields they still owe.
+    Running the full validator (not just one predicate) pins that contract.
     """
     entry = _NEW_CONNECTOR._scaffold_entry("sample")
-    assert entry["edison_hosted"] is True
-    assert "tools_configurations" not in entry
-    assert _AGG._edison_hosted_unclassified(entry) is True
+    server_dir = tmp_path / "sample"
+    server_dir.mkdir()
+    (server_dir / "sample.svg").write_text(_NEW_CONNECTOR._PLACEHOLDER_SVG)
+    errors = _AGG._validate(entry, server_dir)
+    joined = " | ".join(errors)
+    assert len(errors) == 2, joined
+    assert any("tools_configurations" in e and "edison_hosted" in e for e in errors), (
+        joined
+    )
+    assert any("TODO" in e for e in errors), joined
+
+
+def test_classification_rule_agrees_across_views():
+    """The edison_hosted => classification rule must accept/reject identically in
+    both views of the contract: the stdlib validator and schema.json's allOf.
+
+    This is the schema conditional's only negative coverage - a mis-nested
+    if/then that silently never triggered would fail here. _BASE_ENTRY is
+    otherwise schema-clean, so a schema error reflects only the classification
+    rule under test.
+    """
+    schema = json.loads(_SCHEMA_PATH.read_text())
+    validator = jsonschema.validators.validator_for(schema)(schema)
+    valid_cfg = {"reddit_scrape": dict(_VALID_TOOL_CFG)}
+    rows = [
+        dict(_BASE_ENTRY, edison_hosted=True),  # reject: hosted, unclassified
+        dict(_BASE_ENTRY, edison_hosted=True, tools_configurations={}),  # reject: empty
+        dict(_BASE_ENTRY, edison_hosted=True, tools_configurations=valid_cfg),  # ok
+        dict(_BASE_ENTRY, edison_hosted=False),  # ok: not hosted
+        dict(_BASE_ENTRY),  # ok: no edison_hosted key
+    ]
+    for entry in rows:
+        agg_rejects = _AGG._edison_hosted_unclassified(entry)
+        schema_rejects = bool(list(validator.iter_errors(entry)))
+        assert agg_rejects == schema_rejects, entry
 
 
 def test_repository_entries_all_valid():
