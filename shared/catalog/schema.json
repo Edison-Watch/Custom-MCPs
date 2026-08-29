@@ -102,7 +102,7 @@
     },
     "tools_configurations": {
       "type": "object",
-      "description": "Reviewed per-tool ACL + lethal-trifecta defaults baked into the install. Keyed by the tool's native name as the server exposes it (e.g. 'reddit_scrape'). A tool omitted here (or an entry with no tools_configurations at all) installs with Edison's protective default (read_untrusted_public_data + SECRET), so drift fails closed. edison-watch's generate_marketplace_entries.py carries these into servers/<id>.json; servers_validate.py applies them at install.",
+      "description": "Reviewed per-tool ACL + lethal-trifecta defaults baked into the install. Keyed by the tool's native name as the server exposes it (e.g. 'reddit_scrape'). REQUIRED and non-empty when edison_hosted is true (see allOf): every marketplace install skips autoconfig auto-labeling, so a tool with no config mounts at the protective default (write + read_private + read_untrusted + SECRET) and trips the lethal-trifecta guard on first call. An individual tool still omitted from a present map keeps that protective default, so partial drift fails closed. edison-watch's generate_marketplace_entries.py carries these into servers/<id>.json; servers_validate.py applies them at install.",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
@@ -170,6 +170,28 @@
         "properties": {
           "edison_hosted": {
             "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "edison_hosted"
+        ],
+        "properties": {
+          "edison_hosted": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "tools_configurations"
+        ],
+        "properties": {
+          "tools_configurations": {
+            "minProperties": 1
           }
         }
       }

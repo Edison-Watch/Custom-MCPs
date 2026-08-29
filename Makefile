@@ -303,6 +303,10 @@ catalog_check: check_uv ## Validate every servers/*/catalog-entry.json against t
 	@uv run shared/catalog/aggregate.py --check
 	@echo "$(GREEN)✅Catalog entry check completed.$(RESET)"
 
+.PHONY: new-connector
+new-connector: check_uv ## Scaffold servers/<id>/ for a new fleet connector (id=<id>)
+	@uv run scripts/new_connector.py "$(id)"
+
 ci: ruff vulture import_lint ty docs_lint check_deps file_len_check blind_except_check catalog_check ## Run all CI checks (ruff, vulture, import_lint, ty, docs_lint, check_deps, file_len_check, blind_except_check, catalog_check)
 	@echo "$(GREEN)✅CI checks completed.$(RESET)"
 
