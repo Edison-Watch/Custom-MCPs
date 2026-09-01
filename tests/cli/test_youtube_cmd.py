@@ -1,0 +1,72 @@
+"""Tests for the youtube command (fail-fast, stdin, dry-run; no network)."""
+
+from unittest.mock import patch
+
+from typer.testing import CliRunner
+
+from models.youtube import YoutubeScrapeResult
+from src.cli.app import _register_builtin_commands, _register_user_commands, app
+from tests.test_template import TestTemplate
+
+runner = CliRunner()
+
+_register_builtin_commands()
+_register_user_commands()
+
+
+class TestYoutubeCmd(TestTemplate):
+    def test_fails_fast_without_target(self):
+        # No search and no --url, non-interactive: exit 1, no network call.
+        result = runner.invoke(app, ["youtube"])
+        assert result.exit_code == 1
+        assert "provide a search term or --url" in result.output.lower()
+
+    def test_whitespace_search_fails_fast(self):
+        # A blank search must hit the actionable CLI error, not a traceback.
+        with patch("services.youtube_svc.youtube_scrape") as scrape:
+            result = runner.invoke(app, ["youtube", "   "])
+        assert result.exit_code == 1
+        assert "provide a search term or --url" in result.output.lower()
+        scrape.assert_not_called()
+
+    def test_dry_run_makes_no_call(self):
+        with patch("services.youtube_svc.youtube_scrape") as scrape:
+            result = runner.invoke(app, ["--dry-run", "youtube", "rust"])
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+        scrape.assert_not_called()
+
+    def test_search_from_stdin(self):
+        with patch(
+            "services.youtube_svc.youtube_scrape",
+            return_value=YoutubeScrapeResult(count=0, items=[]),
+        ) as scrape:
+            result = runner.invoke(app, ["youtube", "--stdin"], input="rust async\n")
+        assert result.exit_code == 0
+        assert scrape.call_args.args[0].search == "rust async"
+
+    def test_url_target_needs_no_search(self):
+        with patch(
+            "services.youtube_svc.youtube_scrape",
+            return_value=YoutubeScrapeResult(count=0, items=[]),
+        ) as scrape:
+            result = runner.invoke(
+                app,
+                ["youtube", "--url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
+            )
+        assert result.exit_code == 0
+        assert scrape.call_args.args[0].start_urls == [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ]
+
+    def test_comments_flag_is_passed_through(self):
+        with patch(
+            "services.youtube_svc.youtube_scrape",
+            return_value=YoutubeScrapeResult(count=0, items=[]),
+        ) as scrape:
+            result = runner.invoke(
+                app, ["youtube", "cats", "--comments", "25", "--comment-sort", "new"]
+            )
+        assert result.exit_code == 0
+        assert scrape.call_args.args[0].max_comments == 25
+        assert scrape.call_args.args[0].comment_sort == "new"
