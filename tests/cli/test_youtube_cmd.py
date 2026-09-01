@@ -1,5 +1,6 @@
 """Tests for the youtube command (fail-fast, stdin, dry-run; no network)."""
 
+import json
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -62,6 +63,38 @@ class TestYoutubeCmd(TestTemplate):
         assert scrape.call_args.args[0].start_urls == [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         ]
+
+    def test_json_format_renders_result_shape(self):
+        result_obj = YoutubeScrapeResult(
+            video_count=1,
+            comment_count=1,
+            videos=[{"id": "vid1", "title": "hello"}],
+            comments=[{"comment": "nice", "author": "@a"}],
+        )
+        with patch("services.youtube_svc.youtube_scrape", return_value=result_obj):
+            result = runner.invoke(app, ["--format", "json", "youtube", "cats"])
+        assert result.exit_code == 0
+        # --format json must emit the machine-readable result payload.
+        payload = json.loads(result.output)
+        assert payload["video_count"] == 1
+        assert payload["comment_count"] == 1
+        assert payload["videos"][0]["id"] == "vid1"
+        assert payload["comments"][0]["comment"] == "nice"
+
+    def test_invalid_sort_is_rejected_before_any_call(self):
+        # A bad enum must fail on validation, never after a paid Apify run starts.
+        with patch("services.youtube_svc.youtube_scrape") as scrape:
+            result = runner.invoke(app, ["youtube", "cats", "--sort", "banana"])
+        assert result.exit_code != 0
+        scrape.assert_not_called()
+
+    def test_invalid_comment_sort_is_rejected_before_any_call(self):
+        with patch("services.youtube_svc.youtube_scrape") as scrape:
+            result = runner.invoke(
+                app, ["youtube", "cats", "--comment-sort", "sideways"]
+            )
+        assert result.exit_code != 0
+        scrape.assert_not_called()
 
     def test_comments_flag_is_passed_through(self):
         with patch(

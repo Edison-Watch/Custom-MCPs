@@ -21,6 +21,7 @@ from services.youtube_svc import (
     _COMMENTS_ACTOR_ID,
     _SEARCH_ACTOR_ID,
     ApifyError,
+    _video_urls,
     youtube_scrape,
 )
 from tests.test_template import TestTemplate
@@ -218,6 +219,66 @@ class TestYoutubeScrape(TestTemplate):
             pytest.raises(ApifyError, match="401"),
         ):
             youtube_scrape(YoutubeScrapeInput(search="rust"))
+
+    def test_comments_are_per_video_not_multiplied(self):
+        # maxComments is a per-video cap (verified live: 2 videos x maxComments=2
+        # returns 4 comments, 2 each), so the service passes the caller's value
+        # through once for the whole batch - never multiplied by the video count.
+        comment_input: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                return httpx.Response(200, json=[{"id": "v1"}, {"id": "v2"}])
+            comment_input.update(json.loads(request.content))
+            return httpx.Response(200, json=[])
+
+        with _token("test-token"), _mock_http(handler):
+            youtube_scrape(YoutubeScrapeInput(search="rust", max_comments=7))
+
+        assert comment_input["maxComments"] == 7
+        assert len(comment_input["startUrls"]) == 2
+
+    def test_comments_actor_failure_propagates(self):
+        # Search succeeds, comments Actor 5xxs: the error must surface as
+        # ApifyError, not a silent empty comments list.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                return httpx.Response(200, json=[{"id": "vid1"}])
+            return httpx.Response(500, json={"error": {"message": "actor boom"}})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="500"),
+        ):
+            youtube_scrape(YoutubeScrapeInput(search="rust", max_comments=3))
+
+    def test_video_urls_builds_canonical_watch_urls(self):
+        # Prefer watch?v=<id> over the raw url (which carries playlist/radio
+        # params that confuse the comments Actor).
+        videos = [{"id": "abc", "url": "https://youtube.com/watch?v=abc&list=RDabc"}]
+        assert _video_urls(videos) == ["https://www.youtube.com/watch?v=abc"]
+
+    def test_video_urls_falls_back_to_raw_url_without_id(self):
+        videos = [{"url": "https://www.youtube.com/watch?v=noid"}]
+        assert _video_urls(videos) == ["https://www.youtube.com/watch?v=noid"]
+
+    def test_video_urls_dedupes_and_preserves_order(self):
+        videos = [
+            {"id": "a"},
+            {"id": "b"},
+            {"id": "a"},  # duplicate id -> dropped
+            {"url": "https://www.youtube.com/watch?v=b"},  # dup of b's canonical url
+        ]
+        assert _video_urls(videos) == [
+            "https://www.youtube.com/watch?v=a",
+            "https://www.youtube.com/watch?v=b",
+        ]
+
+    def test_video_urls_skips_entries_without_id_or_url(self):
+        assert _video_urls([{"title": "no url here"}, {"id": "x"}]) == [
+            "https://www.youtube.com/watch?v=x"
+        ]
 
     def test_service_is_registered(self):
         discover_services()

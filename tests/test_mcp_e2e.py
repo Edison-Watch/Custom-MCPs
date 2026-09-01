@@ -16,6 +16,7 @@ import json
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import httpx
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -35,6 +36,7 @@ from mcp_server.server import mcp
 from models.curation import CurationBucket, ThreadJudgment
 from services import _registry, get_registry, service
 from services.curation_ledger import upsert_judgments
+from services.youtube_svc import _SEARCH_ACTOR_ID
 from tests.test_template import TestTemplate
 
 _PROTOCOL_VERSION = "2025-03-26"
@@ -276,6 +278,51 @@ class TestMCPWireE2E(TestTemplate):
                     result["_meta"]["ui"]["resourceUri"]
                     == "ui://edisonmcps/gmail_inbox"
                 )
+
+    def test_youtube_scrape_result_crosses_wire(self):
+        """The headless youtube_scrape tool publishes a derived outputSchema in
+        tools/list and returns videos+comments as structuredContent over the
+        wire. httpx is stubbed so both Apify Actors are mocked - no network."""
+        real_client = httpx.Client
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _SEARCH_ACTOR_ID in str(request.url):
+                return httpx.Response(200, json=[{"id": "vid1", "title": "hello"}])
+            return httpx.Response(200, json=[{"comment": "nice", "author": "@a"}])
+
+        def factory(*_a, **_k):
+            return real_client(transport=httpx.MockTransport(handler))
+
+        with (
+            patch.object(global_config, "APIFY_API_KEY", "test-token"),
+            patch("services.youtube_svc.httpx.Client", factory),
+            _wire_session("u-e2e-youtube") as session,
+        ):
+            tools = {t["name"]: t for t in session.request("tools/list")["tools"]}
+            yt = tools["youtube_scrape"]
+            # Headless tool: outputSchema is derived, no UI metadata on the wire.
+            assert yt["outputSchema"]["type"] == "object"
+            assert set(yt["outputSchema"]["properties"]) >= {
+                "video_count",
+                "comment_count",
+                "videos",
+                "comments",
+            }
+            assert yt.get("_meta") in (None, {})
+
+            result = session.request(
+                "tools/call",
+                {
+                    "name": "youtube_scrape",
+                    "arguments": {"search": "rust", "max_comments": 1},
+                },
+            )
+            sc = result["structuredContent"]
+            assert result["isError"] is False
+            assert sc["video_count"] == 1
+            assert sc["comment_count"] == 1
+            assert sc["videos"][0]["id"] == "vid1"
+            assert sc["comments"][0]["comment"] == "nice"
 
     def test_not_connected_gmail_tool_returns_url_elicitation_error(self):
         """A Gmail tool called by a user with no linked account surfaces the
