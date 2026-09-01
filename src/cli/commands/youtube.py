@@ -99,6 +99,12 @@ def main(
     )
 
     render(
-        {"query": search or urls, "count": result.count, "items": result.items},
+        {
+            "query": search or urls,
+            "video_count": result.video_count,
+            "comment_count": result.comment_count,
+            "videos": result.videos,
+            "comments": result.comments,
+        },
         title="YouTube Scrape",
     )

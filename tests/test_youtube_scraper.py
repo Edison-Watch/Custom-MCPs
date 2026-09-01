@@ -1,7 +1,8 @@
 """Tests for the Apify-backed YouTube scraper service (fast tier, no network).
 
 HTTP is stubbed with an httpx.MockTransport so no Apify call is made. Covers the
-happy path, input-to-Actor mapping, the missing-token guard, and error mapping.
+happy path, input-to-Actor mapping for both the search and comments Actors, the
+missing-token guard, and error mapping.
 """
 
 from __future__ import annotations
@@ -16,7 +17,12 @@ import pytest
 from common import global_config
 from models.youtube import YoutubeScrapeInput
 from services import discover_services, get_registry, youtube_svc
-from services.youtube_svc import ApifyError, youtube_scrape
+from services.youtube_svc import (
+    _COMMENTS_ACTOR_ID,
+    _SEARCH_ACTOR_ID,
+    ApifyError,
+    youtube_scrape,
+)
 from tests.test_template import TestTemplate
 
 
@@ -39,18 +45,30 @@ def _token(value: str | None):
         yield
 
 
+def _is_search(request: httpx.Request) -> bool:
+    return _SEARCH_ACTOR_ID in str(request.url)
+
+
+def _is_comments(request: httpx.Request) -> bool:
+    return _COMMENTS_ACTOR_ID in str(request.url)
+
+
 class TestYoutubeScrape(TestTemplate):
-    def test_happy_path_returns_items(self):
-        def handler(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=[{"title": "a"}, {"title": "b"}])
+    def test_happy_path_returns_videos(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Only the search Actor should be called when comments are off.
+            assert _is_search(request)
+            return httpx.Response(200, json=[{"id": "a"}, {"id": "b"}])
 
         with _token("test-token"), _mock_http(handler):
             result = youtube_scrape(YoutubeScrapeInput(search="rust"))
 
-        assert result.count == 2
-        assert result.items[0]["title"] == "a"
+        assert result.video_count == 2
+        assert result.comment_count == 0
+        assert result.videos[0]["id"] == "a"
+        assert result.comments == []
 
-    def test_maps_input_onto_actor_schema(self):
+    def test_maps_search_input_onto_actor_schema(self):
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -67,17 +85,16 @@ class TestYoutubeScrape(TestTemplate):
                     sort="date",
                     date_filter="week",
                     max_results=25,
-                    max_comments=50,
-                    comment_sort="new",
                 )
             )
 
-        assert captured["searchKeywords"] == "keyboards"
-        assert captured["sortVideosBy"] == "date"
+        assert captured["searchQueries"] == ["keyboards"]
+        assert captured["sortingOrder"] == "date"
         assert captured["dateFilter"] == "week"
         assert captured["maxResults"] == 25
-        assert captured["maxComments"] == 50
-        assert captured["commentsSortBy"] == "new"
+        # Standard videos only unless the caller targets shorts/streams by URL.
+        assert captured["maxResultsShorts"] == 0
+        assert captured["maxResultStreams"] == 0
 
     def test_start_urls_only_is_valid(self):
         body: dict = {}
@@ -97,18 +114,50 @@ class TestYoutubeScrape(TestTemplate):
             {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
         ]
 
-    def test_comments_default_to_zero(self):
-        captured: dict = {}
+    def test_comments_run_chained_on_video_urls(self):
+        search_seen = {"n": 0}
+        comment_input: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            captured.update(json.loads(request.content))
-            return httpx.Response(200, json=[])
+            if _is_search(request):
+                search_seen["n"] += 1
+                return httpx.Response(200, json=[{"id": "vid123"}])
+            assert _is_comments(request)
+            comment_input.update(json.loads(request.content))
+            return httpx.Response(200, json=[{"comment": "nice"}, {"comment": "wow"}])
 
         with _token("test-token"), _mock_http(handler):
-            youtube_scrape(YoutubeScrapeInput(search="rust"))
+            result = youtube_scrape(
+                YoutubeScrapeInput(search="rust", max_comments=5, comment_sort="new")
+            )
 
-        # No comment scraping unless the caller opts in.
-        assert captured["maxComments"] == 0
+        assert search_seen["n"] == 1
+        # Comments Actor is fed a canonical watch URL built from the video id.
+        assert comment_input["startUrls"] == [
+            {"url": "https://www.youtube.com/watch?v=vid123"}
+        ]
+        assert comment_input["maxComments"] == 5
+        assert comment_input["sortCommentsBy"] == "NEWEST_FIRST"
+        assert result.video_count == 1
+        assert result.comment_count == 2
+        assert result.comments[0]["comment"] == "nice"
+
+    def test_comments_skipped_when_no_videos(self):
+        calls = {"search": 0, "comments": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                calls["search"] += 1
+                return httpx.Response(200, json=[])  # no videos found
+            calls["comments"] += 1
+            return httpx.Response(200, json=[{"comment": "x"}])
+
+        with _token("test-token"), _mock_http(handler):
+            result = youtube_scrape(YoutubeScrapeInput(search="rust", max_comments=5))
+
+        # With no videos, the comments Actor must not be called.
+        assert calls == {"search": 1, "comments": 0}
+        assert result.comment_count == 0
 
     def test_requires_search_or_urls(self):
         with pytest.raises(ValueError, match="Provide either"):
@@ -143,6 +192,18 @@ class TestYoutubeScrape(TestTemplate):
         ):
             youtube_scrape(YoutubeScrapeInput(search="rust"))
 
+    def test_dict_response_is_wrapped(self):
+        # An Apify error object comes back as a dict, not a list.
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"error": {"message": "bad input"}})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="response shape"),
+        ):
+            youtube_scrape(YoutubeScrapeInput(search="rust"))
+
     def test_missing_token_raises(self):
         with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
             youtube_scrape(YoutubeScrapeInput(search="rust"))
@@ -155,17 +216,6 @@ class TestYoutubeScrape(TestTemplate):
             _token("test-token"),
             _mock_http(handler),
             pytest.raises(ApifyError, match="401"),
-        ):
-            youtube_scrape(YoutubeScrapeInput(search="rust"))
-
-    def test_non_list_response_raises(self):
-        def handler(_request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"not": "a list"})
-
-        with (
-            _token("test-token"),
-            _mock_http(handler),
-            pytest.raises(ApifyError, match="response shape"),
         ):
             youtube_scrape(YoutubeScrapeInput(search="rust"))
 

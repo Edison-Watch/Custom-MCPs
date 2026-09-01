@@ -1,19 +1,19 @@
 """Models for the YouTube scraper service.
 
-The service wraps an Apify YouTube-scraper Actor behind a small first-party
-surface: callers pass a search term (or explicit YouTube URLs) and get back the
-Actor's dataset items - videos from search results, plus their comments when
-``max_comments`` is raised above zero. Items are heterogeneous (videos and
-comments, shaped by the query), so the result carries them as raw dicts rather
-than pinning a schema the upstream Actor does not guarantee.
+The service wraps two Apify Actors behind one first-party surface: callers pass a
+search term (or explicit YouTube URLs) and get back the matched videos, plus
+their comments when ``max_comments`` is raised above zero. YouTube's Apify
+ecosystem splits search and comments across two Actors, so the result carries
+``videos`` and ``comments`` as separate lists of raw dicts rather than pinning a
+schema the upstream Actors do not guarantee.
 """
 
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-# YouTube's own search ordering options, surfaced verbatim to the caller.
-YoutubeSort = Literal["relevance", "date", "views", "rating"]
+# YouTube's own search-ordering options, surfaced verbatim to the caller.
+YoutubeSort = Literal["relevance", "rating", "date", "views"]
 # Publish-time recency windows YouTube exposes on search.
 YoutubeDate = Literal["hour", "today", "week", "month", "year"]
 # How comments are ordered when they are scraped.
@@ -25,7 +25,7 @@ class YoutubeScrapeInput(BaseModel):
 
     Provide ``search`` or one or more ``start_urls`` (video, channel, playlist,
     or search-results URLs). At least one of the two is required. Raise
-    ``max_comments`` above zero to also scrape each video's comments.
+    ``max_comments`` above zero to also scrape comments on the resulting videos.
     """
 
     search: str | None = Field(
@@ -72,9 +72,15 @@ class YoutubeScrapeInput(BaseModel):
 
 
 class YoutubeScrapeResult(BaseModel):
-    """Dataset items returned by the Actor run."""
+    """Videos and comments returned by the Actor runs."""
 
-    count: int = Field(description="Number of items returned.")
-    items: list[dict[str, Any]] = Field(
-        default_factory=list, description="Raw dataset items from the Apify Actor run."
+    video_count: int = Field(description="Number of videos returned.")
+    comment_count: int = Field(description="Number of comments returned.")
+    videos: list[dict[str, Any]] = Field(
+        default_factory=list, description="Raw video items from the search Actor run."
+    )
+    comments: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Raw comment items from the comments Actor run (empty unless "
+        "max_comments > 0).",
     )

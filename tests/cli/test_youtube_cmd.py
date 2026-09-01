@@ -39,7 +39,9 @@ class TestYoutubeCmd(TestTemplate):
     def test_search_from_stdin(self):
         with patch(
             "services.youtube_svc.youtube_scrape",
-            return_value=YoutubeScrapeResult(count=0, items=[]),
+            return_value=YoutubeScrapeResult(
+                video_count=0, comment_count=0, videos=[], comments=[]
+            ),
         ) as scrape:
             result = runner.invoke(app, ["youtube", "--stdin"], input="rust async\n")
         assert result.exit_code == 0
@@ -48,7 +50,9 @@ class TestYoutubeCmd(TestTemplate):
     def test_url_target_needs_no_search(self):
         with patch(
             "services.youtube_svc.youtube_scrape",
-            return_value=YoutubeScrapeResult(count=0, items=[]),
+            return_value=YoutubeScrapeResult(
+                video_count=0, comment_count=0, videos=[], comments=[]
+            ),
         ) as scrape:
             result = runner.invoke(
                 app,
@@ -62,7 +66,9 @@ class TestYoutubeCmd(TestTemplate):
     def test_comments_flag_is_passed_through(self):
         with patch(
             "services.youtube_svc.youtube_scrape",
-            return_value=YoutubeScrapeResult(count=0, items=[]),
+            return_value=YoutubeScrapeResult(
+                video_count=0, comment_count=0, videos=[], comments=[]
+            ),
         ) as scrape:
             result = runner.invoke(
                 app, ["youtube", "cats", "--comments", "25", "--comment-sort", "new"]
