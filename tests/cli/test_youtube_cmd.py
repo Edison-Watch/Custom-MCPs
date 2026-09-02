@@ -81,6 +81,20 @@ class TestYoutubeCmd(TestTemplate):
         assert payload["videos"][0]["id"] == "vid1"
         assert payload["comments"][0]["comment"] == "nice"
 
+    def test_json_format_preserves_unicode_comments(self):
+        emoji = "here in 2059 \U0001f979 好的"
+        result_obj = YoutubeScrapeResult(
+            video_count=1,
+            comment_count=1,
+            videos=[{"id": "v1"}],
+            comments=[{"comment": emoji, "author": "@x"}],
+        )
+        with patch("services.youtube_svc.youtube_scrape", return_value=result_obj):
+            result = runner.invoke(app, ["--format", "json", "youtube", "cats"])
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["comments"][0]["comment"] == emoji
+
     def test_invalid_sort_is_rejected_before_any_call(self):
         # A bad enum must fail on validation, never after a paid Apify run starts.
         with patch("services.youtube_svc.youtube_scrape") as scrape:

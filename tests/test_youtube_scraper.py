@@ -24,7 +24,11 @@ from services.youtube_svc import (
     _video_urls,
     youtube_scrape,
 )
-from tests.test_template import TestTemplate
+from tests.test_template import (
+    TestTemplate,
+    nondeterministic_test,
+    slow_test,
+)
 
 
 @contextmanager
@@ -280,6 +284,92 @@ class TestYoutubeScrape(TestTemplate):
             "https://www.youtube.com/watch?v=x"
         ]
 
+    def test_search_and_start_urls_both_feed_search_actor(self):
+        # When both a search term and start_urls are given, both reach the
+        # search Actor in one run (searchQueries + startUrls).
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=[])
+
+        with _token("test-token"), _mock_http(handler):
+            youtube_scrape(
+                YoutubeScrapeInput(
+                    search="jazz",
+                    start_urls=["https://www.youtube.com/playlist?list=PLabc"],
+                )
+            )
+
+        assert captured["searchQueries"] == ["jazz"]
+        assert captured["startUrls"] == [
+            {"url": "https://www.youtube.com/playlist?list=PLabc"}
+        ]
+
+    def test_playlist_start_url_videos_flow_into_comments(self):
+        # A playlist URL fans out to several videos (verified live: the search
+        # Actor returns video items each carrying an id); comments then run on
+        # every resolved video URL.
+        comment_input: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                return httpx.Response(
+                    200, json=[{"id": "v1"}, {"id": "v2"}, {"id": "v3"}]
+                )
+            comment_input.update(json.loads(request.content))
+            return httpx.Response(200, json=[{"comment": "c"}])
+
+        with _token("test-token"), _mock_http(handler):
+            result = youtube_scrape(
+                YoutubeScrapeInput(
+                    start_urls=["https://www.youtube.com/playlist?list=PLabc"],
+                    max_comments=2,
+                )
+            )
+
+        assert [u["url"] for u in comment_input["startUrls"]] == [
+            "https://www.youtube.com/watch?v=v1",
+            "https://www.youtube.com/watch?v=v2",
+            "https://www.youtube.com/watch?v=v3",
+        ]
+        assert result.video_count == 3
+
+    def test_partial_comments_do_not_drop_the_batch(self):
+        # A dead/comments-off video mid-batch yields nothing (verified live: one
+        # good + one bogus URL returns only the good video's comments, no hard
+        # error). The service must surface whatever came back, not zero it out.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                return httpx.Response(200, json=[{"id": "good"}, {"id": "dead"}])
+            # Only the good video produced comments.
+            return httpx.Response(
+                200, json=[{"comment": "a", "videoId": "good"}, {"comment": "b"}]
+            )
+
+        with _token("test-token"), _mock_http(handler):
+            result = youtube_scrape(YoutubeScrapeInput(search="rust", max_comments=5))
+
+        assert result.video_count == 2
+        assert result.comment_count == 2  # the dead video's absence is not fatal
+
+    def test_unicode_comment_text_survives_round_trip(self):
+        # Comments are full of emoji/CJK; they must round-trip through the
+        # Pydantic result and JSON-serialize cleanly.
+        emoji = "anyone here in 2059 \U0001f979好的"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if _is_search(request):
+                return httpx.Response(200, json=[{"id": "v1"}])
+            return httpx.Response(200, json=[{"comment": emoji, "author": "@x"}])
+
+        with _token("test-token"), _mock_http(handler):
+            result = youtube_scrape(YoutubeScrapeInput(search="rust", max_comments=1))
+
+        assert result.comments[0]["comment"] == emoji
+        # Survives JSON serialization (what every transport ultimately emits).
+        assert emoji in result.model_dump_json()
+
     def test_service_is_registered(self):
         discover_services()
         names = {e.name for e in get_registry()}
@@ -288,3 +378,37 @@ class TestYoutubeScrape(TestTemplate):
         entry = next(e for e in get_registry() if e.name == "youtube_scrape")
         assert entry.mutating is False
         assert youtube_svc  # module imported
+
+
+class TestYoutubeScrapeLive(TestTemplate):
+    """Live guard against upstream Actor schema drift.
+
+    Hits both real Apify Actors with a tiny budget, so a field rename in
+    either one (which every mocked test would sail past) fails here. Slow and
+    nondeterministic, so it is excluded from the fast tier and only runs under
+    ``make test_slow`` / ``make test_nondeterministic``. Skips when no token is
+    configured (e.g. CI without the secret).
+    """
+
+    @slow_test
+    @nondeterministic_test
+    def test_live_search_and_comments_match_expected_schema(self):
+        if not global_config.APIFY_API_KEY:
+            pytest.skip("APIFY_API_KEY not configured; skipping live Apify call.")
+
+        result = youtube_scrape(
+            YoutubeScrapeInput(search="lofi hip hop", max_results=1, max_comments=2)
+        )
+
+        # max_results is a per-search cap: the returned count must not overshoot.
+        assert 1 <= result.video_count <= 1
+        video = result.videos[0]
+        # The fields the comments chaining and downstream consumers depend on.
+        assert video.get("id"), f"video missing 'id': {sorted(video)}"
+        assert video.get("url"), f"video missing 'url': {sorted(video)}"
+
+        # Comments are best-effort (a video may have them disabled), but any
+        # returned comment must still carry the text field we surface.
+        assert result.comment_count == len(result.comments)
+        for comment in result.comments:
+            assert "comment" in comment, f"comment missing 'comment': {sorted(comment)}"
