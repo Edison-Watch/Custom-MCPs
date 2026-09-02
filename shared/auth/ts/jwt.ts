@@ -158,6 +158,11 @@ export async function verifyJwtWithJwks(
   } catch {
     return fail(401, "unreadable token");
   }
+  // A structurally valid JSON `null`, array, or primitive parses without
+  // throwing but would blow up the property reads below (`header.alg`,
+  // `claims.iss`) with an uncaught TypeError -> 500. Reject a non-object
+  // header/claims as a 401 so this function never throws on hostile input.
+  if (!isPlainObject(header) || !isPlainObject(claims)) return fail(401, "unreadable token");
   if (header.alg !== "RS256") return fail(401, `unsupported alg: ${header.alg}`);
   // Edison always sets `kid` (mcp_jwt.py), so a kid-less token is not one Edison
   // minted. Require it, and match on it exactly - no "try every key" fallback.
@@ -191,18 +196,29 @@ export async function verifyJwtWithJwks(
   return { ok: true, sub: claims.sub as string };
 }
 
+/** A plain (non-null, non-array) object - the only shape safe to read fields off. */
+function isPlainObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** A parsed JWKS body is only usable if `keys` is an array of non-null objects. */
 function isUsableJwks(body: unknown): body is Jwks {
   const keys = (body as { keys?: unknown } | null)?.keys;
-  return (
-    Array.isArray(keys) &&
-    keys.every((key) => key !== null && typeof key === "object" && !Array.isArray(key))
-  );
+  return Array.isArray(keys) && keys.every(isPlainObject);
 }
+
+// Cap the JWKS fetch: a stalled endpoint must not hold the shared inFlight
+// promise (and every /mcp auth request joined to it) open until the Worker's
+// own request budget expires. A timeout aborts the fetch, the catch below maps
+// it to "no JWKS", and the caller 503s.
+const JWKS_FETCH_TIMEOUT_MS = 5000;
 
 async function fetchJwks(url: string): Promise<Jwks | null> {
   try {
-    const res = await fetch(url, { headers: { accept: "application/json" } });
+    const res = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
     // Reject a `keys` array that carries a null/non-object entry: caching it

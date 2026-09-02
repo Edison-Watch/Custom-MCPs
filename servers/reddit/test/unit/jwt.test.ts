@@ -118,6 +118,28 @@ describe("verifyJwtWithJwks", () => {
     expect(await verifyJwtWithJwks("not.a.jwt.at.all", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
     expect(await verifyJwtWithJwks("onlyonepart", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
   });
+
+  test("rejects a header/claims that decode to a non-object (null/array) without throwing", async () => {
+    // JSON `null` parses fine but would throw on the `header.alg`/`claims.iss`
+    // reads - must come back as a 401, never an uncaught 500.
+    const goodHeader = b64urlStr(JSON.stringify({ alg: "RS256", kid: KID, typ: "JWT" }));
+    const goodPayload = b64urlStr(JSON.stringify(validClaims()));
+    const nullPart = b64urlStr("null");
+    const arrPart = b64urlStr("[]");
+    expect(await verifyJwtWithJwks(`${nullPart}.${goodPayload}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    // A non-object claims is rejected before the signature check even runs.
+    expect(await verifyJwtWithJwks(`${goodHeader}.${nullPart}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    expect(await verifyJwtWithJwks(`${arrPart}.${goodPayload}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+  });
 });
 
 describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {

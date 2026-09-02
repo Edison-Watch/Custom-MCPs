@@ -30,8 +30,8 @@ reads `sub` to attribute usage.
 - `py/` - the Python/FastMCP port (dependency for the Gmail-style servers). Not
   yet extracted.
 
-`image-host` still carries its own older `src/auth.ts` (`open` + `bearer`;
-`edison-jwt` stubbed `501`); migrating it onto `ts/` is a follow-up.
+`image-host` still carries its own copy of `src/auth.ts` + `src/jwt.ts` (all
+three modes, same contract); migrating it onto `ts/` is a follow-up.
 
 The JWKS issuer itself is an **edison-watch** change, specified in
 `edison-watch/dev-docs/architecture/first_party_mcp_integration.md` §(3).
