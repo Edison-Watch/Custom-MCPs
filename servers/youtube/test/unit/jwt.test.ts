@@ -176,6 +176,24 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     }
   });
 
+  test("a JWKS whose keys contain a null/non-object entry is rejected (503, not a 500)", async () => {
+    __resetJwksCacheForTest();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ keys: [null] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    try {
+      // A malformed JWKS must be treated as "no JWKS" (caller 503s), never cached
+      // and dereferenced downstream into an uncaught 500.
+      const result = await verifyEdisonJwt(await sign(realClaims()), CONFIG);
+      expect(result).toMatchObject({ ok: false, status: 503 });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("a failed fetch does not suppress the next request's retry", async () => {
     __resetJwksCacheForTest();
     let fetches = 0;
