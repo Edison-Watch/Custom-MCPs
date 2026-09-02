@@ -26,7 +26,9 @@ import {
   buildCommentsInput,
   buildSearchInput,
   hasTarget,
+  normalizeSearch,
   runSyncUrl,
+  validStartUrls,
   validateDatasetItems,
   videoUrls,
   type YoutubeCommentSort,
@@ -112,8 +114,9 @@ export class YoutubeMCP extends McpAgent<Env, unknown, Record<string, unknown>> 
           search: z.string().optional().describe("Search term to look up on YouTube."),
           start_urls: z
             .array(z.string())
+            .max(50)
             .optional()
-            .describe("Explicit YouTube video/channel/playlist/search URLs to scrape."),
+            .describe("Explicit YouTube video/channel/playlist/search URLs to scrape (max 50)."),
           sort: z
             .enum(["relevance", "rating", "date", "views"])
             .optional()
@@ -156,7 +159,14 @@ export class YoutubeMCP extends McpAgent<Env, unknown, Record<string, unknown>> 
         // Validate the caller's request before checking server config, so a bad
         // call gets an actionable error regardless of deploy state.
         if (!hasTarget(args)) {
-          return textError("provide either 'search' or at least one 'start_urls' entry");
+          return textError("provide either 'search' or at least one valid YouTube 'start_urls' entry");
+        }
+        // The search Actor silently drops `searchQueries` when `startUrls` is
+        // present, so a mixed request would lose the search - reject it loudly.
+        if (normalizeSearch(args.search) && validStartUrls(args.start_urls).length > 0) {
+          return textError(
+            "provide either 'search' or 'start_urls', not both (start URLs take precedence and the search term would be ignored)",
+          );
         }
         const token = this.env.APIFY_TOKEN?.trim();
         if (!token) {

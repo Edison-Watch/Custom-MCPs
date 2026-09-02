@@ -4,8 +4,10 @@ import {
   buildCommentsInput,
   buildSearchInput,
   hasTarget,
+  isYoutubeUrl,
   normalizeSearch,
   runSyncUrl,
+  validStartUrls,
   validateDatasetItems,
   videoUrls,
 } from "../../src/youtube";
@@ -19,12 +21,48 @@ describe("normalizeSearch", () => {
   });
 });
 
+describe("isYoutubeUrl", () => {
+  test("accepts youtube hosts and their subdomains", () => {
+    expect(isYoutubeUrl("https://www.youtube.com/watch?v=x")).toBe(true);
+    expect(isYoutubeUrl("https://youtu.be/x")).toBe(true);
+    expect(isYoutubeUrl("https://m.youtube.com/watch?v=x")).toBe(true);
+    expect(isYoutubeUrl("https://music.youtube.com/watch?v=x")).toBe(true);
+    expect(isYoutubeUrl("  https://youtube.com/@handle  ")).toBe(true);
+  });
+
+  test("rejects non-youtube, malformed, look-alike and blank urls", () => {
+    expect(isYoutubeUrl("https://evil.com/watch?v=x")).toBe(false);
+    expect(isYoutubeUrl("https://youtube.com.evil.com/x")).toBe(false);
+    expect(isYoutubeUrl("not a url")).toBe(false);
+    expect(isYoutubeUrl("ftp://youtube.com/x")).toBe(false);
+    expect(isYoutubeUrl("   ")).toBe(false);
+  });
+});
+
+describe("validStartUrls", () => {
+  test("keeps youtube urls, trims, drops junk, and dedupes in order", () => {
+    expect(
+      validStartUrls([
+        "  https://youtu.be/a  ",
+        "https://evil.com/b",
+        "https://youtu.be/a",
+        "   ",
+        "https://www.youtube.com/watch?v=c",
+      ]),
+    ).toEqual(["https://youtu.be/a", "https://www.youtube.com/watch?v=c"]);
+    expect(validStartUrls(undefined)).toEqual([]);
+  });
+});
+
 describe("hasTarget", () => {
-  test("true for a real search or a start URL, false otherwise", () => {
+  test("true for a real search or a valid youtube start URL, false otherwise", () => {
     expect(hasTarget({ search: "rust" })).toBe(true);
     expect(hasTarget({ start_urls: ["https://www.youtube.com/watch?v=x"] })).toBe(true);
     expect(hasTarget({ search: "   " })).toBe(false);
     expect(hasTarget({ search: "   ", start_urls: [] })).toBe(false);
+    // A non-youtube or blank URL is not a usable target.
+    expect(hasTarget({ start_urls: ["https://evil.com/x"] })).toBe(false);
+    expect(hasTarget({ start_urls: ["   "] })).toBe(false);
     expect(hasTarget({})).toBe(false);
   });
 });

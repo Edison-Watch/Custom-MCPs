@@ -67,7 +67,14 @@ async function callTool(sessionId: string, name: string, args: Record<string, un
       const { value, done } = await reader.read();
       if (value) buffer += decoder.decode(value, { stream: true });
       const msg = extractMessage(buffer);
-      if (msg) return (msg.result ?? {}) as Record<string, any>;
+      if (msg) {
+        // Surface a JSON-RPC-level error (unknown tool, invalid params) with the
+        // server's own message instead of returning an opaque empty result.
+        if (msg.error !== undefined) {
+          throw new Error(`JSON-RPC error from ${name}: ${JSON.stringify(msg.error)}`);
+        }
+        return (msg.result ?? {}) as Record<string, any>;
+      }
       if (done) break;
     }
   } finally {

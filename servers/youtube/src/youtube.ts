@@ -60,15 +60,48 @@ export function normalizeSearch(search: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** A query needs at least one target: a real search term or one start URL. */
+/** Hosts we accept as YouTube targets (plus their `www.`/`m.`/`music.` subdomains). */
+const YOUTUBE_HOSTS = ["youtube.com", "youtu.be", "youtube-nocookie.com"];
+
+/**
+ * True only for a well-formed http(s) URL on a YouTube host. Guards a PUBLIC,
+ * paid Actor: a blank or non-YouTube `start_urls` entry must never be forwarded
+ * to Apify as if it were a real target.
+ */
+export function isYoutubeUrl(candidate: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate.trim());
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  const host = parsed.hostname.toLowerCase();
+  return YOUTUBE_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/** Keep only well-formed YouTube `start_urls`, trimmed and de-duplicated in order. */
+export function validStartUrls(urls: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls ?? []) {
+    const trimmed = raw.trim();
+    if (!isYoutubeUrl(trimmed) || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/** A query needs at least one target: a real search term or one valid YouTube URL. */
 export function hasTarget(args: YoutubeScrapeArgs): boolean {
-  return Boolean(normalizeSearch(args.search)) || (args.start_urls?.length ?? 0) > 0;
+  return Boolean(normalizeSearch(args.search)) || validStartUrls(args.start_urls).length > 0;
 }
 
 /** Map the first-party input onto the search Actor's input schema. */
 export function buildSearchInput(args: YoutubeScrapeArgs): Record<string, unknown> {
   const search = normalizeSearch(args.search);
-  const startUrls = args.start_urls ?? [];
+  const startUrls = validStartUrls(args.start_urls);
   const maxResults = args.max_results ?? 10;
 
   const actorInput: Record<string, unknown> = {
