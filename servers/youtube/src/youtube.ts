@@ -76,6 +76,8 @@ export function isYoutubeUrl(candidate: string): boolean {
     return false;
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  // Never forward a URL carrying embedded credentials (user:pass@host) to Apify.
+  if (parsed.username || parsed.password) return false;
   const host = parsed.hostname.toLowerCase();
   return YOUTUBE_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }

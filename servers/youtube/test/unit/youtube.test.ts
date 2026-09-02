@@ -35,6 +35,8 @@ describe("isYoutubeUrl", () => {
     expect(isYoutubeUrl("https://youtube.com.evil.com/x")).toBe(false);
     expect(isYoutubeUrl("not a url")).toBe(false);
     expect(isYoutubeUrl("ftp://youtube.com/x")).toBe(false);
+    expect(isYoutubeUrl("https://user:pass@youtube.com/watch?v=x")).toBe(false);
+    expect(isYoutubeUrl("https://user@youtube.com/watch?v=x")).toBe(false);
     expect(isYoutubeUrl("   ")).toBe(false);
   });
 });

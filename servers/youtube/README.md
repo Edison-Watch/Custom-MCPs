@@ -27,14 +27,15 @@ video to a canonical `watch?v=<id>` URL, then scrapes comments on those URLs.
 | field | type | notes |
 |-------|------|-------|
 | `search` | string | Search term. Blank/whitespace is treated as absent. |
-| `start_urls` | string[] | Explicit YouTube video/channel/playlist/search URLs. |
+| `start_urls` | string[] (max 50) | Explicit YouTube video/channel/playlist/search URLs. Each must be a well-formed http(s) URL on a YouTube host (`youtube.com`, `youtu.be`, `youtube-nocookie.com`, or a subdomain); blank, non-YouTube, or credential-bearing entries are dropped. |
 | `sort` | enum | relevance \| rating \| date \| views (default relevance). |
 | `date_filter` | enum | hour \| today \| week \| month \| year (search only). |
 | `max_results` | int 1-1000 | Max videos returned (default 10). |
 | `max_comments` | int 0-1000 | Comments **per video**; 0 skips comment scraping (default 0). |
 | `comment_sort` | enum | top \| new (default top). |
 
-At least one of `search` or `start_urls` is required. Output is
+At least one of `search` or a valid `start_urls` entry is required; providing
+both is rejected (start URLs would otherwise mask the search). Output is
 `{ video_count, comment_count, videos, comments }`.
 
 ## Develop
