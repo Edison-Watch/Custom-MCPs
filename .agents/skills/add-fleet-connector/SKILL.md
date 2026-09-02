@@ -26,6 +26,31 @@ make new-connector id=<id>          # id: lowercase letters, digits, hyphens
 This writes `servers/<id>/catalog-entry.json` (a skeleton with TODOs, no
 `tools_configurations` yet) and a placeholder `servers/<id>/<id>.svg`.
 
+The scaffold covers the **catalog entry only**. You still hand-write the Worker
+itself - `src/index.ts` (the MCP tool over streamable HTTP), `wrangler.jsonc`,
+and `test/` - mirroring an existing connector such as `servers/reddit`.
+
+**Auth is shared - re-export it, never copy it.** The verify layer
+(`open` | `bearer` | `edison-jwt` with JWKS verification) lives once in
+`shared/auth/ts`. Make `src/auth.ts` and `src/jwt.ts` one-line re-exports:
+
+```ts
+// src/auth.ts
+export * from "../../../shared/auth/ts/auth";
+// src/jwt.ts
+export * from "../../../shared/auth/ts/jwt";
+```
+
+Never copy another connector's `auth.ts` / `jwt.ts`: it forks security-sensitive
+code into an independently-maintained copy, so a bug fixed in one silently
+persists in the others.
+
+When you write the tool handler, **validate and bound the inputs** a PUBLIC
+caller can send: cap array lengths, verify or allow-list URLs (reject blank,
+off-domain, or credential-bearing ones), and reject silently-conflicting
+arguments. An unbounded input forwarded to a paid upstream is an abuse and cost
+vector.
+
 ## 2. Fill in the entry
 
 Edit `servers/<id>/catalog-entry.json`:
@@ -89,7 +114,15 @@ make ci                 # full gate before committing
 
 Both must pass with zero errors.
 
-## 5. Downstream mirror (edison-watch)
+## 5. Wire into CI
+
+Add `<id>` to the `server:` matrix in `.github/workflows/servers_ts.yaml` so the
+connector's unit tests, typecheck, and workerd integration run on every PR. The
+**deploy** workflow (`servers_deploy.yaml`) auto-discovers connectors by their
+`wrangler.jsonc`, but this **test** matrix is hardcoded - a new connector whose
+id is missing here ships with its suite silently not running.
+
+## 6. Downstream mirror (edison-watch)
 
 This repo is the source of truth. edison-watch's Fleet Catalog Sync mirrors
 `catalog-entry.json` into its marketplace one-way; a scheduled/dispatch workflow
