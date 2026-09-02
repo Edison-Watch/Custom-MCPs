@@ -118,6 +118,28 @@ describe("verifyJwtWithJwks", () => {
     expect(await verifyJwtWithJwks("not.a.jwt.at.all", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
     expect(await verifyJwtWithJwks("onlyonepart", jwks, CONFIG, NOW)).toMatchObject({ ok: false });
   });
+
+  test("rejects a header/claims that decode to a non-object (null/array) without throwing", async () => {
+    // JSON `null` parses fine but would throw on the `header.alg`/`claims.iss`
+    // reads - must come back as a 401, never an uncaught 500.
+    const goodHeader = b64urlStr(JSON.stringify({ alg: "RS256", kid: KID, typ: "JWT" }));
+    const goodPayload = b64urlStr(JSON.stringify(validClaims()));
+    const nullPart = b64urlStr("null");
+    const arrPart = b64urlStr("[]");
+    expect(await verifyJwtWithJwks(`${nullPart}.${goodPayload}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    // A non-object claims is rejected before the signature check even runs.
+    expect(await verifyJwtWithJwks(`${goodHeader}.${nullPart}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    expect(await verifyJwtWithJwks(`${arrPart}.${goodPayload}.AAAA`, jwks, CONFIG, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+  });
 });
 
 describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
@@ -171,6 +193,24 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
       const results = await Promise.all(tokens.map((t) => verifyEdisonJwt(t, CONFIG)));
       expect(results.every((r) => r.ok)).toBe(true);
       expect(fetches).toBe(1); // 8 concurrent requests, one upstream GET
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a JWKS whose keys contain a null/non-object entry is rejected (503, not a 500)", async () => {
+    __resetJwksCacheForTest();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ keys: [null] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    try {
+      // A malformed JWKS must be treated as "no JWKS" (caller 503s), never cached
+      // and dereferenced downstream into an uncaught 500.
+      const result = await verifyEdisonJwt(await sign(realClaims()), CONFIG);
+      expect(result).toMatchObject({ ok: false, status: 503 });
     } finally {
       globalThis.fetch = realFetch;
     }

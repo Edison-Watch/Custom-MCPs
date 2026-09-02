@@ -27,6 +27,15 @@ describe("resolveAuthMode", () => {
     expect(resolveAuthMode({ AUTH_TOKEN: "" })).toBe("bearer");
     expect(resolveAuthMode({ AUTH_TOKEN: "   " })).toBe("bearer");
   });
+
+  test("an explicitly empty/whitespace AUTH_MODE is invalid, never open", () => {
+    // A set-but-empty AUTH_MODE is a misconfig: it must fail closed, not fall
+    // through to `open` (which would serve the tools unauthenticated).
+    expect(resolveAuthMode({ AUTH_MODE: "" })).toBe("invalid-auth-mode");
+    expect(resolveAuthMode({ AUTH_MODE: "   " })).toBe("invalid-auth-mode");
+    // ...even with no AUTH_TOKEN present at all.
+    expect(resolveAuthMode({ AUTH_MODE: "  " })).toBe("invalid-auth-mode");
+  });
 });
 
 describe("extractBearer", () => {
@@ -106,5 +115,11 @@ describe("checkAuth", () => {
   test("an unknown mode is rejected, never admitted", async () => {
     const result = await checkAuth(req(), { AUTH_MODE: "totally-made-up" });
     expect(result.ok).toBe(false);
+  });
+
+  test("an explicitly empty AUTH_MODE fails closed (500), never admits as open", async () => {
+    // AUTH_MODE="" must not resolve to `open` and serve unauthenticated traffic.
+    const result = await checkAuth(req({ authorization: "Bearer x" }), { AUTH_MODE: "" });
+    expect(result).toMatchObject({ ok: false, status: 500 });
   });
 });
