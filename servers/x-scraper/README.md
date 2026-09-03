@@ -1,16 +1,22 @@
-# `x` - Edison first-party MCP server
+# `x-scraper` - Edison first-party MCP server
 
-Search and scrape X (formerly Twitter) tweets, profiles, searches, and lists.
-One tool, `x_scrape`: give it a search term (X advanced-search syntax is
-supported) or a list of X/Twitter URLs, and it returns the matched dataset
-items.
+Search and scrape X (formerly Twitter). Two tools:
+
+- **`x_scrape`** - tweets: give it a search query (X advanced-search operators
+  like `from:`, `filter:media`, `since:` are supported) and/or a `from_user`
+  handle, and it returns the matched tweets.
+- **`x_profile`** - user profiles: give it handles or profile URLs and it returns
+  each account's profile object (bio, follower/following counts, verified status,
+  tweet count, join date, location).
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
 - **Transport:** streamable HTTP at `/mcp`.
-- **Backing:** the [`apidojo/tweet-scraper`](https://apify.com/apidojo/tweet-scraper)
-  Apify Actor via its synchronous `run-sync-get-dataset-items` endpoint (one
-  blocking call, no polling). The Worker holds a single first-party Apify token
-  (`APIFY_TOKEN`, a secret) - callers never supply Apify credentials.
+- **Backing:** two public Apify Actors via their synchronous
+  `run-sync-get-dataset-items` endpoint (one blocking call, no polling) -
+  [`kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest`](https://apify.com/kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest)
+  for tweets and [`apidojo/twitter-user-scraper`](https://apify.com/apidojo/twitter-user-scraper)
+  for profiles. The Worker holds a single first-party Apify token (`APIFY_TOKEN`,
+  a secret) - callers never supply Apify credentials.
 - **Auth:** the fleet auth contract (`open` | `bearer` | `edison-jwt`, see
   `src/auth.ts`); production runs `edison-jwt`.
 
@@ -21,15 +27,41 @@ Edison-hosted marketplace connector wrapping a public web-scraping Actor.
 
 | field | type | notes |
 |-------|------|-------|
-| `search` | string | Search term. X advanced-search operators allowed. Blank/whitespace is treated as absent. |
-| `start_urls` | string[] | Explicit X/Twitter tweet/profile/search/list URLs to scrape instead of a search. Off-domain URLs are dropped. |
-| `sort` | enum | Top \| Latest \| Latest + Top (default Latest). |
-| `since` | string | Only tweets on/after this date, e.g. `2024-01-01` (search only). |
-| `until` | string | Only tweets on/before this date, e.g. `2024-12-31` (search only). |
-| `max_items` | int 1-1000 | Max dataset items (default 10). |
-| `only_verified` | bool | Only tweets by verified users (default false). |
+| `search` | string | Search query. X advanced-search operators (`from:`, `to:`, `filter:media`, etc.) allowed. Blank/whitespace is treated as absent. |
+| `from_user` | string | Restrict to tweets from one handle (with or without a leading `@`). |
+| `sort` | enum | Latest \| Top \| Photos \| Videos (default Latest). |
+| `since` | string | Only tweets on/after this date, e.g. `2024-01-01`. |
+| `until` | string | Only tweets on/before this date, e.g. `2024-12-31`. |
+| `max_items` | int 1-1000 | Approximate max tweets (default 10); the Actor pages in batches so it may return a few more. |
+| `only_verified` | bool | Only tweets by Twitter Blue (verified) accounts (default false). |
 
-At least one of `search` or a valid `start_urls` entry is required.
+At least one of `search` or `from_user` is required. Date bounds (`since`/`until`)
+apply on their own (`from_user` with no `search`) as well as combined with a query.
+
+`search` also accepts the full X advanced-search grammar, so composite queries work
+without any extra params, e.g. `(AI OR LLM) from:sama min_faves:200 filter:media`.
+
+**Filler stripping:** the backing Actor has a per-call billing floor and pads runs
+that match few/no tweets with `{ "type": "mock_tweet", "id": -1, ... }` placeholder
+items. The Worker drops these before returning, so callers only ever see real
+tweets (an all-filler run comes back as `count: 0`).
+
+## `x_profile` input
+
+| field | type | notes |
+|-------|------|-------|
+| `handles` | string[] | X handles to look up (with or without a leading `@`), e.g. `["openai", "sama"]`. |
+| `profile_urls` | string[] | Full X profile URLs, e.g. `["https://x.com/openai"]`. Tweet permalinks and `/i/…` routes are ignored for filtering. |
+| `include_about` | bool | Include account metadata (join date, location, username-change history). Default `true`. |
+
+At least one `handles` or `profile_urls` entry is required.
+
+**Suggestion filtering:** the `apidojo` Actor returns the requested profiles first
+and then pads the run with "who to follow" suggestions, and at a tight item cap its
+ordering is unstable (asking for `sama` at `maxItems: 1` can return `paulg`). The
+Worker over-fetches by a fixed buffer and then filters the dataset back down to
+exactly the requested accounts, so callers only ever see profiles they asked for.
+Follower/following *lists* (the Actor's expensive per-query events) are not exposed.
 
 ## Develop
 

@@ -132,8 +132,28 @@ describe("x_scrape tool", () => {
     expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
   });
 
-  it("rejects a call with no search and no start_urls", async () => {
+  it("rejects a call with no search and no from_user", async () => {
     const result = await callTool(sessionId, "x_scrape", {});
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("x_profile tool", () => {
+  let sessionId: string;
+  beforeAll(async () => {
+    sessionId = await initSession();
+  });
+
+  // Same rationale as x_scrape: no APIFY_TOKEN in the test env, so the tool fails
+  // closed at the misconfig guard (pure logic is covered by test/unit/profile.test.ts).
+  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+    const result = await callTool(sessionId, "x_profile", { handles: ["openai"] });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+  });
+
+  it("rejects a call with no handles and no profile_urls", async () => {
+    const result = await callTool(sessionId, "x_profile", {});
     expect(result.isError).toBe(true);
   });
 });

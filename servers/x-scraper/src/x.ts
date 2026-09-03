@@ -1,5 +1,5 @@
 /**
- * Pure, runtime-agnostic helpers for the x (X / Twitter) MCP server.
+ * Pure, runtime-agnostic helpers for the x-scraper (X / Twitter) MCP server.
  *
  * Nothing here touches Cloudflare bindings, the MCP SDK, or `fetch` on purpose:
  * the real decisions (what target is valid, how the first-party input maps onto
@@ -7,19 +7,19 @@
  * worth unit-testing, and keeping them dependency-free lets `bun test` exercise
  * them offline with no workerd / network.
  *
- * Mirrors the design of the reddit connector, wrapping the Apify tweet-scraper
- * Actor's synchronous `run-sync-get-dataset-items` endpoint (one blocking call,
- * no polling) and returning the raw dataset items.
+ * Wraps the Apify tweet-scraper Actor's synchronous `run-sync-get-dataset-items`
+ * endpoint (one blocking call, no polling) and returns the raw dataset items.
  */
 
 export const APIFY_BASE = "https://api.apify.com/v2";
 
 /**
- * apidojo/tweet-scraper ("Tweet Scraper V2"): pay-per-result (~$0.0004/tweet),
- * search / URL / list / profile scraping. Tilde form is the URL-safe
- * "username~name".
+ * kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest: reliable
+ * pay-per-result X scraper (~$0.00025/tweet). Search-based (X advanced-search
+ * operators supported in the query), plus a dedicated `from` handle field.
+ * Tilde form is the URL-safe "username~name".
  */
-export const DEFAULT_ACTOR_ID = "apidojo~tweet-scraper";
+export const DEFAULT_ACTOR_ID = "kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest";
 
 /**
  * Cap the synchronous Apify run. Lower than the Python service default (300s): a
@@ -29,11 +29,12 @@ export const DEFAULT_ACTOR_ID = "apidojo~tweet-scraper";
  */
 export const RUN_TIMEOUT_S = 120;
 
-export type XSort = "Top" | "Latest" | "Latest + Top";
+/** The Actor's `queryType`: sort/kind of the search results. */
+export type XSort = "Latest" | "Top" | "Photos" | "Videos";
 
 export interface XScrapeArgs {
   search?: string;
-  start_urls?: string[];
+  from_user?: string;
   sort?: XSort;
   since?: string;
   until?: string;
@@ -43,8 +44,8 @@ export interface XScrapeArgs {
 
 /**
  * Normalize a search term: trim, and treat blank/whitespace-only as absent so a
- * useless `searchTerms: ["  "]` is never sent to Apify (it must instead hit the
- * "provide a search or URLs" error).
+ * useless `twitterContent: "  "` is never sent to Apify (it must instead hit the
+ * "provide a search or from_user" error).
  */
 export function normalizeSearch(search: string | undefined): string | undefined {
   if (search === undefined) return undefined;
@@ -52,62 +53,67 @@ export function normalizeSearch(search: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Hosts we accept as X targets (plus their `www.`/`mobile.`/`m.` subdomains). */
-const X_HOSTS = ["twitter.com", "x.com"];
+/**
+ * Normalize an X handle: trim, drop a single leading '@', and validate the
+ * result against X's handle grammar (1-15 chars of `[A-Za-z0-9_]`). A value that
+ * isn't a well-formed handle returns undefined so it can't slip through
+ * {@link hasTarget} and trigger a paid Apify scrape that can only fail.
+ */
+export function normalizeHandle(handle: string | undefined): string | undefined {
+  if (handle === undefined) return undefined;
+  const trimmed = handle.trim().replace(/^@/, "").trim();
+  return /^[A-Za-z0-9_]{1,15}$/.test(trimmed) ? trimmed : undefined;
+}
 
 /**
- * True only for a well-formed http(s) URL on an X / Twitter host. Guards a
- * PUBLIC, paid Actor: a blank or off-domain `start_urls` entry must never be
- * forwarded to Apify as if it were a real target.
+ * A query needs at least one target: a real search term or a `from_user` handle
+ * (either can stand alone - `from:` alone is a valid X search).
  */
-export function isXUrl(candidate: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate.trim());
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-  // Never forward a URL carrying embedded credentials (user:pass@host) to Apify.
-  if (parsed.username || parsed.password) return false;
-  const host = parsed.hostname.toLowerCase();
-  return X_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
-}
-
-/** Keep only well-formed X `start_urls`, trimmed and de-duplicated in order. */
-export function validStartUrls(urls: string[] | undefined): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of urls ?? []) {
-    const trimmed = raw.trim();
-    if (!isXUrl(trimmed) || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
-}
-
-/** A query needs at least one target: a real search term or one valid X URL. */
 export function hasTarget(args: XScrapeArgs): boolean {
-  return Boolean(normalizeSearch(args.search)) || validStartUrls(args.start_urls).length > 0;
+  return Boolean(normalizeSearch(args.search)) || Boolean(normalizeHandle(args.from_user));
+}
+
+/**
+ * Convert a caller-supplied date bound to the Actor's documented `since_time` /
+ * `until_time` format: a Unix timestamp in **seconds**, as a string. A bare
+ * `YYYY-MM-DD` is anchored to the start (or, for an upper bound, the end) of that
+ * day in UTC; any other value is parsed as a datetime. Returns undefined for an
+ * unparseable value so a bad bound is dropped rather than silently widening the
+ * scrape.
+ */
+export function toUnixSeconds(value: string, endOfDay: boolean): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  let ms: number;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split("-").map(Number);
+    ms = Date.UTC(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0);
+  } else {
+    ms = Date.parse(trimmed);
+  }
+  return Number.isNaN(ms) ? undefined : String(Math.floor(ms / 1000));
 }
 
 /** Map the first-party input onto the Actor's input schema. */
 export function buildActorInput(args: XScrapeArgs): Record<string, unknown> {
   const search = normalizeSearch(args.search);
-  const startUrls = validStartUrls(args.start_urls);
+  const fromUser = normalizeHandle(args.from_user);
   const maxItems = args.max_items ?? 10;
 
   const actorInput: Record<string, unknown> = {
     maxItems,
-    sort: args.sort ?? "Latest",
+    queryType: args.sort ?? "Latest",
   };
-  if (search) actorInput.searchTerms = [search];
-  // apidojo/tweet-scraper takes startUrls as plain URL strings (not {url} objects).
-  if (startUrls.length > 0) actorInput.startUrls = startUrls;
-  if (args.since) actorInput.start = args.since;
-  if (args.until) actorInput.end = args.until;
-  if (args.only_verified) actorInput.onlyVerifiedUsers = true;
+  if (search) actorInput.twitterContent = search;
+  if (fromUser) actorInput.from = fromUser;
+  // Documented Actor date fields: Unix seconds (as strings) under since_time /
+  // until_time. Drop a bound that doesn't parse rather than widen the scrape.
+  const sinceTime = args.since ? toUnixSeconds(args.since, false) : undefined;
+  const untilTime = args.until ? toUnixSeconds(args.until, true) : undefined;
+  if (sinceTime) actorInput.since_time = sinceTime;
+  if (untilTime) actorInput.until_time = untilTime;
+  // Colon-keyed Actor flag: only tweets from Twitter Blue (verified) accounts.
+  if (args.only_verified) actorInput["filter:blue_verified"] = true;
   return actorInput;
 }
 
@@ -116,6 +122,24 @@ export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
   // Trim any trailing slash on `base` (e.g. an APIFY_BASE_URL override ending in
   // "/") so we never build a double-slash `//acts` path Apify would 404.
   return `${base.replace(/\/+$/, "")}/acts/${actorId}/run-sync-get-dataset-items`;
+}
+
+/**
+ * KaitoEasyAPI has a per-call billing floor: when a query matches few/no real
+ * tweets it pads the dataset with filler items shaped
+ * `{ type: "mock_tweet", id: -1, text: "From KaitoEasyAPI, a reminder:..." }`.
+ * These carry no tweet data - passing them through only burns downstream (model)
+ * context, so we drop them. A real tweet is `type: "tweet"` with a positive
+ * snowflake id, so either discriminator alone is decisive; we check both to stay
+ * robust if the Actor tweaks one.
+ */
+export function isFillerItem(item: Record<string, unknown>): boolean {
+  return item.type === "mock_tweet" || item.id === -1 || item.id === "-1";
+}
+
+/** Drop KaitoEasyAPI billing-floor filler (see {@link isFillerItem}). */
+export function stripFillerItems(items: Record<string, unknown>[]): Record<string, unknown>[] {
+  return items.filter((item) => !isFillerItem(item));
 }
 
 export type DatasetResult =
