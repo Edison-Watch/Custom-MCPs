@@ -99,6 +99,12 @@ describe("runSyncUrl", () => {
       "https://api.apify.com/v2/acts/harvestapi~linkedin-post-search/run-sync-get-dataset-items",
     );
   });
+
+  test("strips a trailing slash on a custom base (no double slash)", () => {
+    expect(runSyncUrl("harvestapi~linkedin-post-search", "https://example.com/api/")).toBe(
+      "https://example.com/api/acts/harvestapi~linkedin-post-search/run-sync-get-dataset-items",
+    );
+  });
 });
 
 describe("validateDatasetItems", () => {

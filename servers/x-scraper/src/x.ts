@@ -113,7 +113,9 @@ export function buildActorInput(args: XScrapeArgs): Record<string, unknown> {
 
 /** The synchronous run-and-fetch-dataset endpoint for an Actor. */
 export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
-  return `${base}/acts/${actorId}/run-sync-get-dataset-items`;
+  // Trim any trailing slash on `base` (e.g. an APIFY_BASE_URL override ending in
+  // "/") so we never build a double-slash `//acts` path Apify would 404.
+  return `${base.replace(/\/+$/, "")}/acts/${actorId}/run-sync-get-dataset-items`;
 }
 
 export type DatasetResult =
