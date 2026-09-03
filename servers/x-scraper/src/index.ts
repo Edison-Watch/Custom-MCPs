@@ -1,12 +1,14 @@
 /**
  * x - an Edison first-party MCP server for X (formerly Twitter).
  *
- * Search and scrape X/Twitter tweets, profiles, searches, and lists. Wraps the
- * `apidojo/tweet-scraper` Apify Actor via its synchronous
- * `run-sync-get-dataset-items` endpoint (one blocking call, no polling) and
- * returns the raw dataset items. The Worker holds a single first-party Apify
- * token (APIFY_TOKEN, a secret) and authenticates *callers* separately via the
- * fleet auth contract; no per-user Apify credentials.
+ * Two tools over the same Worker, each wrapping a public Apify Actor via its
+ * synchronous `run-sync-get-dataset-items` endpoint (one blocking call, no
+ * polling):
+ *   - `x_scrape`  - tweets, via `kaitoeasyapi/twitter-x-data-tweet-scraper` (x.ts)
+ *   - `x_profile` - user profiles, via `apidojo/twitter-user-scraper` (profile.ts)
+ * The Worker holds a single first-party Apify token (APIFY_TOKEN, a secret) and
+ * authenticates *callers* separately via the fleet auth contract; no per-user
+ * Apify credentials.
  *
  * Transport: streamable HTTP at `/mcp` (McpAgent / Durable Object).
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
@@ -16,6 +18,13 @@ import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
 import { checkAuth } from "./auth";
+import {
+  DEFAULT_PROFILE_ACTOR_ID,
+  buildProfileInput,
+  hasProfileTarget,
+  selectProfiles,
+  type XProfileArgs,
+} from "./profile";
 import {
   APIFY_BASE,
   DEFAULT_ACTOR_ID,
@@ -35,6 +44,7 @@ export interface Env {
   APIFY_TOKEN?: string;
   // Optional overrides (public config).
   APIFY_ACTOR_ID?: string;
+  APIFY_PROFILE_ACTOR_ID?: string;
   APIFY_BASE_URL?: string;
   // Fleet auth (see ./auth, ./jwt).
   AUTH_TOKEN?: string;
@@ -48,17 +58,71 @@ function textError(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
 }
 
+type ActorRun =
+  | { ok: true; items: Record<string, unknown>[] }
+  | { ok: false; message: string };
+
+/**
+ * Run an Apify Actor's synchronous run-and-fetch endpoint and validate the
+ * dataset. Shared by both tools; the caller has already checked APIFY_TOKEN.
+ */
+async function runActor(env: Env, actorId: string, body: Record<string, unknown>): Promise<ActorRun> {
+  const token = env.APIFY_TOKEN?.trim();
+  if (!token) return { ok: false, message: "server misconfigured: APIFY_TOKEN not set" };
+
+  const base = env.APIFY_BASE_URL?.trim() || APIFY_BASE;
+  const url = new URL(runSyncUrl(actorId, base));
+  url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
+  url.searchParams.set("format", "json");
+
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method: "POST",
+      // Bearer header rather than a ?token= query param: keeps the secret out of
+      // URLs that proxies and servers may log.
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
+    });
+  } catch (err) {
+    const name = err instanceof Error ? err.constructor.name : "Error";
+    return { ok: false, message: `could not reach Apify: ${name}` };
+  }
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    return { ok: false, message: `Apify returned ${res.status}: ${errBody.slice(0, 500)}` };
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    return { ok: false, message: "Apify returned invalid JSON" };
+  }
+
+  const parsed = validateDatasetItems(json);
+  if (!parsed.ok) return { ok: false, message: parsed.error };
+  return { ok: true, items: parsed.items };
+}
+
 export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
   server = new McpServer({ name: "x", version: "0.1.0" });
 
   async init(): Promise<void> {
+    this.registerScrapeTool();
+    this.registerProfileTool();
+  }
+
+  private registerScrapeTool(): void {
     this.server.registerTool(
       "x_scrape",
       {
         description:
-          "Search and scrape X (formerly Twitter). Provide `search` (X advanced-search operators " +
-          "like from:, to:, filter:, since:, until: are supported) and/or `from_user` to restrict " +
-          "to one account's tweets. Returns the matched dataset items (tweets).",
+          "Search and scrape X (formerly Twitter) TWEETS. Provide `search` (X advanced-search " +
+          "operators like from:, to:, filter:, since:, until:, min_faves: are supported) and/or " +
+          "`from_user` to restrict to one account's tweets. Returns the matched tweets.",
         inputSchema: {
           search: z
             .string()
@@ -96,62 +160,80 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           count: z.number().describe("Number of items returned."),
           items: z
             .array(z.record(z.string(), z.any()))
-            .describe("Raw dataset items from the Apify Actor run."),
+            .describe("Raw dataset items (tweets) from the Apify Actor run."),
         },
       },
       async (args: XScrapeArgs) => {
-        // Validate the caller's request before checking server config, so a bad
+        // Validate the caller's request before touching server config, so a bad
         // call gets an actionable error regardless of deploy state.
         if (!hasTarget(args)) {
           return textError("provide either 'search' or a 'from_user' handle");
         }
-        const token = this.env.APIFY_TOKEN?.trim();
-        if (!token) {
+        if (!this.env.APIFY_TOKEN?.trim()) {
           return textError("server misconfigured: APIFY_TOKEN not set");
         }
 
         const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
-        const url = new URL(runSyncUrl(actorId, base));
-        url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
-        url.searchParams.set("format", "json");
-
-        let res: Response;
-        try {
-          res = await fetch(url.toString(), {
-            method: "POST",
-            // Bearer header rather than a ?token= query param: keeps the secret
-            // out of URLs that proxies and servers may log.
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify(buildActorInput(args)),
-            signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
-          });
-        } catch (err) {
-          const name = err instanceof Error ? err.constructor.name : "Error";
-          return textError(`could not reach Apify: ${name}`);
-        }
-
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return textError(`Apify returned ${res.status}: ${body.slice(0, 500)}`);
-        }
-
-        let json: unknown;
-        try {
-          json = await res.json();
-        } catch {
-          return textError("Apify returned invalid JSON");
-        }
-
-        const parsed = validateDatasetItems(json);
-        if (!parsed.ok) return textError(parsed.error);
+        const run = await runActor(this.env, actorId, buildActorInput(args));
+        if (!run.ok) return textError(run.message);
 
         // Drop KaitoEasyAPI billing-floor filler before it reaches the caller.
-        const items = stripFillerItems(parsed.items);
-        const structuredContent = { count: items.length, items };
+        const items = stripFillerItems(run.items);
         return {
           content: [{ type: "text" as const, text: `X scrape returned ${items.length} item(s)` }],
-          structuredContent,
+          structuredContent: { count: items.length, items },
+        };
+      },
+    );
+  }
+
+  private registerProfileTool(): void {
+    this.server.registerTool(
+      "x_profile",
+      {
+        description:
+          "Look up X (formerly Twitter) user PROFILES: bio, follower/following counts, verified " +
+          "status, tweet count, join date and location. Provide `handles` and/or `profile_urls`. " +
+          "Returns one profile object per requested account (suggested accounts are filtered out).",
+        inputSchema: {
+          handles: z
+            .array(z.string())
+            .optional()
+            .describe('X handles to look up (with or without a leading @), e.g. ["openai", "sama"].'),
+          profile_urls: z
+            .array(z.string())
+            .optional()
+            .describe('Full X profile URLs to look up, e.g. ["https://x.com/openai"].'),
+          include_about: z
+            .boolean()
+            .optional()
+            .describe("Include account metadata (join date, location, username-change history). Default: true."),
+        },
+        outputSchema: {
+          count: z.number().describe("Number of profiles returned."),
+          profiles: z
+            .array(z.record(z.string(), z.any()))
+            .describe("Matched X user/profile objects."),
+        },
+      },
+      async (args: XProfileArgs) => {
+        if (!hasProfileTarget(args)) {
+          return textError("provide at least one 'handles' entry or 'profile_urls' entry");
+        }
+        if (!this.env.APIFY_TOKEN?.trim()) {
+          return textError("server misconfigured: APIFY_TOKEN not set");
+        }
+
+        const actorId = this.env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
+        const run = await runActor(this.env, actorId, buildProfileInput(args));
+        if (!run.ok) return textError(run.message);
+
+        // The Actor pads runs with "who to follow" suggestions; keep only the
+        // profiles that were actually requested.
+        const profiles = selectProfiles(run.items, args);
+        return {
+          content: [{ type: "text" as const, text: `X profile lookup returned ${profiles.length} profile(s)` }],
+          structuredContent: { count: profiles.length, profiles },
         };
       },
     );
