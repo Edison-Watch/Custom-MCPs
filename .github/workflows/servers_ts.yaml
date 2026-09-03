@@ -27,6 +27,8 @@ jobs:
           - image-host
           - reddit
           - youtube
+          - x
+          - linkedin
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}

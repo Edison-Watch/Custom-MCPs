@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "x",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["XMCP"] }],
+  "durable_objects": {
+    "bindings": [{ "class_name": "XMCP", "name": "MCP_OBJECT" }]
+  },
+  // Company-owned hostname (zone must live in the same Cloudflare account).
+  // Cloudflare applies non-tunable bot protections to *.workers.dev that
+  // intermittently 403 legitimate server-to-server callers (observed from the
+  // Railway gateway on image-host), which a custom domain on our own zone avoids.
+  "routes": [{ "pattern": "x.sealgate.ai", "custom_domain": true }],
+  "workers_dev": false,
+  "vars": {
+    // APIFY_TOKEN and AUTH_TOKEN are SECRETS - set them with `wrangler secret put`,
+    // never here. AUTH_TOKEN is unused in edison-jwt mode (kept as a rollback path).
+    "AUTH_MODE": "edison-jwt",
+    // Edison/SealGate-minted JWT verify config (see src/jwt.ts). None are secrets -
+    // public config. ISSUER must byte-match the SEALGATE_MCP_JWT_ISSUER value on the
+    // issuing deploy (currently the demo trust domain). AUDIENCE must equal this
+    // server's catalog id ("x").
+    "EDISON_JWKS_URL": "https://demo-dashboard.sealgate.ai/.well-known/jwks.json",
+    "EDISON_JWT_ISSUER": "https://demo-dashboard.sealgate.ai",
+    "EDISON_JWT_AUDIENCE": "x"
+  },
+  "observability": { "enabled": true }
+}
