@@ -25,6 +25,7 @@ import {
   hasProfileTarget,
   profileTargets,
   selectProfiles,
+  uniqueTargetCount,
   type XProfileArgs,
 } from "./profile";
 import {
@@ -236,6 +237,11 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         // pay for a run whose output we can't attribute to a requested account.
         if (profileTargets(args).names.size === 0) {
           return textError("no resolvable X handle: pass a handle or a profile URL like https://x.com/<handle>");
+        }
+        // Combined cap across both target fields (the per-field schema limits
+        // would otherwise allow twice this many, doubling the paid run).
+        if (uniqueTargetCount(args) > MAX_PROFILE_TARGETS) {
+          return textError(`too many targets: at most ${MAX_PROFILE_TARGETS} accounts per call`);
         }
         if (!this.env.APIFY_TOKEN?.trim()) {
           return textError("server misconfigured: APIFY_TOKEN not set");

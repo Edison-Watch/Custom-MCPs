@@ -170,4 +170,14 @@ describe("x_profile tool", () => {
     expect(result.isError).toBe(true);
     expect(result.content?.[0]?.text).toContain("no resolvable");
   });
+
+  it("rejects a combined target count over the cap (per-field limits stay under it)", async () => {
+    // 40 handles + 40 urls: each field is <= the 50 per-field schema cap, but
+    // the 80 combined unique targets exceed the per-call limit.
+    const handles = Array.from({ length: 40 }, (_, i) => `user${i}`);
+    const profile_urls = Array.from({ length: 40 }, (_, i) => `https://x.com/acct${i}`);
+    const result = await callTool(sessionId, "x_profile", { handles, profile_urls });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("too many targets");
+  });
 });

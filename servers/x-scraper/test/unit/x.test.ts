@@ -67,6 +67,8 @@ describe("toUnixSeconds", () => {
     expect(toUnixSeconds("2024-02-30", false)).toBeUndefined();
     expect(toUnixSeconds("2024-13-01", true)).toBeUndefined();
     expect(toUnixSeconds("2023-02-29", false)).toBeUndefined();
+    // Same rule for the date portion of a full ISO datetime.
+    expect(toUnixSeconds("2024-02-30T12:00:00Z", true)).toBeUndefined();
   });
 });
 

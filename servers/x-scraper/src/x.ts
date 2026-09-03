@@ -84,24 +84,28 @@ export function hasTarget(args: XScrapeArgs): boolean {
 export function toUnixSeconds(value: string, endOfDay: boolean): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  let ms: number;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const [year, month, day] = trimmed.split("-").map(Number);
-    const time = endOfDay ? "23:59:59" : "00:00:00";
-    const parsed = new Date(`${trimmed}T${time}Z`);
-    // Reject impossible dates (e.g. 2024-02-30): Date.UTC would silently roll
-    // them over to the next month and apply the wrong scrape bound.
+
+  // If the value starts with a calendar date (bare or the date part of an ISO
+  // datetime), reject an impossible one up front: Date would otherwise roll
+  // 2024-02-30 into March and silently apply the wrong scrape bound.
+  const dateMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateMatch) {
+    const [, yy, mm, dd] = dateMatch;
+    const check = new Date(`${yy}-${mm}-${dd}T00:00:00Z`);
     if (
-      parsed.getUTCFullYear() !== year ||
-      parsed.getUTCMonth() !== month - 1 ||
-      parsed.getUTCDate() !== day
+      check.getUTCFullYear() !== Number(yy) ||
+      check.getUTCMonth() !== Number(mm) - 1 ||
+      check.getUTCDate() !== Number(dd)
     ) {
       return undefined;
     }
-    ms = parsed.getTime();
-  } else {
-    ms = Date.parse(trimmed);
   }
+
+  // A bare YYYY-MM-DD anchors to the start (or end) of that UTC day; any other
+  // value is parsed as a full datetime.
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? Date.parse(`${trimmed}T${endOfDay ? "23:59:59" : "00:00:00"}Z`)
+    : Date.parse(trimmed);
   return Number.isNaN(ms) ? undefined : String(Math.floor(ms / 1000));
 }
 

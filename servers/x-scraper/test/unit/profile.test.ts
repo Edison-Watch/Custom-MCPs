@@ -8,6 +8,7 @@ import {
   normalizeHandles,
   profileTargets,
   selectProfiles,
+  uniqueTargetCount,
 } from "../../src/profile";
 
 describe("normalizeHandles", () => {
@@ -88,6 +89,16 @@ describe("buildProfileInput", () => {
       profile_urls: ["https://x.com/openai", "https://x.com/sama"],
     });
     expect(input.maxItems).toBe(2 + PROFILE_PADDING_BUFFER);
+  });
+});
+
+describe("uniqueTargetCount", () => {
+  test("counts unique identities across handles and urls, ignoring dupes/case", () => {
+    expect(uniqueTargetCount({ handles: ["openai", "OpenAI"] })).toBe(1);
+    expect(
+      uniqueTargetCount({ handles: ["sama"], profile_urls: ["https://x.com/sama", "https://x.com/openai"] }),
+    ).toBe(2);
+    expect(uniqueTargetCount({})).toBe(0);
   });
 });
 

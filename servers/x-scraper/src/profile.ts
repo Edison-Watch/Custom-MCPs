@@ -130,15 +130,23 @@ export function hasProfileTarget(args: XProfileArgs): boolean {
 /** Map the caller's input onto the Actor's input schema, over-fetching by
  * {@link PROFILE_PADDING_BUFFER} so suggestion padding never truncates a
  * requested profile out of the window (see file header). */
-export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
+/**
+ * Count unique account identities in a request: a handle, or the raw URL when it
+ * has no resolvable handle. Used both to size the run and to enforce the
+ * per-call target cap, so repeating or overlapping targets can neither inflate
+ * `maxItems` nor slip past the limit.
+ */
+export function uniqueTargetCount(args: XProfileArgs): number {
   const { handles, urls } = profileTargets(args);
-  // Count unique account identities (a handle, or the raw URL when it has no
-  // resolvable handle) so repeating one target N times doesn't request N+buffer
-  // items and pay for padding it will only filter back out.
-  const targetCount = new Set([
+  return new Set([
     ...handles.map((h) => h.toLowerCase()),
     ...urls.map((u) => handleFromUrl(u)?.toLowerCase() ?? u.toLowerCase()),
   ]).size;
+}
+
+export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
+  const { handles, urls } = profileTargets(args);
+  const targetCount = uniqueTargetCount(args);
   const input: Record<string, unknown> = {
     getAbout: args.include_about ?? true,
     maxItems: targetCount + PROFILE_PADDING_BUFFER,
