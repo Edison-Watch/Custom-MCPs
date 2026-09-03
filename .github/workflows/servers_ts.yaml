@@ -27,8 +27,8 @@ jobs:
           - image-host
           - reddit
           - youtube
-          - x
-          - linkedin
+          - x-scraper
+          - linkedin-scraper
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}

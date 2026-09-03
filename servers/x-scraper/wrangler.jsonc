@@ -1,5 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // The Cloudflare Worker keeps the short name `x` and the `x.sealgate.ai`
+  // domain it was first deployed under; the marketplace/catalog id is
+  // `x-scraper` (see catalog-entry.json) to disambiguate from the separate
+  // Beeper "X DMs" connector. Catalog id and worker name intentionally differ;
+  // the catalog `url` decouples the endpoint from the id.
   "name": "x",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
@@ -21,10 +26,10 @@
     // Edison/SealGate-minted JWT verify config (see src/jwt.ts). None are secrets -
     // public config. ISSUER must byte-match the SEALGATE_MCP_JWT_ISSUER value on the
     // issuing deploy (currently the demo trust domain). AUDIENCE must equal this
-    // server's catalog id ("x").
+    // server's catalog id ("x-scraper").
     "EDISON_JWKS_URL": "https://demo-dashboard.sealgate.ai/.well-known/jwks.json",
     "EDISON_JWT_ISSUER": "https://demo-dashboard.sealgate.ai",
-    "EDISON_JWT_AUDIENCE": "x"
+    "EDISON_JWT_AUDIENCE": "x-scraper"
   },
   "observability": { "enabled": true }
 }
