@@ -1,0 +1,27 @@
+{
+  "id": "linkedin",
+  "displayName": "LinkedIn Scraper",
+  "description": "Search and scrape public LinkedIn posts. Query by keyword (the same query you would type in the LinkedIn search bar) or point it at LinkedIn profile/company URLs to fetch their posts; returns structured results. No LinkedIn account required.",
+  "author": "SealGate",
+  "edison_hosted": true,
+  "category": "data",
+  "tags": [
+    "linkedin",
+    "social",
+    "web-scraping",
+    "search",
+    "posts",
+    "apify"
+  ],
+  "url": "https://linkedin.sealgate.ai/mcp",
+  "auth": "edison-jwt",
+  "icon": "linkedin.svg",
+  "tools_configurations": {
+    "linkedin_scrape": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    }
+  }
+}
