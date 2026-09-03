@@ -15,6 +15,8 @@
  * accounts: the caller only ever sees profiles it asked for, never suggestions.
  */
 
+import { normalizeHandle } from "./x";
+
 export const DEFAULT_PROFILE_ACTOR_ID = "apidojo~twitter-user-scraper";
 
 /**
@@ -30,15 +32,16 @@ export interface XProfileArgs {
   include_about?: boolean;
 }
 
-/** Trim, drop a single leading '@', discard blanks, dedupe case-insensitively
- * while preserving first-seen order. */
+/** Normalize + validate each handle (see {@link normalizeHandle}), discard
+ * malformed ones, and dedupe case-insensitively while preserving first-seen
+ * order. */
 export function normalizeHandles(handles: string[] | undefined): string[] {
   if (!handles) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of handles) {
     if (typeof raw !== "string") continue;
-    const h = raw.trim().replace(/^@/, "").trim();
+    const h = normalizeHandle(raw);
     if (!h) continue;
     const key = h.toLowerCase();
     if (seen.has(key)) continue;
@@ -79,9 +82,10 @@ export function handleFromUrl(url: string): string | undefined {
   const segments = parsed.pathname.split("/").filter(Boolean);
   // A profile URL is exactly one path segment. Deeper paths are tweets/routes.
   if (segments.length !== 1) return undefined;
-  const first = segments[0].replace(/^@/, "");
-  if (!first || RESERVED_URL_SEGMENTS.has(first.toLowerCase())) return undefined;
-  return first;
+  const stripped = segments[0].replace(/^@/, "");
+  if (!stripped || RESERVED_URL_SEGMENTS.has(stripped.toLowerCase())) return undefined;
+  // Validate the handle grammar too, so e.g. x.com/foo.bar yields no target.
+  return normalizeHandle(segments[0]);
 }
 
 export interface ProfileTargets {

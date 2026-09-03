@@ -53,11 +53,16 @@ export function normalizeSearch(search: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Normalize an X handle: trim and drop a single leading '@' if present. */
+/**
+ * Normalize an X handle: trim, drop a single leading '@', and validate the
+ * result against X's handle grammar (1-15 chars of `[A-Za-z0-9_]`). A value that
+ * isn't a well-formed handle returns undefined so it can't slip through
+ * {@link hasTarget} and trigger a paid Apify scrape that can only fail.
+ */
 export function normalizeHandle(handle: string | undefined): string | undefined {
   if (handle === undefined) return undefined;
   const trimmed = handle.trim().replace(/^@/, "").trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return /^[A-Za-z0-9_]{1,15}$/.test(trimmed) ? trimmed : undefined;
 }
 
 /**
@@ -69,16 +74,24 @@ export function hasTarget(args: XScrapeArgs): boolean {
 }
 
 /**
- * The Actor's date fields want `YYYY-MM-DD_HH:MM:SS_UTC`. Accept a bare
- * `YYYY-MM-DD` from the caller and anchor it to the given time-of-day; pass any
- * other (already time-qualified) value through untouched.
+ * Convert a caller-supplied date bound to the Actor's documented `since_time` /
+ * `until_time` format: a Unix timestamp in **seconds**, as a string. A bare
+ * `YYYY-MM-DD` is anchored to the start (or, for an upper bound, the end) of that
+ * day in UTC; any other value is parsed as a datetime. Returns undefined for an
+ * unparseable value so a bad bound is dropped rather than silently widening the
+ * scrape.
  */
-export function formatDateBound(value: string, endOfDay: boolean): string {
+export function toUnixSeconds(value: string, endOfDay: boolean): string | undefined {
   const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  let ms: number;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return `${trimmed}_${endOfDay ? "23:59:59" : "00:00:00"}_UTC`;
+    const [year, month, day] = trimmed.split("-").map(Number);
+    ms = Date.UTC(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0);
+  } else {
+    ms = Date.parse(trimmed);
   }
-  return trimmed;
+  return Number.isNaN(ms) ? undefined : String(Math.floor(ms / 1000));
 }
 
 /** Map the first-party input onto the Actor's input schema. */
@@ -93,8 +106,12 @@ export function buildActorInput(args: XScrapeArgs): Record<string, unknown> {
   };
   if (search) actorInput.twitterContent = search;
   if (fromUser) actorInput.from = fromUser;
-  if (args.since) actorInput.since = formatDateBound(args.since, false);
-  if (args.until) actorInput.until = formatDateBound(args.until, true);
+  // Documented Actor date fields: Unix seconds (as strings) under since_time /
+  // until_time. Drop a bound that doesn't parse rather than widen the scrape.
+  const sinceTime = args.since ? toUnixSeconds(args.since, false) : undefined;
+  const untilTime = args.until ? toUnixSeconds(args.until, true) : undefined;
+  if (sinceTime) actorInput.since_time = sinceTime;
+  if (untilTime) actorInput.until_time = untilTime;
   // Colon-keyed Actor flag: only tweets from Twitter Blue (verified) accounts.
   if (args.only_verified) actorInput["filter:blue_verified"] = true;
   return actorInput;

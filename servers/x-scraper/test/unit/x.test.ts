@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import {
   buildActorInput,
-  formatDateBound,
   hasTarget,
   isFillerItem,
   normalizeHandle,
   normalizeSearch,
   runSyncUrl,
   stripFillerItems,
+  toUnixSeconds,
   validateDatasetItems,
 } from "../../src/x";
 
@@ -22,12 +22,20 @@ describe("normalizeSearch", () => {
 });
 
 describe("normalizeHandle", () => {
-  test("trims and drops a single leading @", () => {
+  test("trims, drops a single leading @, and accepts valid handles", () => {
     expect(normalizeHandle("@elonmusk")).toBe("elonmusk");
     expect(normalizeHandle("  openai ")).toBe("openai");
+    expect(normalizeHandle("a_1")).toBe("a_1");
     expect(normalizeHandle("@")).toBeUndefined();
     expect(normalizeHandle("   ")).toBeUndefined();
     expect(normalizeHandle(undefined)).toBeUndefined();
+  });
+
+  test("rejects malformed handles so they can't trigger a paid scrape", () => {
+    expect(normalizeHandle("foo bar")).toBeUndefined();
+    expect(normalizeHandle("bad!handle")).toBeUndefined();
+    expect(normalizeHandle("a.b")).toBeUndefined();
+    expect(normalizeHandle("averylonghandle16")).toBeUndefined();
   });
 });
 
@@ -41,14 +49,17 @@ describe("hasTarget", () => {
   });
 });
 
-describe("formatDateBound", () => {
-  test("anchors a bare YYYY-MM-DD to start/end of day in UTC", () => {
-    expect(formatDateBound("2024-01-01", false)).toBe("2024-01-01_00:00:00_UTC");
-    expect(formatDateBound("2024-12-31", true)).toBe("2024-12-31_23:59:59_UTC");
+describe("toUnixSeconds", () => {
+  test("anchors a bare YYYY-MM-DD to start/end of day in UTC (Unix seconds string)", () => {
+    // 2024-01-01T00:00:00Z = 1704067200 ; 2024-12-31T23:59:59Z = 1735689599
+    expect(toUnixSeconds("2024-01-01", false)).toBe("1704067200");
+    expect(toUnixSeconds("2024-12-31", true)).toBe("1735689599");
   });
 
-  test("passes an already time-qualified value through untouched", () => {
-    expect(formatDateBound("2024-01-01_08:30:00_UTC", false)).toBe("2024-01-01_08:30:00_UTC");
+  test("parses a full datetime and rejects garbage", () => {
+    expect(toUnixSeconds("2024-01-01T08:30:00Z", false)).toBe("1704097800");
+    expect(toUnixSeconds("not a date", false)).toBeUndefined();
+    expect(toUnixSeconds("   ", false)).toBeUndefined();
   });
 });
 
@@ -61,12 +72,12 @@ describe("buildActorInput", () => {
       queryType: "Latest",
     });
     expect(input.from).toBeUndefined();
-    expect(input.since).toBeUndefined();
-    expect(input.until).toBeUndefined();
+    expect(input.since_time).toBeUndefined();
+    expect(input.until_time).toBeUndefined();
     expect(input["filter:blue_verified"]).toBeUndefined();
   });
 
-  test("honors overrides and only_verified sets filter:blue_verified", () => {
+  test("honors overrides; dates map to Unix since_time/until_time, only_verified to filter:blue_verified", () => {
     const input = buildActorInput({
       search: "keyboards",
       from_user: "@apify",
@@ -80,8 +91,8 @@ describe("buildActorInput", () => {
       twitterContent: "keyboards",
       from: "apify",
       queryType: "Top",
-      since: "2024-01-01_00:00:00_UTC",
-      until: "2024-12-31_23:59:59_UTC",
+      since_time: "1704067200",
+      until_time: "1735689599",
       maxItems: 25,
       "filter:blue_verified": true,
     });

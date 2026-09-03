@@ -11,8 +11,11 @@ import {
 } from "../../src/profile";
 
 describe("normalizeHandles", () => {
-  test("trims, drops a leading @, discards blanks, dedupes case-insensitively", () => {
-    expect(normalizeHandles(["@openai", "  sama ", "@", "  ", "OpenAI"])).toEqual(["openai", "sama"]);
+  test("trims, drops a leading @, discards blanks/malformed, dedupes case-insensitively", () => {
+    expect(normalizeHandles(["@openai", "  sama ", "@", "  ", "foo bar", "OpenAI"])).toEqual([
+      "openai",
+      "sama",
+    ]);
     expect(normalizeHandles(undefined)).toEqual([]);
     expect(normalizeHandles([])).toEqual([]);
   });
