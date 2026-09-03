@@ -79,6 +79,16 @@ describe("buildProfileInput", () => {
       maxItems: 1 + PROFILE_PADDING_BUFFER,
     });
   });
+
+  test("counts unique identities so duplicate targets don't inflate maxItems", () => {
+    // "openai" appears as a handle (twice, one dedupes) and as a URL; sama is
+    // distinct, so 2 unique identities, not 4.
+    const input = buildProfileInput({
+      handles: ["openai", "OpenAI"],
+      profile_urls: ["https://x.com/openai", "https://x.com/sama"],
+    });
+    expect(input.maxItems).toBe(2 + PROFILE_PADDING_BUFFER);
+  });
 });
 
 describe("selectProfiles", () => {
@@ -101,9 +111,9 @@ describe("selectProfiles", () => {
     expect(kept).toEqual([sama]);
   });
 
-  test("with no resolvable name (unparseable url only) falls back to the first targetCount items", () => {
+  test("returns nothing when no handle resolves (unparseable url only), never padding", () => {
     const kept = selectProfiles([suggestion, openai], { profile_urls: ["https://x.com/a/status/1"] });
-    expect(kept).toEqual([suggestion]);
+    expect(kept).toEqual([]);
   });
 
   test("skips items without a string userName", () => {

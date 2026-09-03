@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildActorInput,
   hasTarget,
+  invalidDateBound,
   isFillerItem,
   normalizeHandle,
   normalizeSearch,
@@ -60,6 +61,22 @@ describe("toUnixSeconds", () => {
     expect(toUnixSeconds("2024-01-01T08:30:00Z", false)).toBe("1704097800");
     expect(toUnixSeconds("not a date", false)).toBeUndefined();
     expect(toUnixSeconds("   ", false)).toBeUndefined();
+  });
+
+  test("rejects an impossible date instead of rolling it over", () => {
+    expect(toUnixSeconds("2024-02-30", false)).toBeUndefined();
+    expect(toUnixSeconds("2024-13-01", true)).toBeUndefined();
+    expect(toUnixSeconds("2023-02-29", false)).toBeUndefined();
+  });
+});
+
+describe("invalidDateBound", () => {
+  test("names the first unparseable bound, ignores blank/valid ones", () => {
+    expect(invalidDateBound({ since: "2024-02-30" })).toBe("since");
+    expect(invalidDateBound({ until: "nope" })).toBe("until");
+    expect(invalidDateBound({ since: "2024-01-01", until: "2024-12-31" })).toBeUndefined();
+    expect(invalidDateBound({ since: "  ", until: "" })).toBeUndefined();
+    expect(invalidDateBound({})).toBeUndefined();
   });
 });
 

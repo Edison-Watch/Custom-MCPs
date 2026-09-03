@@ -87,11 +87,38 @@ export function toUnixSeconds(value: string, endOfDay: boolean): string | undefi
   let ms: number;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     const [year, month, day] = trimmed.split("-").map(Number);
-    ms = Date.UTC(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0);
+    const time = endOfDay ? "23:59:59" : "00:00:00";
+    const parsed = new Date(`${trimmed}T${time}Z`);
+    // Reject impossible dates (e.g. 2024-02-30): Date.UTC would silently roll
+    // them over to the next month and apply the wrong scrape bound.
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() !== month - 1 ||
+      parsed.getUTCDate() !== day
+    ) {
+      return undefined;
+    }
+    ms = parsed.getTime();
   } else {
     ms = Date.parse(trimmed);
   }
   return Number.isNaN(ms) ? undefined : String(Math.floor(ms / 1000));
+}
+
+/**
+ * Name the first date bound that was supplied but cannot be parsed, so the
+ * caller can be rejected instead of running a paid scrape with that filter
+ * silently dropped (which would widen the results). A blank/absent bound is not
+ * an error - it just means "no bound".
+ */
+export function invalidDateBound(args: XScrapeArgs): "since" | "until" | undefined {
+  if (args.since !== undefined && args.since.trim() !== "" && toUnixSeconds(args.since, false) === undefined) {
+    return "since";
+  }
+  if (args.until !== undefined && args.until.trim() !== "" && toUnixSeconds(args.until, true) === undefined) {
+    return "until";
+  }
+  return undefined;
 }
 
 /** Map the first-party input onto the Actor's input schema. */

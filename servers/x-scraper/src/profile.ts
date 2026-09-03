@@ -26,6 +26,13 @@ export const DEFAULT_PROFILE_ACTOR_ID = "apidojo~twitter-user-scraper";
  */
 export const PROFILE_PADDING_BUFFER = 10;
 
+/**
+ * Hard cap on how many accounts one call may request. Each requested account is
+ * a billed Actor item, so an unbounded array would let a caller force an
+ * arbitrarily large paid run; enforced at the tool's input schema.
+ */
+export const MAX_PROFILE_TARGETS = 50;
+
 export interface XProfileArgs {
   handles?: string[];
   profile_urls?: string[];
@@ -125,7 +132,13 @@ export function hasProfileTarget(args: XProfileArgs): boolean {
  * requested profile out of the window (see file header). */
 export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
   const { handles, urls } = profileTargets(args);
-  const targetCount = handles.length + urls.length;
+  // Count unique account identities (a handle, or the raw URL when it has no
+  // resolvable handle) so repeating one target N times doesn't request N+buffer
+  // items and pay for padding it will only filter back out.
+  const targetCount = new Set([
+    ...handles.map((h) => h.toLowerCase()),
+    ...urls.map((u) => handleFromUrl(u)?.toLowerCase() ?? u.toLowerCase()),
+  ]).size;
   const input: Record<string, unknown> = {
     getAbout: args.include_about ?? true,
     maxItems: targetCount + PROFILE_PADDING_BUFFER,
@@ -138,16 +151,19 @@ export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
 /**
  * Filter raw dataset items down to exactly the requested profiles, dropping the
  * Actor's suggestion padding, deduping by handle, and preserving the order the
- * Actor returned. If no handle could be resolved for filtering (only
- * unparseable URLs were given) fall back to the first `targetCount` items so the
- * caller still gets data rather than an empty result.
+ * Actor returned. If no handle could be resolved for filtering (only unparseable
+ * URLs were given) returns nothing, so padding is never mistaken for a result -
+ * the tool rejects such requests up front, so this is a defensive floor.
  */
 export function selectProfiles(
   items: Record<string, unknown>[],
   args: XProfileArgs,
 ): Record<string, unknown>[] {
-  const { handles, urls, names } = profileTargets(args);
-  if (names.size === 0) return items.slice(0, handles.length + urls.length);
+  const { names } = profileTargets(args);
+  // No resolvable handle to match against (only unparseable URLs). Returning the
+  // raw items here would hand back the Actor's who-to-follow padding as if it
+  // were the requested profile, so return nothing instead.
+  if (names.size === 0) return [];
 
   const seen = new Set<string>();
   const out: Record<string, unknown>[] = [];
