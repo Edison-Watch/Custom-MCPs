@@ -136,6 +136,12 @@ describe("x_scrape tool", () => {
     const result = await callTool(sessionId, "x_scrape", {});
     expect(result.isError).toBe(true);
   });
+
+  it("rejects an unparseable date bound before running a scrape", async () => {
+    const result = await callTool(sessionId, "x_scrape", { search: "apify", since: "2024-02-30" });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("invalid 'since' date");
+  });
 });
 
 describe("x_profile tool", () => {
@@ -155,5 +161,23 @@ describe("x_profile tool", () => {
   it("rejects a call with no handles and no profile_urls", async () => {
     const result = await callTool(sessionId, "x_profile", {});
     expect(result.isError).toBe(true);
+  });
+
+  it("rejects profile_urls with no resolvable handle (tweet permalink)", async () => {
+    const result = await callTool(sessionId, "x_profile", {
+      profile_urls: ["https://x.com/openai/status/1"],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("no resolvable");
+  });
+
+  it("rejects a combined target count over the cap (per-field limits stay under it)", async () => {
+    // 40 handles + 40 urls: each field is <= the 50 per-field schema cap, but
+    // the 80 combined unique targets exceed the per-call limit.
+    const handles = Array.from({ length: 40 }, (_, i) => `user${i}`);
+    const profile_urls = Array.from({ length: 40 }, (_, i) => `https://x.com/acct${i}`);
+    const result = await callTool(sessionId, "x_profile", { handles, profile_urls });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("too many targets");
   });
 });

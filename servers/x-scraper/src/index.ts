@@ -20,9 +20,12 @@ import { z } from "zod";
 import { checkAuth } from "./auth";
 import {
   DEFAULT_PROFILE_ACTOR_ID,
+  MAX_PROFILE_TARGETS,
   buildProfileInput,
   hasProfileTarget,
+  profileTargets,
   selectProfiles,
+  uniqueTargetCount,
   type XProfileArgs,
 } from "./profile";
 import {
@@ -31,6 +34,7 @@ import {
   RUN_TIMEOUT_S,
   buildActorInput,
   hasTarget,
+  invalidDateBound,
   runSyncUrl,
   stripFillerItems,
   validateDatasetItems,
@@ -169,6 +173,12 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         if (!hasTarget(args)) {
           return textError("provide either 'search' or a 'from_user' handle");
         }
+        // Reject an unparseable date up front rather than silently dropping the
+        // filter and running a paid scrape wider than the caller asked for.
+        const badBound = invalidDateBound(args);
+        if (badBound) {
+          return textError(`invalid '${badBound}' date: use YYYY-MM-DD`);
+        }
         if (!this.env.APIFY_TOKEN?.trim()) {
           return textError("server misconfigured: APIFY_TOKEN not set");
         }
@@ -197,11 +207,13 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           "Returns one profile object per requested account (suggested accounts are filtered out).",
         inputSchema: {
           handles: z
-            .array(z.string())
+            .array(z.string().max(100))
+            .max(MAX_PROFILE_TARGETS)
             .optional()
             .describe('X handles to look up (with or without a leading @), e.g. ["openai", "sama"].'),
           profile_urls: z
-            .array(z.string())
+            .array(z.string().max(2048))
+            .max(MAX_PROFILE_TARGETS)
             .optional()
             .describe('Full X profile URLs to look up, e.g. ["https://x.com/openai"].'),
           include_about: z
@@ -219,6 +231,17 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
       async (args: XProfileArgs) => {
         if (!hasProfileTarget(args)) {
           return textError("provide at least one 'handles' entry or 'profile_urls' entry");
+        }
+        // Every target must resolve to a handle we can match results against;
+        // an input that only carries tweet/route/malformed URLs would otherwise
+        // pay for a run whose output we can't attribute to a requested account.
+        if (profileTargets(args).names.size === 0) {
+          return textError("no resolvable X handle: pass a handle or a profile URL like https://x.com/<handle>");
+        }
+        // Combined cap across both target fields (the per-field schema limits
+        // would otherwise allow twice this many, doubling the paid run).
+        if (uniqueTargetCount(args) > MAX_PROFILE_TARGETS) {
+          return textError(`too many targets: at most ${MAX_PROFILE_TARGETS} accounts per call`);
         }
         if (!this.env.APIFY_TOKEN?.trim()) {
           return textError("server misconfigured: APIFY_TOKEN not set");

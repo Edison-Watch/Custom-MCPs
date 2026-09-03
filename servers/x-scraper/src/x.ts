@@ -84,14 +84,45 @@ export function hasTarget(args: XScrapeArgs): boolean {
 export function toUnixSeconds(value: string, endOfDay: boolean): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  let ms: number;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const [year, month, day] = trimmed.split("-").map(Number);
-    ms = Date.UTC(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0);
-  } else {
-    ms = Date.parse(trimmed);
+
+  // If the value starts with a calendar date (bare or the date part of an ISO
+  // datetime), reject an impossible one up front: Date would otherwise roll
+  // 2024-02-30 into March and silently apply the wrong scrape bound.
+  const dateMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateMatch) {
+    const [, yy, mm, dd] = dateMatch;
+    const check = new Date(`${yy}-${mm}-${dd}T00:00:00Z`);
+    if (
+      check.getUTCFullYear() !== Number(yy) ||
+      check.getUTCMonth() !== Number(mm) - 1 ||
+      check.getUTCDate() !== Number(dd)
+    ) {
+      return undefined;
+    }
   }
+
+  // A bare YYYY-MM-DD anchors to the start (or end) of that UTC day; any other
+  // value is parsed as a full datetime.
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? Date.parse(`${trimmed}T${endOfDay ? "23:59:59" : "00:00:00"}Z`)
+    : Date.parse(trimmed);
   return Number.isNaN(ms) ? undefined : String(Math.floor(ms / 1000));
+}
+
+/**
+ * Name the first date bound that was supplied but cannot be parsed, so the
+ * caller can be rejected instead of running a paid scrape with that filter
+ * silently dropped (which would widen the results). A blank/absent bound is not
+ * an error - it just means "no bound".
+ */
+export function invalidDateBound(args: XScrapeArgs): "since" | "until" | undefined {
+  if (args.since !== undefined && args.since.trim() !== "" && toUnixSeconds(args.since, false) === undefined) {
+    return "since";
+  }
+  if (args.until !== undefined && args.until.trim() !== "" && toUnixSeconds(args.until, true) === undefined) {
+    return "until";
+  }
+  return undefined;
 }
 
 /** Map the first-party input onto the Actor's input schema. */
