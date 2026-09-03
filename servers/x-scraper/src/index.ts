@@ -23,6 +23,7 @@ import {
   buildActorInput,
   hasTarget,
   runSyncUrl,
+  stripFillerItems,
   validateDatasetItems,
   type XScrapeArgs,
 } from "./x";
@@ -145,11 +146,11 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const parsed = validateDatasetItems(json);
         if (!parsed.ok) return textError(parsed.error);
 
-        const structuredContent = { count: parsed.items.length, items: parsed.items };
+        // Drop KaitoEasyAPI billing-floor filler before it reaches the caller.
+        const items = stripFillerItems(parsed.items);
+        const structuredContent = { count: items.length, items };
         return {
-          content: [
-            { type: "text" as const, text: `X scrape returned ${parsed.items.length} item(s)` },
-          ],
+          content: [{ type: "text" as const, text: `X scrape returned ${items.length} item(s)` }],
           structuredContent,
         };
       },

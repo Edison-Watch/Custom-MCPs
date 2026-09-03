@@ -4,9 +4,11 @@ import {
   buildActorInput,
   formatDateBound,
   hasTarget,
+  isFillerItem,
   normalizeHandle,
   normalizeSearch,
   runSyncUrl,
+  stripFillerItems,
   validateDatasetItems,
 } from "../../src/x";
 
@@ -103,6 +105,37 @@ describe("runSyncUrl", () => {
     expect(runSyncUrl("acme~scraper", "https://example.com/api/")).toBe(
       "https://example.com/api/acts/acme~scraper/run-sync-get-dataset-items",
     );
+  });
+});
+
+describe("isFillerItem / stripFillerItems", () => {
+  const MOCK = {
+    type: "mock_tweet",
+    id: -1,
+    text: "From KaitoEasyAPI, a reminder: ... we returned N pieces of mock data ...",
+  };
+  const REAL = { type: "tweet", id: "1953529799219319205", text: "gpt-5 is here" };
+
+  test("flags KaitoEasyAPI billing-floor filler, not real tweets", () => {
+    expect(isFillerItem(MOCK)).toBe(true);
+    expect(isFillerItem({ id: -1 })).toBe(true);
+    expect(isFillerItem({ id: "-1" })).toBe(true);
+    expect(isFillerItem(REAL)).toBe(false);
+    expect(isFillerItem({ type: "tweet", id: 0 })).toBe(false);
+  });
+
+  test("strips trailing filler while preserving real tweets in order", () => {
+    const kept = stripFillerItems([REAL, MOCK, MOCK]);
+    expect(kept).toEqual([REAL]);
+  });
+
+  test("an all-filler run collapses to an empty list", () => {
+    expect(stripFillerItems([MOCK, MOCK])).toEqual([]);
+  });
+
+  test("leaves a filler-free run untouched", () => {
+    const items = [REAL, { type: "tweet", id: "2" }];
+    expect(stripFillerItems(items)).toEqual(items);
   });
 });
 

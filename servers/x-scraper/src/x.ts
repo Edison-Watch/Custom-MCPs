@@ -107,6 +107,24 @@ export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
   return `${base.replace(/\/+$/, "")}/acts/${actorId}/run-sync-get-dataset-items`;
 }
 
+/**
+ * KaitoEasyAPI has a per-call billing floor: when a query matches few/no real
+ * tweets it pads the dataset with filler items shaped
+ * `{ type: "mock_tweet", id: -1, text: "From KaitoEasyAPI, a reminder:..." }`.
+ * These carry no tweet data - passing them through only burns downstream (model)
+ * context, so we drop them. A real tweet is `type: "tweet"` with a positive
+ * snowflake id, so either discriminator alone is decisive; we check both to stay
+ * robust if the Actor tweaks one.
+ */
+export function isFillerItem(item: Record<string, unknown>): boolean {
+  return item.type === "mock_tweet" || item.id === -1 || item.id === "-1";
+}
+
+/** Drop KaitoEasyAPI billing-floor filler (see {@link isFillerItem}). */
+export function stripFillerItems(items: Record<string, unknown>[]): Record<string, unknown>[] {
+  return items.filter((item) => !isFillerItem(item));
+}
+
 export type DatasetResult =
   | { ok: true; items: Record<string, unknown>[] }
   | { ok: false; error: string };

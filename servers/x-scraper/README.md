@@ -28,7 +28,16 @@ Edison-hosted marketplace connector wrapping a public web-scraping Actor.
 | `max_items` | int 1-1000 | Approximate max tweets (default 10); the Actor pages in batches so it may return a few more. |
 | `only_verified` | bool | Only tweets by Twitter Blue (verified) accounts (default false). |
 
-At least one of `search` or `from_user` is required.
+At least one of `search` or `from_user` is required. Date bounds (`since`/`until`)
+apply on their own (`from_user` with no `search`) as well as combined with a query.
+
+`search` also accepts the full X advanced-search grammar, so composite queries work
+without any extra params, e.g. `(AI OR LLM) from:sama min_faves:200 filter:media`.
+
+**Filler stripping:** the backing Actor has a per-call billing floor and pads runs
+that match few/no tweets with `{ "type": "mock_tweet", "id": -1, ... }` placeholder
+items. The Worker drops these before returning, so callers only ever see real
+tweets (an all-filler run comes back as `count: 0`).
 
 ## Develop
 
