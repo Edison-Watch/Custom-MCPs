@@ -1,5 +1,5 @@
 {
-  "id": "x",
+  "id": "x-scraper",
   "displayName": "X (Twitter) Scraper",
   "description": "Search and scrape X (formerly Twitter) tweets, profiles, searches, and lists. Query by term (X advanced-search syntax supported) or point it at X/Twitter URLs; returns structured results.",
   "author": "SealGate",
@@ -15,7 +15,7 @@
   ],
   "url": "https://x.sealgate.ai/mcp",
   "auth": "edison-jwt",
-  "icon": "x.svg",
+  "icon": "x-scraper.svg",
   "tools_configurations": {
     "x_scrape": {
       "write_operation": false,

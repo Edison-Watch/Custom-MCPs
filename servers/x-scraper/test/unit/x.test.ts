@@ -101,6 +101,12 @@ describe("runSyncUrl", () => {
       "https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items",
     );
   });
+
+  test("strips a trailing slash on a custom base (no double slash)", () => {
+    expect(runSyncUrl("apidojo~tweet-scraper", "https://example.com/api/")).toBe(
+      "https://example.com/api/acts/apidojo~tweet-scraper/run-sync-get-dataset-items",
+    );
+  });
 });
 
 describe("validateDatasetItems", () => {

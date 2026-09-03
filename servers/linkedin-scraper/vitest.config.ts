@@ -2,7 +2,7 @@ import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
 // Integration tier: runs the real Worker inside workerd (via Miniflare) with
 // the Durable Object binding read from wrangler.jsonc. It exercises routing and
-// the auth gate only - the reddit_scrape tool makes a live Apify call, which is
+// the auth gate only - the linkedin_scrape tool makes a live Apify call, which is
 // out of scope offline; its pure logic is covered by `bun test test/unit`.
 export default defineWorkersConfig({
   test: {

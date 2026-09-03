@@ -50,9 +50,10 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 ```
 
 `compatibility_flags: ["nodejs_compat"]` and the `LinkedinMCP` Durable Object
-hold the MCP session; no other bindings (no storage). Production auth
-(`edison-jwt`) is configured in `wrangler.jsonc` `vars`; `EDISON_JWT_AUDIENCE`
-must equal this server's catalog id, `linkedin`.
+hold the MCP session, backed by the Durable Object's own SQLite; no other
+bindings. Production auth (`edison-jwt`) is configured in `wrangler.jsonc`
+`vars`; `EDISON_JWT_AUDIENCE`
+must equal this server's catalog id, `linkedin-scraper`.
 
 ## Runtime note
 
