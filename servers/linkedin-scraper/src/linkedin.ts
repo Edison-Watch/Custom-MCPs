@@ -74,6 +74,27 @@ export function isLinkedinUrl(candidate: string): boolean {
   return LINKEDIN_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
 
+/**
+ * Trim a free-text string list, drop blank/whitespace-only entries, and
+ * de-duplicate case-insensitively while preserving first-seen order. Shared by
+ * the profile-search and company tools to sanitize their filter arrays before
+ * they reach a paid Actor run.
+ */
+export function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values ?? []) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 /** Keep only well-formed LinkedIn `start_urls`, trimmed and de-duplicated in order. */
 export function validStartUrls(urls: string[] | undefined): string[] {
   const seen = new Set<string>();

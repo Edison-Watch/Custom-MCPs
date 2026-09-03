@@ -5,6 +5,7 @@ import {
   hasTarget,
   isLinkedinUrl,
   normalizeSearch,
+  normalizeStringList,
   runSyncUrl,
   validStartUrls,
   validateDatasetItems,
@@ -44,6 +45,14 @@ describe("isLinkedinUrl / validStartUrls", () => {
       ]),
     ).toEqual(["https://linkedin.com/in/a", "https://www.linkedin.com/company/b"]);
     expect(validStartUrls(undefined)).toEqual([]);
+  });
+});
+
+describe("normalizeStringList", () => {
+  test("trims, drops blanks, and dedupes case-insensitively in order", () => {
+    expect(normalizeStringList([" CTO ", "cto", "VP Eng", "  ", ""])).toEqual(["CTO", "VP Eng"]);
+    expect(normalizeStringList(undefined)).toEqual([]);
+    expect(normalizeStringList([])).toEqual([]);
   });
 });
 

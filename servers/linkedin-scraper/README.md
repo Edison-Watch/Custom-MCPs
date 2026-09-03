@@ -1,24 +1,27 @@
 # `linkedin` - Edison first-party MCP server
 
-Search and scrape public LinkedIn posts. One tool, `linkedin_scrape`: give it a
-search query (the same query you would type in the LinkedIn search bar) or a
-list of LinkedIn profile/company URLs whose posts to fetch, and it returns the
-matched dataset items.
+Search and scrape public LinkedIn data. Three tools over one Worker, each
+wrapping a public HarvestAPI Apify Actor (no LinkedIn cookies or account):
+
+| tool | scrapes | backing Actor |
+|------|---------|---------------|
+| `linkedin_scrape` | posts (by keyword or profile/company URL) | [`harvestapi/linkedin-post-search`](https://apify.com/harvestapi/linkedin-post-search) |
+| `linkedin_profile_search` | people (by query + structured filters) | [`harvestapi/linkedin-profile-search`](https://apify.com/harvestapi/linkedin-profile-search) |
+| `linkedin_company` | company pages (headcount, industry, activity) | [`harvestapi/linkedin-company`](https://apify.com/harvestapi/linkedin-company) |
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
 - **Transport:** streamable HTTP at `/mcp`.
-- **Backing:** the [`harvestapi/linkedin-post-search`](https://apify.com/harvestapi/linkedin-post-search)
-  Apify Actor via its synchronous `run-sync-get-dataset-items` endpoint (one
-  blocking call, no polling). The Actor scrapes only public posts and needs no
-  LinkedIn cookies or account. The Worker holds a single first-party Apify token
+- **Backing:** each Actor is called via its synchronous
+  `run-sync-get-dataset-items` endpoint (one blocking call, no polling) and
+  scrapes only public data. The Worker holds a single first-party Apify token
   (`APIFY_TOKEN`, a secret) - callers never supply Apify credentials.
 - **Auth:** the fleet auth contract (`open` | `bearer` | `edison-jwt`, see
   `src/auth.ts`); production runs `edison-jwt`.
 
 This mirrors the design of the `reddit` connector: the standalone,
-Edison-hosted marketplace connector wrapping a public web-scraping Actor.
+Edison-hosted marketplace connector wrapping public web-scraping Actors.
 
-## `linkedin_scrape` input
+## `linkedin_scrape` input (posts)
 
 | field | type | notes |
 |-------|------|-------|
@@ -29,6 +32,35 @@ Edison-hosted marketplace connector wrapping a public web-scraping Actor.
 | `max_items` | int 1-1000 | Max posts per query (default 10). |
 
 At least one of `search` or a valid `start_urls` entry is required.
+
+## `linkedin_profile_search` input (people)
+
+| field | type | notes |
+|-------|------|-------|
+| `search` | string | Fuzzy query, e.g. `head of growth fintech london`. |
+| `mode` | enum | `Short` summary (default) or `Full` rich profile. The Actor's third mode, "Full + email search", is deliberately not exposed. |
+| `max_items` | int 1-100 | Max profiles (default 10); over-cap values are clamped. |
+| `locations` | string[] | Location filter. |
+| `current_companies` / `past_companies` | string[] | Company filters. |
+| `schools` | string[] | School/university filter. |
+| `current_job_titles` / `past_job_titles` | string[] | Job-title filters. |
+| `first_names` / `last_names` | string[] | Name filters. |
+| `recently_changed_jobs` / `recently_posted` | bool | Refinements; cannot be the only target. |
+
+At least a `search` query or one filter list is required (a lone boolean
+refinement is rejected, since it would ask the Actor to scrape the whole
+network). The Actor's opaque `*-Id` filters (industry, seniority, function...)
+and its MongoDB/segmentation knobs are intentionally not exposed.
+
+## `linkedin_company` input (companies)
+
+| field | type | notes |
+|-------|------|-------|
+| `company_urls` | string[] | LinkedIn company URLs. Off-domain URLs are dropped. |
+| `names` | string[] | Company names to search. |
+
+At least one valid company URL or name is required; at most
+`MAX_COMPANY_TARGETS` (50) companies (URLs + names) per call.
 
 ## Develop
 
