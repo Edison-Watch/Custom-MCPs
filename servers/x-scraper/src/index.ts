@@ -55,38 +55,41 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
       "x_scrape",
       {
         description:
-          "Search and scrape X (formerly Twitter). Provide `search` (X/Twitter advanced-search " +
-          "syntax is supported) or one or more `start_urls` pointing at tweets, profiles, searches, " +
-          "or lists. Returns the matched dataset items (tweets).",
+          "Search and scrape X (formerly Twitter). Provide `search` (X advanced-search operators " +
+          "like from:, to:, filter:, since:, until: are supported) and/or `from_user` to restrict " +
+          "to one account's tweets. Returns the matched dataset items (tweets).",
         inputSchema: {
-          search: z.string().optional().describe("Search term to look up on X (advanced-search operators allowed)."),
-          start_urls: z
-            .array(z.string())
+          search: z
+            .string()
             .optional()
-            .describe("Explicit X/Twitter tweet, profile, search, or list URLs to scrape directly."),
+            .describe("Search query for X. Advanced-search operators (from:, filter:media, etc.) are allowed."),
+          from_user: z
+            .string()
+            .optional()
+            .describe("Restrict results to tweets from this X handle (with or without a leading @)."),
           sort: z
-            .enum(["Top", "Latest", "Latest + Top"])
+            .enum(["Latest", "Top", "Photos", "Videos"])
             .optional()
-            .describe("Ordering applied to a search (default: Latest)."),
+            .describe("Kind/ordering of results (default: Latest)."),
           since: z
             .string()
             .optional()
-            .describe("Only tweets sent on/after this date, e.g. '2024-01-01' (search only)."),
+            .describe("Only tweets on/after this date, e.g. '2024-01-01'."),
           until: z
             .string()
             .optional()
-            .describe("Only tweets sent on/before this date, e.g. '2024-12-31' (search only)."),
+            .describe("Only tweets on/before this date, e.g. '2024-12-31'."),
           max_items: z
             .number()
             .int()
             .min(1)
             .max(1000)
             .optional()
-            .describe("Maximum number of dataset items to return (default: 10)."),
+            .describe("Approximate maximum number of tweets to return (default: 10; the Actor pages in batches)."),
           only_verified: z
             .boolean()
             .optional()
-            .describe("Only return tweets by verified users (default: false)."),
+            .describe("Only return tweets by Twitter Blue (verified) accounts (default: false)."),
         },
         outputSchema: {
           count: z.number().describe("Number of items returned."),
@@ -99,7 +102,7 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         // Validate the caller's request before checking server config, so a bad
         // call gets an actionable error regardless of deploy state.
         if (!hasTarget(args)) {
-          return textError("provide either 'search' or at least one valid X/Twitter URL in 'start_urls'");
+          return textError("provide either 'search' or a 'from_user' handle");
         }
         const token = this.env.APIFY_TOKEN?.trim();
         if (!token) {

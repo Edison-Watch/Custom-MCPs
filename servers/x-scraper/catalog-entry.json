@@ -1,7 +1,7 @@
 {
   "id": "x-scraper",
   "displayName": "X (Twitter) Scraper",
-  "description": "Search and scrape X (formerly Twitter) tweets, profiles, searches, and lists. Query by term (X advanced-search syntax supported) or point it at X/Twitter URLs; returns structured results.",
+  "description": "Search and scrape X (formerly Twitter) tweets. Query by term (X advanced-search operators like from:, filter:, since:, until: supported) and/or restrict to a specific account; returns structured results.",
   "author": "SealGate",
   "edison_hosted": true,
   "category": "data",

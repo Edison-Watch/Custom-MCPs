@@ -132,7 +132,7 @@ describe("x_scrape tool", () => {
     expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
   });
 
-  it("rejects a call with no search and no start_urls", async () => {
+  it("rejects a call with no search and no from_user", async () => {
     const result = await callTool(sessionId, "x_scrape", {});
     expect(result.isError).toBe(true);
   });

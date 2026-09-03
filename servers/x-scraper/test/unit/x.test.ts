@@ -2,54 +2,51 @@ import { describe, expect, test } from "bun:test";
 
 import {
   buildActorInput,
+  formatDateBound,
   hasTarget,
-  isXUrl,
+  normalizeHandle,
   normalizeSearch,
   runSyncUrl,
-  validStartUrls,
   validateDatasetItems,
 } from "../../src/x";
 
 describe("normalizeSearch", () => {
   test("trims and treats blank/whitespace as absent", () => {
-    expect(normalizeSearch("  apify  ")).toBe("apify");
+    expect(normalizeSearch("  openai  ")).toBe("openai");
     expect(normalizeSearch("   ")).toBeUndefined();
     expect(normalizeSearch("")).toBeUndefined();
     expect(normalizeSearch(undefined)).toBeUndefined();
   });
 });
 
-describe("isXUrl / validStartUrls", () => {
-  test("accepts twitter.com and x.com http(s) URLs (with subdomains)", () => {
-    expect(isXUrl("https://twitter.com/apify")).toBe(true);
-    expect(isXUrl("https://x.com/elonmusk")).toBe(true);
-    expect(isXUrl("https://mobile.twitter.com/apify")).toBe(true);
-    expect(isXUrl("http://x.com/i/lists/123")).toBe(true);
-  });
-
-  test("rejects off-domain, malformed, and credential-bearing URLs", () => {
-    expect(isXUrl("https://evil.com/x.com")).toBe(false);
-    expect(isXUrl("https://x.com.evil.com/apify")).toBe(false);
-    expect(isXUrl("not a url")).toBe(false);
-    expect(isXUrl("ftp://x.com/apify")).toBe(false);
-    expect(isXUrl("https://user:pass@x.com/apify")).toBe(false);
-  });
-
-  test("filters, trims, and de-duplicates in order", () => {
-    expect(
-      validStartUrls([" https://x.com/a ", "https://x.com/a", "nope", "https://twitter.com/b"]),
-    ).toEqual(["https://x.com/a", "https://twitter.com/b"]);
-    expect(validStartUrls(undefined)).toEqual([]);
+describe("normalizeHandle", () => {
+  test("trims and drops a single leading @", () => {
+    expect(normalizeHandle("@elonmusk")).toBe("elonmusk");
+    expect(normalizeHandle("  openai ")).toBe("openai");
+    expect(normalizeHandle("@")).toBeUndefined();
+    expect(normalizeHandle("   ")).toBeUndefined();
+    expect(normalizeHandle(undefined)).toBeUndefined();
   });
 });
 
 describe("hasTarget", () => {
-  test("true for a real search or a valid X URL, false otherwise", () => {
-    expect(hasTarget({ search: "apify" })).toBe(true);
-    expect(hasTarget({ start_urls: ["https://x.com/apify"] })).toBe(true);
+  test("true for a real search or a from_user, false otherwise", () => {
+    expect(hasTarget({ search: "openai" })).toBe(true);
+    expect(hasTarget({ from_user: "@elonmusk" })).toBe(true);
     expect(hasTarget({ search: "   " })).toBe(false);
-    expect(hasTarget({ start_urls: ["https://evil.com/x"] })).toBe(false);
+    expect(hasTarget({ from_user: "  @  " })).toBe(false);
     expect(hasTarget({})).toBe(false);
+  });
+});
+
+describe("formatDateBound", () => {
+  test("anchors a bare YYYY-MM-DD to start/end of day in UTC", () => {
+    expect(formatDateBound("2024-01-01", false)).toBe("2024-01-01_00:00:00_UTC");
+    expect(formatDateBound("2024-12-31", true)).toBe("2024-12-31_23:59:59_UTC");
+  });
+
+  test("passes an already time-qualified value through untouched", () => {
+    expect(formatDateBound("2024-01-01_08:30:00_UTC", false)).toBe("2024-01-01_08:30:00_UTC");
   });
 });
 
@@ -57,19 +54,20 @@ describe("buildActorInput", () => {
   test("maps a search query onto the Actor schema with defaults", () => {
     const input = buildActorInput({ search: "claude code" });
     expect(input).toMatchObject({
-      searchTerms: ["claude code"],
+      twitterContent: "claude code",
       maxItems: 10,
-      sort: "Latest",
+      queryType: "Latest",
     });
-    expect(input.startUrls).toBeUndefined();
-    expect(input.start).toBeUndefined();
-    expect(input.end).toBeUndefined();
-    expect(input.onlyVerifiedUsers).toBeUndefined();
+    expect(input.from).toBeUndefined();
+    expect(input.since).toBeUndefined();
+    expect(input.until).toBeUndefined();
+    expect(input["filter:blue_verified"]).toBeUndefined();
   });
 
-  test("honors overrides and only_verified flips onlyVerifiedUsers", () => {
+  test("honors overrides and only_verified sets filter:blue_verified", () => {
     const input = buildActorInput({
       search: "keyboards",
+      from_user: "@apify",
       sort: "Top",
       since: "2024-01-01",
       until: "2024-12-31",
@@ -77,34 +75,33 @@ describe("buildActorInput", () => {
       only_verified: true,
     });
     expect(input).toMatchObject({
-      sort: "Top",
-      start: "2024-01-01",
-      end: "2024-12-31",
+      twitterContent: "keyboards",
+      from: "apify",
+      queryType: "Top",
+      since: "2024-01-01_00:00:00_UTC",
+      until: "2024-12-31_23:59:59_UTC",
       maxItems: 25,
-      onlyVerifiedUsers: true,
+      "filter:blue_verified": true,
     });
   });
 
-  test("maps start_urls to plain strings, drops off-domain and a blank search", () => {
-    const input = buildActorInput({
-      search: "   ",
-      start_urls: ["https://x.com/apify", "https://evil.com/x"],
-    });
-    expect(input.startUrls).toEqual(["https://x.com/apify"]);
-    expect(input.searchTerms).toBeUndefined();
+  test("from_user alone (no search) is a valid target", () => {
+    const input = buildActorInput({ search: "   ", from_user: "elonmusk" });
+    expect(input.from).toBe("elonmusk");
+    expect(input.twitterContent).toBeUndefined();
   });
 });
 
 describe("runSyncUrl", () => {
   test("builds the run-sync-get-dataset-items endpoint", () => {
-    expect(runSyncUrl("apidojo~tweet-scraper")).toBe(
-      "https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items",
+    expect(runSyncUrl("kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest")).toBe(
+      "https://api.apify.com/v2/acts/kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest/run-sync-get-dataset-items",
     );
   });
 
   test("strips a trailing slash on a custom base (no double slash)", () => {
-    expect(runSyncUrl("apidojo~tweet-scraper", "https://example.com/api/")).toBe(
-      "https://example.com/api/acts/apidojo~tweet-scraper/run-sync-get-dataset-items",
+    expect(runSyncUrl("acme~scraper", "https://example.com/api/")).toBe(
+      "https://example.com/api/acts/acme~scraper/run-sync-get-dataset-items",
     );
   });
 });
