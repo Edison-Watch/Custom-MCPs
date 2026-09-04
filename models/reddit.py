@@ -125,3 +125,47 @@ class RedditScrapeResult(BaseModel):
         default_factory=list,
         description="Normalized dataset items (raw Actor item preserved per item).",
     )
+
+
+class RedditScrapeStartResult(BaseModel):
+    """Handle for an asynchronous Actor run started by ``reddit_scrape_start``.
+
+    The run keeps executing on Apify after this returns; poll
+    ``reddit_scrape_fetch`` with ``run_id`` until its status is terminal. Use
+    the async path for slow queries (keyword search enumeration) that would
+    exceed a synchronous call's client timeout; ``reddit_scrape`` stays the
+    fast path for listing/comment pulls.
+    """
+
+    run_id: str = Field(description="Apify actor-run id; pass to reddit_scrape_fetch.")
+    dataset_id: str = Field(
+        description="Default dataset id for the run (items land here when it finishes)."
+    )
+    status: str = Field(
+        description="Initial run status (e.g. READY or RUNNING) - not yet terminal."
+    )
+
+
+class RedditScrapeFetchInput(BaseModel):
+    """Poll input for ``reddit_scrape_fetch``: the run id from a prior start."""
+
+    run_id: str = Field(
+        description="Apify actor-run id returned by reddit_scrape_start.",
+    )
+
+
+class RedditScrapeFetchResult(BaseModel):
+    """Current state of an async run, with items once it has SUCCEEDED.
+
+    While the run is non-terminal (READY/RUNNING/*ING) ``items`` is empty and
+    the caller should poll again. On SUCCEEDED, ``items`` holds the normalized
+    dataset. On a terminal failure (FAILED/TIMED-OUT/ABORTED) the failing
+    ``status`` is returned with empty ``items`` so the caller stops polling.
+    """
+
+    status: str = Field(description="Apify run status at poll time.")
+    count: int = Field(description="Number of items returned (0 until SUCCEEDED).")
+    items: list[NormalizedRedditItem] = Field(
+        default_factory=list,
+        description="Normalized dataset items once SUCCEEDED (raw item preserved).",
+    )

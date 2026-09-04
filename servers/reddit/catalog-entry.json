@@ -21,6 +21,18 @@
       "read_private_data": false,
       "read_untrusted_public_data": true,
       "acl": "PUBLIC"
+    },
+    "reddit_scrape_start": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "reddit_scrape_fetch": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
     }
   }
 }

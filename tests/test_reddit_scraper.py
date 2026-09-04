@@ -15,9 +15,15 @@ import httpx
 import pytest
 
 from common import global_config
-from models.reddit import RedditScrapeInput
+from models.reddit import RedditScrapeFetchInput, RedditScrapeInput
 from services import discover_services, get_registry, reddit_svc
-from services.reddit_svc import ApifyError, normalize_item, reddit_scrape
+from services.reddit_svc import (
+    ApifyError,
+    normalize_item,
+    reddit_scrape,
+    reddit_scrape_fetch,
+    reddit_scrape_start,
+)
 from tests.test_template import TestTemplate
 
 
@@ -189,7 +195,7 @@ class TestRedditScrape(TestTemplate):
     def test_service_is_registered(self):
         discover_services()
         names = {e.name for e in get_registry()}
-        assert "reddit_scrape" in names
+        assert {"reddit_scrape", "reddit_scrape_start", "reddit_scrape_fetch"} <= names
         # read-only scrape: not a mutating service
         entry = next(e for e in get_registry() if e.name == "reddit_scrape")
         assert entry.mutating is False
@@ -255,3 +261,117 @@ class TestRedditScrape(TestTemplate):
         assert result.items[0].score == 1500
         assert result.items[0].num_comments == 42
         assert result.items[0].raw["upVotes"] == 1500
+
+
+class TestRedditScrapeAsync(TestTemplate):
+    """The async run + poll pair (reddit_scrape_start / reddit_scrape_fetch)."""
+
+    def test_start_returns_run_handle(self):
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Non-blocking run enqueue: POST /v2/acts/{actor}/runs, no run-sync.
+            assert request.url.path.endswith("/runs")
+            assert request.headers["Authorization"] == "Bearer test-token"
+            captured.update(json.loads(request.content))
+            return httpx.Response(
+                201,
+                json={
+                    "data": {
+                        "id": "RUN123",
+                        "defaultDatasetId": "DS123",
+                        "status": "READY",
+                    }
+                },
+            )
+
+        with _token("test-token"), _mock_http(handler):
+            result = reddit_scrape_start(RedditScrapeInput(search="rust"))
+
+        assert result.run_id == "RUN123"
+        assert result.dataset_id == "DS123"
+        assert result.status == "READY"
+        # The same actor-input mapping the sync path uses.
+        assert captured["searches"] == ["rust"]
+
+    def test_start_missing_token_raises(self):
+        with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
+            reddit_scrape_start(RedditScrapeInput(search="rust"))
+
+    def test_start_missing_fields_raises(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(201, json={"data": {"id": "RUN123"}})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="missing id/defaultDatasetId/status"),
+        ):
+            reddit_scrape_start(RedditScrapeInput(search="rust"))
+
+    def test_fetch_running_returns_empty(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Only the run-status GET is hit while non-terminal; no dataset pull.
+            assert "/actor-runs/RUN123" in request.url.path
+            return httpx.Response(200, json={"data": {"status": "RUNNING"}})
+
+        with _token("test-token"), _mock_http(handler):
+            result = reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+        assert result.status == "RUNNING"
+        assert result.count == 0
+        assert result.items == []
+
+    def test_fetch_succeeded_returns_normalized_items(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "/actor-runs/RUN123" in request.url.path:
+                return httpx.Response(
+                    200,
+                    json={"data": {"status": "SUCCEEDED", "defaultDatasetId": "DS123"}},
+                )
+            # Dataset item fetch: clean JSON of the run's results.
+            assert "/datasets/DS123/items" in request.url.path
+            assert request.url.params["clean"] == "true"
+            return httpx.Response(200, json=[_FULL_POST])
+
+        with (
+            _token("test-token"),
+            _actor("trudax~reddit-scraper"),
+            _mock_http(handler),
+        ):
+            result = reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+        assert result.status == "SUCCEEDED"
+        assert result.count == 1
+        # Engagement mapped through the same normalizer as the sync path.
+        assert result.items[0].score == 1500
+        assert result.items[0].num_comments == 42
+        assert result.items[0].raw["upVotes"] == 1500
+
+    def test_fetch_failed_returns_status_no_items(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": {"status": "FAILED"}})
+
+        with _token("test-token"), _mock_http(handler):
+            result = reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+        # A terminal failure surfaces as a status the caller stops polling on,
+        # not an exception - the run GET itself succeeded.
+        assert result.status == "FAILED"
+        assert result.count == 0
+        assert result.items == []
+
+    def test_fetch_http_error_is_wrapped(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={"error": {"message": "run not found"}})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="404"),
+        ):
+            reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+    def test_fetch_missing_token_raises(self):
+        with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
+            reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))

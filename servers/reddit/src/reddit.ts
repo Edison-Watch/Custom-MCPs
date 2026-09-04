@@ -84,6 +84,74 @@ export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
   return `${base}/acts/${actorId}/run-sync-get-dataset-items`;
 }
 
+// --- Async run + poll -------------------------------------------------------
+//
+// runSyncUrl blocks one subrequest on the whole run, which the innermost MCP
+// client can cut off long before a slow keyword search finishes. The endpoints
+// and parsers below decouple start from poll: `reddit_scrape_start` POSTs to
+// runsUrl for a run id, `reddit_scrape_fetch` GETs runStatusUrl and, once the
+// run has SUCCEEDED, datasetItemsUrl. Mirrors services/reddit_svc.py.
+
+/** Non-blocking run-enqueue endpoint: POST returns a run without waiting on it. */
+export function runsUrl(actorId: string, base: string = APIFY_BASE): string {
+  return `${base}/acts/${actorId}/runs`;
+}
+
+/** Run-status endpoint: GET returns the run's `{ status, defaultDatasetId }`. */
+export function runStatusUrl(runId: string, base: string = APIFY_BASE): string {
+  return `${base}/actor-runs/${runId}`;
+}
+
+/** Dataset items endpoint for a finished run. */
+export function datasetItemsUrl(datasetId: string, base: string = APIFY_BASE): string {
+  return `${base}/datasets/${datasetId}/items`;
+}
+
+/**
+ * Apify run statuses. SUCCEEDED is the only terminal-success state; the failures
+ * are terminal but yield no items; everything else means "still running, poll
+ * again". https://docs.apify.com/platform/actors/running/runs-and-builds#lifecycle
+ */
+export const SUCCEEDED = "SUCCEEDED";
+export const TERMINAL_FAILURE: ReadonlySet<string> = new Set(["FAILED", "TIMED-OUT", "ABORTED"]);
+
+export type RunStartResult =
+  | { ok: true; run_id: string; dataset_id: string; status: string }
+  | { ok: false; error: string };
+
+/** Parse an Apify run-enqueue envelope `{ data: { id, defaultDatasetId, status } }`. */
+export function parseRunStart(json: unknown): RunStartResult {
+  const data = extractData(json);
+  if (!data) return { ok: false, error: `unexpected Apify response shape: ${typeof json}` };
+  const run_id = asStr(data.id);
+  const dataset_id = asStr(data.defaultDatasetId);
+  const status = asStr(data.status);
+  if (!run_id || !dataset_id || !status) {
+    return { ok: false, error: "Apify run response is missing id/defaultDatasetId/status" };
+  }
+  return { ok: true, run_id, dataset_id, status };
+}
+
+export type RunStatusResult =
+  | { ok: true; status: string; dataset_id: string | null }
+  | { ok: false; error: string };
+
+/** Parse an Apify run-status envelope `{ data: { status, defaultDatasetId } }`. */
+export function parseRunStatus(json: unknown): RunStatusResult {
+  const data = extractData(json);
+  if (!data) return { ok: false, error: `unexpected Apify response shape: ${typeof json}` };
+  const status = asStr(data.status);
+  if (!status) return { ok: false, error: "Apify run response is missing status" };
+  return { ok: true, status, dataset_id: asStr(data.defaultDatasetId) };
+}
+
+function extractData(json: unknown): Record<string, unknown> | null {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) return null;
+  const data = (json as Record<string, unknown>).data;
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+  return data as Record<string, unknown>;
+}
+
 export type DatasetResult =
   | { ok: true; items: Record<string, unknown>[] }
   | { ok: false; error: string };

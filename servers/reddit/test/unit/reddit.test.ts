@@ -2,12 +2,19 @@ import { describe, expect, test } from "bun:test";
 
 import {
   buildActorInput,
+  datasetItemsUrl,
   fieldMapForActor,
   hasTarget,
   normalizeItem,
   normalizeItems,
   normalizeSearch,
+  parseRunStart,
+  parseRunStatus,
+  runStatusUrl,
   runSyncUrl,
+  runsUrl,
+  SUCCEEDED,
+  TERMINAL_FAILURE,
   validateDatasetItems,
 } from "../../src/reddit";
 
@@ -194,6 +201,82 @@ describe("normalizeItems", () => {
     const items = normalizeItems([FULL_POST], "trudax~reddit-scraper");
     expect(items).toHaveLength(1);
     expect(items[0].score).toBe(1500);
+    expect(items[0].raw).toBe(FULL_POST);
+  });
+});
+
+// --- Async run + poll ------------------------------------------------------
+
+describe("async endpoint builders", () => {
+  test("runsUrl, runStatusUrl, datasetItemsUrl", () => {
+    expect(runsUrl("trudax~reddit-scraper-lite")).toBe(
+      "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/runs",
+    );
+    expect(runStatusUrl("RUN123")).toBe("https://api.apify.com/v2/actor-runs/RUN123");
+    expect(datasetItemsUrl("DS123")).toBe("https://api.apify.com/v2/datasets/DS123/items");
+  });
+});
+
+describe("parseRunStart", () => {
+  test("extracts run_id/dataset_id/status from the run envelope", () => {
+    const result = parseRunStart({
+      data: { id: "RUN123", defaultDatasetId: "DS123", status: "READY" },
+    });
+    expect(result).toEqual({ ok: true, run_id: "RUN123", dataset_id: "DS123", status: "READY" });
+  });
+
+  test("rejects a missing field", () => {
+    expect(parseRunStart({ data: { id: "RUN123" } })).toMatchObject({ ok: false });
+  });
+
+  test("rejects a non-envelope shape", () => {
+    expect(parseRunStart([1, 2])).toMatchObject({ ok: false });
+    expect(parseRunStart(null)).toMatchObject({ ok: false });
+  });
+});
+
+describe("parseRunStatus", () => {
+  test("running: status with no dataset id yet", () => {
+    expect(parseRunStatus({ data: { status: "RUNNING" } })).toEqual({
+      ok: true,
+      status: "RUNNING",
+      dataset_id: null,
+    });
+  });
+
+  test("succeeded: status plus dataset id", () => {
+    expect(parseRunStatus({ data: { status: SUCCEEDED, defaultDatasetId: "DS123" } })).toEqual({
+      ok: true,
+      status: SUCCEEDED,
+      dataset_id: "DS123",
+    });
+  });
+
+  test("failed is a terminal-failure status the caller stops polling on", () => {
+    const result = parseRunStatus({ data: { status: "FAILED" } });
+    expect(result).toMatchObject({ ok: true, status: "FAILED" });
+    expect(TERMINAL_FAILURE.has("FAILED")).toBe(true);
+    expect(TERMINAL_FAILURE.has(SUCCEEDED)).toBe(false);
+  });
+
+  test("rejects a shape with no status", () => {
+    expect(parseRunStatus({ data: {} })).toMatchObject({ ok: false });
+  });
+});
+
+describe("fetch SUCCEEDED path composes into normalized items", () => {
+  // Mirrors the Python fetch-SUCCEEDED test: a run-status parse followed by
+  // dataset validation + normalization yields engagement-mapped items offline.
+  test("run status -> dataset validate -> normalize", () => {
+    const status = parseRunStatus({ data: { status: SUCCEEDED, defaultDatasetId: "DS123" } });
+    expect(status.ok && status.status).toBe(SUCCEEDED);
+    const dataset = validateDatasetItems([FULL_POST]);
+    expect(dataset.ok).toBe(true);
+    if (!dataset.ok) return;
+    const items = normalizeItems(dataset.items, "trudax~reddit-scraper");
+    expect(items).toHaveLength(1);
+    expect(items[0].score).toBe(1500);
+    expect(items[0].num_comments).toBe(42);
     expect(items[0].raw).toBe(FULL_POST);
   });
 });
