@@ -96,6 +96,10 @@ def main(
     )
 
     render(
-        {"query": search or urls, "count": result.count, "items": result.items},
+        {
+            "query": search or urls,
+            "count": result.count,
+            "items": [item.model_dump() for item in result.items],
+        },
         title="Reddit Scrape",
     )

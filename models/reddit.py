@@ -2,9 +2,12 @@
 
 The service wraps an Apify Reddit-scraper Actor behind a small first-party
 surface: callers pass a search term (or explicit Reddit URLs) and get back the
-Actor's dataset items. Items are heterogeneous (posts, comments, communities,
-users depending on the query), so the result carries them as raw dicts rather
-than pinning a schema the upstream Actor does not guarantee.
+matched items. Items are heterogeneous (posts, comments, communities, users
+depending on the query) and each Actor names its fields differently, so the
+service maps every item onto a stable, actor-agnostic ``NormalizedRedditItem``
+(snake_case, engagement fields nullable) and keeps the untouched Actor item
+under ``raw`` so nothing is lost. See ``services/reddit_svc.py`` for the
+per-actor mapping layer that populates this shape.
 """
 
 from typing import Any, Literal
@@ -13,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 RedditSort = Literal["relevance", "hot", "top", "new", "rising", "comments"]
 RedditTime = Literal["all", "hour", "day", "week", "month", "year"]
+RedditItemType = Literal["post", "comment", "community", "user"]
 
 
 class RedditScrapeInput(BaseModel):
@@ -63,10 +67,61 @@ class RedditScrapeInput(BaseModel):
         return self
 
 
+class NormalizedRedditItem(BaseModel):
+    """A Reddit post/comment/community/user in a stable, actor-agnostic shape.
+
+    Every field is nullable: a given Actor (or item kind) may omit any of them,
+    and an absent engagement count stays ``None`` rather than being faked as
+    ``0`` so "unknown" stays distinct from "zero". The untouched Actor item is
+    preserved under ``raw``.
+    """
+
+    id: str | None = Field(default=None, description="Actor item id, if any.")
+    type: RedditItemType | None = Field(
+        default=None, description="Item kind: post | comment | community | user."
+    )
+    title: str | None = Field(default=None, description="Post title.")
+    body: str | None = Field(default=None, description="Post selftext or comment body.")
+    author: str | None = Field(default=None, description="Author username.")
+    subreddit: str | None = Field(
+        default=None, description="Community name (without the 'r/' prefix if given)."
+    )
+    url: str | None = Field(default=None, description="Canonical URL for the item.")
+    permalink: str | None = Field(
+        default=None, description="Reddit permalink path, when derivable."
+    )
+    created_at: str | None = Field(
+        default=None, description="Creation time as an ISO8601 string."
+    )
+    score: int | None = Field(
+        default=None, description="Net upvotes; None when the Actor omits it."
+    )
+    num_comments: int | None = Field(
+        default=None, description="Comment count; None when the Actor omits it."
+    )
+    upvote_ratio: float | None = Field(
+        default=None, description="Upvote ratio 0..1; None when the Actor omits it."
+    )
+    over_18: bool | None = Field(
+        default=None, description="NSFW flag; None when the Actor omits it."
+    )
+    num_crossposts: int | None = Field(
+        default=None, description="Crosspost count; None when the Actor omits it."
+    )
+    raw: dict[str, Any] = Field(
+        default_factory=dict, description="The untouched Actor dataset item."
+    )
+
+
 class RedditScrapeResult(BaseModel):
-    """Dataset items returned by the Actor run."""
+    """Normalized items returned by the Actor run.
+
+    ``items`` are mapped onto the stable ``NormalizedRedditItem`` shape; each
+    carries the original Actor item under ``raw`` so no upstream data is lost.
+    """
 
     count: int = Field(description="Number of items returned.")
-    items: list[dict[str, Any]] = Field(
-        default_factory=list, description="Raw dataset items from the Apify Actor run."
+    items: list[NormalizedRedditItem] = Field(
+        default_factory=list,
+        description="Normalized dataset items (raw Actor item preserved per item).",
     )

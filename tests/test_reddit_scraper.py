@@ -1,7 +1,8 @@
 """Tests for the Apify-backed Reddit scraper service (fast tier, no network).
 
 HTTP is stubbed with an httpx.MockTransport so no Apify call is made. Covers the
-happy path, input-to-Actor mapping, the missing-token guard, and error mapping.
+happy path, input-to-Actor mapping, output normalization + the per-actor mapping
+layer, the missing-token guard, and error mapping.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import pytest
 from common import global_config
 from models.reddit import RedditScrapeInput
 from services import discover_services, get_registry, reddit_svc
-from services.reddit_svc import ApifyError, reddit_scrape
+from services.reddit_svc import ApifyError, normalize_item, reddit_scrape
 from tests.test_template import TestTemplate
 
 
@@ -39,6 +40,37 @@ def _token(value: str | None):
         yield
 
 
+@contextmanager
+def _actor(value: str | None):
+    with patch.object(global_config, "APIFY_ACTOR_ID", value):
+        yield
+
+
+# A representative trudax reddit-scraper-lite POST item (default RSS mode): no
+# engagement counts present. Field names per Apify's documented actor schema.
+_LITE_POST = {
+    "id": "t3_abc",
+    "dataType": "post",
+    "title": "Async runtimes in Rust",
+    "body": "tokio vs async-std",
+    "username": "ferris",
+    "communityName": "r/rust",
+    "url": "https://www.reddit.com/r/rust/comments/abc/async_runtimes/",
+    "createdAt": "2023-06-09T05:23:15.000Z",
+    "over18": False,
+}
+
+# The same shape from the flat-rate trudax reddit-scraper sibling, which DOES
+# return engagement counts. Same field names -> same map, counts flow through.
+_FULL_POST = {
+    **_LITE_POST,
+    "upVotes": 1500,
+    "numberOfComments": 42,
+    "upVoteRatio": 0.98,
+    "numberOfCrossposts": 3,
+}
+
+
 class TestRedditScrape(TestTemplate):
     def test_happy_path_returns_items(self):
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -48,7 +80,9 @@ class TestRedditScrape(TestTemplate):
             result = reddit_scrape(RedditScrapeInput(search="rust"))
 
         assert result.count == 2
-        assert result.items[0]["title"] == "a"
+        assert result.items[0].title == "a"
+        # The untouched Actor item is preserved under `raw`.
+        assert result.items[0].raw == {"title": "a"}
 
     def test_maps_input_onto_actor_schema(self):
         captured: dict = {}
@@ -160,3 +194,64 @@ class TestRedditScrape(TestTemplate):
         entry = next(e for e in get_registry() if e.name == "reddit_scrape")
         assert entry.mutating is False
         assert reddit_svc  # module imported
+
+    def test_lite_post_normalizes_engagement_to_none(self):
+        # reddit-scraper-lite omits engagement counts -> nullable fields stay
+        # None (never faked as 0), while identity fields still map through.
+        item = normalize_item(_LITE_POST, "trudax~reddit-scraper-lite")
+        assert item.type == "post"
+        assert item.title == "Async runtimes in Rust"
+        assert item.author == "ferris"
+        assert item.subreddit == "rust"  # "r/" prefix stripped
+        assert item.created_at == "2023-06-09T05:23:15.000Z"
+        assert item.over_18 is False
+        assert item.score is None
+        assert item.num_comments is None
+        assert item.upvote_ratio is None
+        assert item.permalink == "/r/rust/comments/abc/async_runtimes/"
+
+    def test_full_actor_engagement_flows_through_same_map(self):
+        # Pointing APIFY_ACTOR_ID at the flat-rate sibling makes counts flow
+        # with no code change - same trudax field map.
+        item = normalize_item(_FULL_POST, "trudax~reddit-scraper")
+        assert item.score == 1500
+        assert item.num_comments == 42
+        assert item.upvote_ratio == 0.98
+        assert item.num_crossposts == 3
+
+    def test_default_map_reads_reddit_api_snake_case(self):
+        # An unregistered Actor falls back to broad candidate keys, including
+        # Reddit's own snake_case JSON API (epoch created_utc -> ISO8601).
+        raw = {
+            "kind": "t3",
+            "title": "hi",
+            "author": "spez",
+            "subreddit": "announcements",
+            "score": 9,
+            "num_comments": 4,
+            "upvote_ratio": 0.9,
+            "created_utc": 1686288195,
+        }
+        item = normalize_item(raw, "someone~custom-reddit-actor")
+        assert item.type == "post"
+        assert item.author == "spez"
+        assert item.score == 9
+        assert item.num_comments == 4
+        assert item.created_at is not None
+        assert item.created_at.startswith("2023-06-09T")
+
+    def test_scrape_normalizes_items_end_to_end(self):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=[_FULL_POST])
+
+        with (
+            _token("test-token"),
+            _actor("trudax~reddit-scraper"),
+            _mock_http(handler),
+        ):
+            result = reddit_scrape(RedditScrapeInput(search="rust"))
+
+        assert result.count == 1
+        assert result.items[0].score == 1500
+        assert result.items[0].num_comments == 42
+        assert result.items[0].raw["upVotes"] == 1500

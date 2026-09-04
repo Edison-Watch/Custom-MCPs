@@ -2,11 +2,12 @@
  * reddit - an Edison first-party MCP server.
  *
  * Search and scrape Reddit posts, comments, communities, and users. Wraps the
- * `trudax/reddit-scraper-lite` Apify Actor via its synchronous
- * `run-sync-get-dataset-items` endpoint (one blocking call, no polling) and
- * returns the raw dataset items. The Worker holds a single first-party Apify
- * token (APIFY_TOKEN, a secret) and authenticates *callers* separately via the
- * fleet auth contract; no per-user Apify credentials.
+ * `trudax/reddit-scraper-lite` Apify Actor (swappable via APIFY_ACTOR_ID) via
+ * its synchronous `run-sync-get-dataset-items` endpoint (one blocking call, no
+ * polling) and returns the items normalized onto a stable, actor-agnostic shape
+ * (see ./reddit). The Worker holds a single first-party Apify token
+ * (APIFY_TOKEN, a secret) and authenticates *callers* separately via the fleet
+ * auth contract; no per-user Apify credentials.
  *
  * Transport: streamable HTTP at `/mcp` (McpAgent / Durable Object).
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
@@ -22,6 +23,7 @@ import {
   RUN_TIMEOUT_S,
   buildActorInput,
   hasTarget,
+  normalizeItems,
   runSyncUrl,
   validateDatasetItems,
   type RedditScrapeArgs,
@@ -92,8 +94,38 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         outputSchema: {
           count: z.number().describe("Number of items returned."),
           items: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Raw dataset items from the Apify Actor run."),
+            .array(
+              z.object({
+                id: z.string().nullable().describe("Actor item id, if any."),
+                type: z
+                  .enum(["post", "comment", "community", "user"])
+                  .nullable()
+                  .describe("Item kind."),
+                title: z.string().nullable().describe("Post title."),
+                body: z.string().nullable().describe("Post selftext or comment body."),
+                author: z.string().nullable().describe("Author username."),
+                subreddit: z.string().nullable().describe("Community name."),
+                url: z.string().nullable().describe("Canonical URL for the item."),
+                permalink: z.string().nullable().describe("Reddit permalink path, when derivable."),
+                created_at: z.string().nullable().describe("Creation time (ISO8601)."),
+                score: z.number().nullable().describe("Net upvotes; null when the Actor omits it."),
+                num_comments: z
+                  .number()
+                  .nullable()
+                  .describe("Comment count; null when the Actor omits it."),
+                upvote_ratio: z
+                  .number()
+                  .nullable()
+                  .describe("Upvote ratio 0..1; null when the Actor omits it."),
+                over_18: z.boolean().nullable().describe("NSFW flag; null when the Actor omits it."),
+                num_crossposts: z
+                  .number()
+                  .nullable()
+                  .describe("Crosspost count; null when the Actor omits it."),
+                raw: z.record(z.string(), z.any()).describe("The untouched Actor dataset item."),
+              }),
+            )
+            .describe("Normalized dataset items (raw Actor item preserved per item)."),
         },
       },
       async (args: RedditScrapeArgs) => {
@@ -143,10 +175,13 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const parsed = validateDatasetItems(json);
         if (!parsed.ok) return textError(parsed.error);
 
-        const structuredContent = { count: parsed.items.length, items: parsed.items };
+        // Normalize onto the stable, actor-agnostic shape so callers never
+        // depend on the configured Actor's raw field names.
+        const items = normalizeItems(parsed.items, actorId);
+        const structuredContent = { count: items.length, items };
         return {
           content: [
-            { type: "text" as const, text: `Reddit scrape returned ${parsed.items.length} item(s)` },
+            { type: "text" as const, text: `Reddit scrape returned ${items.length} item(s)` },
           ],
           structuredContent,
         };
