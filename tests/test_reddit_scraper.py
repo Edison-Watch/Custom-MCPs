@@ -272,7 +272,7 @@ class TestRedditScrape(TestTemplate):
         # `+00:00`) so Python matches the Worker's Date.toISOString() exactly.
         raw = {"kind": "t3", "created_utc": 1686288195}
         item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.created_at == "2023-06-09T05:23:15Z"
+        assert item.created_at == "2023-06-09T05:23:15.000Z"
 
     def test_scrape_normalizes_items_end_to_end(self):
         def handler(_request: httpx.Request) -> httpx.Response:

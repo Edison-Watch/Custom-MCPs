@@ -167,9 +167,14 @@ def _as_iso(value: Any) -> str | None:
     if isinstance(value, (int, float)):
         if not math.isfinite(value):
             return None
-        # Emit the canonical `Z` suffix (not `+00:00`) so this matches the
-        # Worker's Date.toISOString() output byte for byte.
-        return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
+        # Emit the canonical `Z` suffix with millisecond precision so this
+        # matches the Worker's Date.toISOString() output byte for byte (it
+        # always emits exactly three fractional digits).
+        return (
+            datetime.fromtimestamp(value, tz=UTC)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
     if isinstance(value, str):
         return value.strip() or None
     return None
