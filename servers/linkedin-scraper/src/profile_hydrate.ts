@@ -18,7 +18,7 @@
  * one call may request - each profile is a billed item.
  */
 
-import { validStartUrls } from "./linkedin";
+import { validLinkedinUrls } from "./linkedin";
 
 export const DEFAULT_PROFILE_HYDRATE_ACTOR_ID = "harvestapi~linkedin-profile-scraper";
 
@@ -42,9 +42,13 @@ export interface LinkedinProfileArgs {
   profile_urls?: string[];
 }
 
-/** Valid LinkedIn profile URLs from the request, trimmed and de-duplicated. */
+/**
+ * Valid LinkedIn member-profile URLs from the request (`/in/<public-id>` routes
+ * only), trimmed and de-duplicated. A company, school, feed, or search URL is
+ * dropped rather than sent to the paid profile-scraper Actor.
+ */
 export function profileUrlTargets(args: LinkedinProfileArgs): string[] {
-  return validStartUrls(args.profile_urls);
+  return validLinkedinUrls(args.profile_urls, "in");
 }
 
 /** A request needs at least one valid LinkedIn profile URL. */

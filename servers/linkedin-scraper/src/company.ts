@@ -12,7 +12,7 @@
  * one call may request - each company is a billed item.
  */
 
-import { normalizeStringList, validStartUrls } from "./linkedin";
+import { normalizeStringList, validLinkedinUrls } from "./linkedin";
 
 export const DEFAULT_COMPANY_ACTOR_ID = "harvestapi~linkedin-company";
 
@@ -35,10 +35,14 @@ export interface CompanyTargets {
   names: string[];
 }
 
-/** Resolve the caller's args into the Actor's two targeting fields. */
+/**
+ * Resolve the caller's args into the Actor's two targeting fields. Company URLs
+ * are restricted to `/company/<slug>` routes; a member-profile or other LinkedIn
+ * URL is dropped rather than sent to the company Actor as an invalid target.
+ */
 export function companyTargets(args: LinkedinCompanyArgs): CompanyTargets {
   return {
-    urls: validStartUrls(args.company_urls),
+    urls: validLinkedinUrls(args.company_urls, "company"),
     names: normalizeStringList(args.names),
   };
 }

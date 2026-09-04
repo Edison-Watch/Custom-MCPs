@@ -7,6 +7,7 @@ import {
   normalizeSearch,
   normalizeStringList,
   runSyncUrl,
+  validLinkedinUrls,
   validStartUrls,
   validateDatasetItems,
 } from "../../src/linkedin";
@@ -45,6 +46,21 @@ describe("isLinkedinUrl / validStartUrls", () => {
       ]),
     ).toEqual(["https://linkedin.com/in/a", "https://www.linkedin.com/company/b"]);
     expect(validStartUrls(undefined)).toEqual([]);
+  });
+});
+
+describe("validLinkedinUrls", () => {
+  test("narrows to URLs whose first path segment matches (in / company)", () => {
+    const urls = [
+      "https://www.linkedin.com/in/williamhgates",
+      "https://www.linkedin.com/company/openai",
+      "https://uk.linkedin.com/school/oxford",
+      "https://evil.com/in/x",
+    ];
+    expect(validLinkedinUrls(urls, "in")).toEqual(["https://www.linkedin.com/in/williamhgates"]);
+    expect(validLinkedinUrls(urls, "company")).toEqual(["https://www.linkedin.com/company/openai"]);
+    expect(validLinkedinUrls(urls, "company")).not.toContain("https://evil.com/in/x");
+    expect(validLinkedinUrls(undefined, "in")).toEqual([]);
   });
 });
 

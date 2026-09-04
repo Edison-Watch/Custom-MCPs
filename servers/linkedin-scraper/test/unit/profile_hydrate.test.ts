@@ -10,12 +10,13 @@ import {
 } from "../../src/profile_hydrate";
 
 describe("profileUrlTargets", () => {
-  test("keeps valid LinkedIn URLs, drops off-domain, trims and de-dupes in order", () => {
+  test("keeps only /in/ profile URLs, drops company/off-domain, trims and de-dupes in order", () => {
     expect(
       profileUrlTargets({
         profile_urls: [
           " https://www.linkedin.com/in/williamhgates ",
           "https://www.linkedin.com/in/williamhgates",
+          "https://www.linkedin.com/company/openai",
           "https://evil.com/in/x",
           "https://linkedin.com/in/satyanadella",
         ],
@@ -26,9 +27,11 @@ describe("profileUrlTargets", () => {
 });
 
 describe("hasProfileTarget", () => {
-  test("true only when at least one valid profile URL is present", () => {
+  test("true only when at least one valid /in/ profile URL is present", () => {
     expect(hasProfileTarget({ profile_urls: ["https://www.linkedin.com/in/williamhgates"] })).toBe(true);
     expect(hasProfileTarget({ profile_urls: ["https://evil.com/in/x"] })).toBe(false);
+    // A valid LinkedIn URL that is not a member profile (a company page) is not a target.
+    expect(hasProfileTarget({ profile_urls: ["https://www.linkedin.com/company/openai"] })).toBe(false);
     expect(hasProfileTarget({ profile_urls: ["   "] })).toBe(false);
     expect(hasProfileTarget({})).toBe(false);
   });

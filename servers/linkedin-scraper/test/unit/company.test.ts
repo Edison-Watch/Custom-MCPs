@@ -9,9 +9,13 @@ import {
 } from "../../src/company";
 
 describe("companyTargets", () => {
-  test("splits valid company URLs from names, dropping off-domain URLs and blank names", () => {
+  test("keeps only /company/ URLs, dropping member-profile, off-domain, and blank names", () => {
     const t = companyTargets({
-      company_urls: ["https://www.linkedin.com/company/openai", "https://evil.com/x"],
+      company_urls: [
+        "https://www.linkedin.com/company/openai",
+        "https://www.linkedin.com/in/alice",
+        "https://evil.com/x",
+      ],
       names: [" Anthropic ", "  "],
     });
     expect(t.urls).toEqual(["https://www.linkedin.com/company/openai"]);
@@ -39,8 +43,17 @@ describe("companyTargetCount", () => {
     ).toBe(3);
     expect(companyTargetCount({})).toBe(0);
     // The per-field zod cap is MAX_COMPANY_TARGETS each, so a combined request
-    // can exceed the per-call limit - the tool re-checks this count.
-    expect(MAX_COMPANY_TARGETS).toBeGreaterThan(0);
+    // can exceed the per-call limit - the tool re-checks this count. Exercise
+    // that overflow explicitly: MAX_COMPANY_TARGETS URLs + 1 name > the cap.
+    expect(
+      companyTargetCount({
+        company_urls: Array.from(
+          { length: MAX_COMPANY_TARGETS },
+          (_, i) => `https://linkedin.com/company/c${i}`,
+        ),
+        names: ["extra"],
+      }),
+    ).toBe(MAX_COMPANY_TARGETS + 1);
   });
 });
 

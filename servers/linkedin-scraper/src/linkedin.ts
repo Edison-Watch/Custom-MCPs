@@ -108,6 +108,26 @@ export function validStartUrls(urls: string[] | undefined): string[] {
   return out;
 }
 
+/** The lowercased first non-empty path segment of a URL (e.g. "in", "company"), or "". */
+function firstPathSegment(url: string): string {
+  try {
+    return (new URL(url).pathname.split("/").filter(Boolean)[0] ?? "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * {@link validStartUrls} narrowed to LinkedIn URLs whose first path segment is
+ * `segment` (e.g. "in" for member profiles, "company" for company pages). Keeps
+ * a company/feed/search URL from being sent to a profile-only Actor - or vice
+ * versa - which would waste or invalidate a paid run.
+ */
+export function validLinkedinUrls(urls: string[] | undefined, segment: string): string[] {
+  const want = segment.toLowerCase();
+  return validStartUrls(urls).filter((url) => firstPathSegment(url) === want);
+}
+
 /** A query needs at least one target: a real search term or one valid LinkedIn URL. */
 export function hasTarget(args: LinkedinScrapeArgs): boolean {
   return Boolean(normalizeSearch(args.search)) || validStartUrls(args.start_urls).length > 0;

@@ -57,7 +57,7 @@ and its MongoDB/segmentation knobs are intentionally not exposed.
 
 | field | type | notes |
 |-------|------|-------|
-| `profile_urls` | string[] | LinkedIn profile URLs to hydrate. Off-domain URLs are dropped. |
+| `profile_urls` | string[] | LinkedIn member-profile URLs (`/in/<id>`) to hydrate. Non-profile URLs (company pages, feeds, off-domain) are dropped. |
 
 At least one valid LinkedIn profile URL is required; at most `MAX_PROFILE_URLS`
 (50) profiles per call. This is the "I already have the URL" tool - use
@@ -69,7 +69,7 @@ exposed; only the no-email mode runs, so no personal emails are scraped.
 
 | field | type | notes |
 |-------|------|-------|
-| `company_urls` | string[] | LinkedIn company URLs. Off-domain URLs are dropped. |
+| `company_urls` | string[] | LinkedIn company URLs (`/company/<slug>`). Non-company URLs (member profiles, off-domain) are dropped. |
 | `names` | string[] | Company names to search. |
 
 At least one valid company URL or name is required; at most

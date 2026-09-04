@@ -84,7 +84,8 @@ type ActorRun =
 
 /**
  * Run an Apify Actor's synchronous run-and-fetch endpoint and validate the
- * dataset. Shared by all three tools; the caller has already checked APIFY_TOKEN.
+ * dataset. Shared by every tool; this is the single APIFY_TOKEN guard, so a
+ * misconfigured deploy fails closed here rather than in each handler.
  */
 async function runActor(env: Env, actorId: string, body: Record<string, unknown>): Promise<ActorRun> {
   const token = env.APIFY_TOKEN?.trim();
@@ -175,15 +176,11 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
         },
       },
       async (args: LinkedinScrapeArgs) => {
-        // Validate the caller's request before checking server config, so a bad
-        // call gets an actionable error regardless of deploy state.
+        // Validate the caller's request first, so a bad call gets an actionable
+        // error before we attempt a run (runActor enforces server config).
         if (!hasTarget(args)) {
           return textError("provide either 'search' or at least one valid LinkedIn URL in 'start_urls'");
         }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
-
         const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
         const run = await runActor(this.env, actorId, buildActorInput(args));
         if (!run.ok) return textError(run.message);
@@ -218,9 +215,10 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
             .number()
             .int()
             .min(1)
-            .max(MAX_PROFILE_MAX_ITEMS)
             .optional()
-            .describe(`Maximum profiles to return (default: 10, max: ${MAX_PROFILE_MAX_ITEMS}).`),
+            .describe(
+              `Maximum profiles to return (default: 10; values above ${MAX_PROFILE_MAX_ITEMS} are clamped down to it).`,
+            ),
           locations: z.array(z.string().max(100)).max(50).optional().describe("Filter by location."),
           current_companies: z
             .array(z.string().max(200))
@@ -267,10 +265,6 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
             "provide a 'search' query or at least one filter (job title, company, location, school, name)",
           );
         }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
-
         const actorId = this.env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
         const run = await runActor(this.env, actorId, buildProfileSearchInput(args));
         if (!run.ok) return textError(run.message);
@@ -316,10 +310,6 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
         if (profileTargetCount(args) > MAX_PROFILE_URLS) {
           return textError(`too many targets: at most ${MAX_PROFILE_URLS} profiles per call`);
         }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
-
         const actorId = this.env.APIFY_PROFILE_HYDRATE_ACTOR_ID?.trim() || DEFAULT_PROFILE_HYDRATE_ACTOR_ID;
         const run = await runActor(this.env, actorId, buildProfileInput(args));
         if (!run.ok) return textError(run.message);
@@ -371,10 +361,6 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
         if (companyTargetCount(args) > MAX_COMPANY_TARGETS) {
           return textError(`too many targets: at most ${MAX_COMPANY_TARGETS} companies per call`);
         }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
-
         const actorId = this.env.APIFY_COMPANY_ACTOR_ID?.trim() || DEFAULT_COMPANY_ACTOR_ID;
         const run = await runActor(this.env, actorId, buildCompanyInput(args));
         if (!run.ok) return textError(run.message);
