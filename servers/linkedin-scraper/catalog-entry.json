@@ -1,7 +1,7 @@
 {
   "id": "linkedin-scraper",
   "displayName": "LinkedIn Scraper",
-  "description": "Search and scrape public LinkedIn posts. Query by keyword (the same query you would type in the LinkedIn search bar) or point it at LinkedIn profile/company URLs to fetch their posts; returns structured results. No LinkedIn account required.",
+  "description": "Search and scrape public LinkedIn data: posts (by keyword or profile/company URL), people (by query and filters like job title, company, location), full profiles (by profile URL), and company pages (headcount, industry, activity). Returns structured results. No LinkedIn account required.",
   "author": "SealGate",
   "edison_hosted": true,
   "category": "data",
@@ -11,6 +11,9 @@
     "web-scraping",
     "search",
     "posts",
+    "profiles",
+    "people",
+    "companies",
     "apify"
   ],
   "url": "https://linkedin.sealgate.ai/mcp",
@@ -18,6 +21,24 @@
   "icon": "linkedin-scraper.svg",
   "tools_configurations": {
     "linkedin_scrape": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "linkedin_profile_search": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "linkedin_profile": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "linkedin_company": {
       "write_operation": false,
       "read_private_data": false,
       "read_untrusted_public_data": true,

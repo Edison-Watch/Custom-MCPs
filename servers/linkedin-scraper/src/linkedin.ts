@@ -74,6 +74,27 @@ export function isLinkedinUrl(candidate: string): boolean {
   return LINKEDIN_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
 }
 
+/**
+ * Trim a free-text string list, drop blank/whitespace-only entries, and
+ * de-duplicate case-insensitively while preserving first-seen order. Shared by
+ * the profile-search and company tools to sanitize their filter arrays before
+ * they reach a paid Actor run.
+ */
+export function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values ?? []) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 /** Keep only well-formed LinkedIn `start_urls`, trimmed and de-duplicated in order. */
 export function validStartUrls(urls: string[] | undefined): string[] {
   const seen = new Set<string>();
@@ -85,6 +106,26 @@ export function validStartUrls(urls: string[] | undefined): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+/** The lowercased first non-empty path segment of a URL (e.g. "in", "company"), or "". */
+function firstPathSegment(url: string): string {
+  try {
+    return (new URL(url).pathname.split("/").filter(Boolean)[0] ?? "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * {@link validStartUrls} narrowed to LinkedIn URLs whose first path segment is
+ * `segment` (e.g. "in" for member profiles, "company" for company pages). Keeps
+ * a company/feed/search URL from being sent to a profile-only Actor - or vice
+ * versa - which would waste or invalidate a paid run.
+ */
+export function validLinkedinUrls(urls: string[] | undefined, segment: string): string[] {
+  const want = segment.toLowerCase();
+  return validStartUrls(urls).filter((url) => firstPathSegment(url) === want);
 }
 
 /** A query needs at least one target: a real search term or one valid LinkedIn URL. */
