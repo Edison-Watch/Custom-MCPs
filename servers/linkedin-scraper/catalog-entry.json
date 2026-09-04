@@ -1,7 +1,7 @@
 {
   "id": "linkedin-scraper",
   "displayName": "LinkedIn Scraper",
-  "description": "Search and scrape public LinkedIn data: posts (by keyword or profile/company URL), people (by query and filters like job title, company, location), and company pages (headcount, industry, activity). Returns structured results. No LinkedIn account required.",
+  "description": "Search and scrape public LinkedIn data: posts (by keyword or profile/company URL), people (by query and filters like job title, company, location), full profiles (by profile URL), and company pages (headcount, industry, activity). Returns structured results. No LinkedIn account required.",
   "author": "SealGate",
   "edison_hosted": true,
   "category": "data",
@@ -27,6 +27,12 @@
       "acl": "PUBLIC"
     },
     "linkedin_profile_search": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "linkedin_profile": {
       "write_operation": false,
       "read_private_data": false,
       "read_untrusted_public_data": true,

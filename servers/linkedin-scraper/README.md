@@ -1,12 +1,13 @@
 # `linkedin` - Edison first-party MCP server
 
-Search and scrape public LinkedIn data. Three tools over one Worker, each
+Search and scrape public LinkedIn data. Four tools over one Worker, each
 wrapping a public HarvestAPI Apify Actor (no LinkedIn cookies or account):
 
 | tool | scrapes | backing Actor |
 |------|---------|---------------|
 | `linkedin_scrape` | posts (by keyword or profile/company URL) | [`harvestapi/linkedin-post-search`](https://apify.com/harvestapi/linkedin-post-search) |
-| `linkedin_profile_search` | people (by query + structured filters) | [`harvestapi/linkedin-profile-search`](https://apify.com/harvestapi/linkedin-profile-search) |
+| `linkedin_profile_search` | people (find by query + structured filters) | [`harvestapi/linkedin-profile-search`](https://apify.com/harvestapi/linkedin-profile-search) |
+| `linkedin_profile` | full profiles (hydrate known profile URLs) | [`harvestapi/linkedin-profile-scraper`](https://apify.com/harvestapi/linkedin-profile-scraper) |
 | `linkedin_company` | company pages (headcount, industry, activity) | [`harvestapi/linkedin-company`](https://apify.com/harvestapi/linkedin-company) |
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
@@ -51,6 +52,18 @@ At least a `search` query or one filter list is required (a lone boolean
 refinement is rejected, since it would ask the Actor to scrape the whole
 network). The Actor's opaque `*-Id` filters (industry, seniority, function...)
 and its MongoDB/segmentation knobs are intentionally not exposed.
+
+## `linkedin_profile` input (hydrate known profiles)
+
+| field | type | notes |
+|-------|------|-------|
+| `profile_urls` | string[] | LinkedIn profile URLs to hydrate. Off-domain URLs are dropped. |
+
+At least one valid LinkedIn profile URL is required; at most `MAX_PROFILE_URLS`
+(50) profiles per call. This is the "I already have the URL" tool - use
+`linkedin_profile_search` to *find* people from a query. The Actor's
+email-search mode ("Profile details + email search") is deliberately not
+exposed; only the no-email mode runs, so no personal emails are scraped.
 
 ## `linkedin_company` input (companies)
 

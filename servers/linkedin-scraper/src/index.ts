@@ -1,12 +1,13 @@
 /**
  * linkedin - an Edison first-party MCP server for LinkedIn.
  *
- * Three tools over the same Worker, each wrapping a public HarvestAPI Apify
+ * Four tools over the same Worker, each wrapping a public HarvestAPI Apify
  * Actor via its synchronous `run-sync-get-dataset-items` endpoint (one blocking
  * call, no polling). All scrape only public LinkedIn data and need no cookies or
  * account:
  *   - `linkedin_scrape`         - posts, via `harvestapi/linkedin-post-search` (linkedin.ts)
- *   - `linkedin_profile_search` - people, via `harvestapi/linkedin-profile-search` (profile.ts)
+ *   - `linkedin_profile_search` - find people, via `harvestapi/linkedin-profile-search` (profile.ts)
+ *   - `linkedin_profile`        - hydrate a known profile URL, via `harvestapi/linkedin-profile-scraper` (profile_hydrate.ts)
  *   - `linkedin_company`        - companies, via `harvestapi/linkedin-company` (company.ts)
  * The Worker holds a single first-party Apify token (APIFY_TOKEN, a secret) and
  * authenticates *callers* separately via the fleet auth contract; no per-user
@@ -45,6 +46,14 @@ import {
   hasProfileSearchTarget,
   type LinkedinProfileSearchArgs,
 } from "./profile";
+import {
+  DEFAULT_PROFILE_HYDRATE_ACTOR_ID,
+  MAX_PROFILE_URLS,
+  buildProfileInput,
+  hasProfileTarget,
+  profileTargetCount,
+  type LinkedinProfileArgs,
+} from "./profile_hydrate";
 
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
@@ -54,6 +63,7 @@ export interface Env {
   // Optional overrides (public config).
   APIFY_ACTOR_ID?: string;
   APIFY_PROFILE_ACTOR_ID?: string;
+  APIFY_PROFILE_HYDRATE_ACTOR_ID?: string;
   APIFY_COMPANY_ACTOR_ID?: string;
   APIFY_BASE_URL?: string;
   // Fleet auth (see ./auth, ./jwt).
@@ -123,6 +133,7 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
   async init(): Promise<void> {
     this.registerScrapeTool();
     this.registerProfileSearchTool();
+    this.registerProfileTool();
     this.registerCompanyTool();
   }
 
@@ -267,6 +278,55 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
         return {
           content: [
             { type: "text" as const, text: `LinkedIn profile search returned ${run.items.length} profile(s)` },
+          ],
+          structuredContent: { count: run.items.length, profiles: run.items },
+        };
+      },
+    );
+  }
+
+  private registerProfileTool(): void {
+    this.server.registerTool(
+      "linkedin_profile",
+      {
+        description:
+          "Hydrate KNOWN LinkedIn profile URLs into full public profiles: name, headline, current " +
+          "position, location, education, skills, follower counts... Provide `profile_urls` (LinkedIn " +
+          "profile URLs you already have, e.g. from a post author or a search result). Returns one " +
+          "profile object per URL. Use `linkedin_profile_search` to FIND people from a query instead.",
+        inputSchema: {
+          profile_urls: z
+            .array(z.string().max(2048))
+            .max(MAX_PROFILE_URLS)
+            .describe('LinkedIn profile URLs to scrape, e.g. ["https://www.linkedin.com/in/williamhgates"].'),
+        },
+        outputSchema: {
+          count: z.number().describe("Number of profiles returned."),
+          profiles: z
+            .array(z.record(z.string(), z.any()))
+            .describe("Hydrated LinkedIn people-profile objects from the Apify Actor run."),
+        },
+      },
+      async (args: LinkedinProfileArgs) => {
+        if (!hasProfileTarget(args)) {
+          return textError("provide at least one valid LinkedIn profile URL in 'profile_urls'");
+        }
+        // Combined cap (the per-field schema limit and this check agree, but keep
+        // it explicit so a future schema loosening still fails closed).
+        if (profileTargetCount(args) > MAX_PROFILE_URLS) {
+          return textError(`too many targets: at most ${MAX_PROFILE_URLS} profiles per call`);
+        }
+        if (!this.env.APIFY_TOKEN?.trim()) {
+          return textError("server misconfigured: APIFY_TOKEN not set");
+        }
+
+        const actorId = this.env.APIFY_PROFILE_HYDRATE_ACTOR_ID?.trim() || DEFAULT_PROFILE_HYDRATE_ACTOR_ID;
+        const run = await runActor(this.env, actorId, buildProfileInput(args));
+        if (!run.ok) return textError(run.message);
+
+        return {
+          content: [
+            { type: "text" as const, text: `LinkedIn profile lookup returned ${run.items.length} profile(s)` },
           ],
           structuredContent: { count: run.items.length, profiles: run.items },
         };

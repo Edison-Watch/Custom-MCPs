@@ -165,6 +165,35 @@ describe("linkedin_profile_search tool", () => {
   });
 });
 
+describe("linkedin_profile tool", () => {
+  let sessionId: string;
+  beforeAll(async () => {
+    sessionId = await initSession();
+  });
+
+  // Same rationale: no APIFY_TOKEN in the test env, so the tool fails closed at
+  // the misconfig guard (pure logic is covered by test/unit/profile_hydrate.test.ts).
+  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+    const result = await callTool(sessionId, "linkedin_profile", {
+      profile_urls: ["https://www.linkedin.com/in/williamhgates"],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+  });
+
+  it("rejects a call with no profile_urls", async () => {
+    const result = await callTool(sessionId, "linkedin_profile", {});
+    expect(result.isError).toBe(true);
+  });
+
+  it("rejects a profile_urls entry that is not a LinkedIn URL", async () => {
+    const result = await callTool(sessionId, "linkedin_profile", {
+      profile_urls: ["https://evil.com/in/x"],
+    });
+    expect(result.isError).toBe(true);
+  });
+});
+
 describe("linkedin_company tool", () => {
   let sessionId: string;
   beforeAll(async () => {
