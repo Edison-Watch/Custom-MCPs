@@ -210,6 +210,10 @@ class Config(BaseSettings):
 
     # Apify (Reddit scraper and any future Actor-backed services)
     APIFY_API_KEY: str | None = None
+    # Optional override of the Reddit Actor slug (tilde form). When unset the
+    # service uses its default; a mapped Actor id makes engagement counts flow
+    # through with no code change (see services/reddit_svc.py).
+    APIFY_ACTOR_ID: str | None = None
 
     # Agentic payments (observability only - the protocol reads these
     # via os.getenv() using the env var name from payments.yaml config,

@@ -136,3 +136,43 @@ describe("reddit_scrape tool", () => {
     expect(result.isError).toBe(true);
   });
 });
+
+describe("reddit_scrape_start tool", () => {
+  let sessionId: string;
+  beforeAll(async () => {
+    sessionId = await initSession();
+  });
+
+  // No APIFY_TOKEN in the test env, so the async start also fails closed at the
+  // misconfig guard - exercising registration + guard over the full transport
+  // with no live Apify call (the run-parse logic is covered by the unit tests).
+  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+    const result = await callTool(sessionId, "reddit_scrape_start", { search: "rust" });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+  });
+
+  it("rejects a call with no search and no start_urls", async () => {
+    const result = await callTool(sessionId, "reddit_scrape_start", {});
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("reddit_scrape_fetch tool", () => {
+  let sessionId: string;
+  beforeAll(async () => {
+    sessionId = await initSession();
+  });
+
+  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+    const result = await callTool(sessionId, "reddit_scrape_fetch", { run_id: "RUN123" });
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+  });
+
+  it("rejects a call with no run_id", async () => {
+    const result = await callTool(sessionId, "reddit_scrape_fetch", {});
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain("run_id");
+  });
+});
