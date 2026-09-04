@@ -79,9 +79,14 @@ export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown>
   return actorInput;
 }
 
+/** Strip any trailing slashes from the API base so path joins never double up. */
+function normalizeBase(base: string): string {
+  return base.replace(/\/+$/, "");
+}
+
 /** The synchronous run-and-fetch-dataset endpoint for an Actor. */
 export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
-  return `${base}/acts/${actorId}/run-sync-get-dataset-items`;
+  return `${normalizeBase(base)}/acts/${actorId}/run-sync-get-dataset-items`;
 }
 
 // --- Async run + poll -------------------------------------------------------
@@ -94,17 +99,21 @@ export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
 
 /** Non-blocking run-enqueue endpoint: POST returns a run without waiting on it. */
 export function runsUrl(actorId: string, base: string = APIFY_BASE): string {
-  return `${base}/acts/${actorId}/runs`;
+  return `${normalizeBase(base)}/acts/${actorId}/runs`;
 }
 
-/** Run-status endpoint: GET returns the run's `{ status, defaultDatasetId }`. */
+/**
+ * Run-status endpoint: GET returns the run's `{ status, defaultDatasetId }`.
+ * `runId` is caller-supplied, so encode it as a single path segment - a value
+ * carrying `/` or `?` can never escape into the path or query.
+ */
 export function runStatusUrl(runId: string, base: string = APIFY_BASE): string {
-  return `${base}/actor-runs/${runId}`;
+  return `${normalizeBase(base)}/actor-runs/${encodeURIComponent(runId)}`;
 }
 
-/** Dataset items endpoint for a finished run. */
+/** Dataset items endpoint for a finished run; `datasetId` is encoded per segment. */
 export function datasetItemsUrl(datasetId: string, base: string = APIFY_BASE): string {
-  return `${base}/datasets/${datasetId}/items`;
+  return `${normalizeBase(base)}/datasets/${encodeURIComponent(datasetId)}/items`;
 }
 
 /**

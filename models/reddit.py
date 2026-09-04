@@ -150,6 +150,8 @@ class RedditScrapeFetchInput(BaseModel):
     """Poll input for ``reddit_scrape_fetch``: the run id from a prior start."""
 
     run_id: str = Field(
+        min_length=1,
+        pattern=r"^[A-Za-z0-9_-]+$",
         description="Apify actor-run id returned by reddit_scrape_start.",
     )
 

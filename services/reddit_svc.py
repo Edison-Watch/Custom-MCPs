@@ -72,6 +72,11 @@ def _actor_id() -> str:
     return (global_config.APIFY_ACTOR_ID or "").strip() or _DEFAULT_ACTOR_ID
 
 
+def _apify_base() -> str:
+    """API base with any trailing slash stripped so path joins never double up."""
+    return _APIFY_BASE.rstrip("/")
+
+
 class ApifyError(RuntimeError):
     """Raised when the Apify API is unreachable, unauthorized, or errors out."""
 
@@ -143,7 +148,7 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
     token = _require_token()
 
     actor_id = _actor_id()
-    url = f"{_APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
+    url = f"{_apify_base()}/acts/{actor_id}/run-sync-get-dataset-items"
     params = {"timeout": _RUN_TIMEOUT_S, "format": "json"}
     # Bearer header rather than a ?token= query param: Apify recommends it, and
     # it keeps the secret out of URLs that proxies and servers may log.
@@ -217,11 +222,14 @@ def _str_field(value: Any) -> str | None:
     ),
     input_model=RedditScrapeInput,
     output_model=RedditScrapeStartResult,
+    # Enqueues a paid Apify run: a REST retry must replay the first run, not
+    # start a second, so the API transport enforces an Idempotency-Key.
+    mutating=True,
 )
 def reddit_scrape_start(input: RedditScrapeInput) -> RedditScrapeStartResult:
     token = _require_token()
     actor_id = _actor_id()
-    url = f"{_APIFY_BASE}/acts/{actor_id}/runs"
+    url = f"{_apify_base()}/acts/{actor_id}/runs"
     headers = {"Authorization": f"Bearer {token}"}
     actor_input = _build_actor_input(input)
 
@@ -262,11 +270,15 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
     try:
         with httpx.Client(timeout=_FETCH_HTTP_TIMEOUT_S) as client:
             run_resp = client.get(
-                f"{_APIFY_BASE}/actor-runs/{input.run_id}", headers=headers
+                f"{_apify_base()}/actor-runs/{input.run_id}", headers=headers
             )
             run_resp.raise_for_status()
             data = _run_data(run_resp)
-            status = _str_field(data.get("status")) or "UNKNOWN"
+            status = _str_field(data.get("status"))
+            # A run envelope with no status is malformed, not a non-terminal
+            # state; reject it the same way the start path validates its fields.
+            if not status:
+                raise ApifyError("Apify run response is missing status")
 
             if status == _SUCCEEDED:
                 dataset_id = _str_field(data.get("defaultDatasetId"))
@@ -275,7 +287,7 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
                         "Apify run SUCCEEDED but returned no defaultDatasetId"
                     )
                 items_resp = client.get(
-                    f"{_APIFY_BASE}/datasets/{dataset_id}/items",
+                    f"{_apify_base()}/datasets/{dataset_id}/items",
                     params={"format": "json", "clean": "true"},
                     headers=headers,
                 )

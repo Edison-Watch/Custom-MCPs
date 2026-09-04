@@ -201,6 +201,13 @@ class TestRedditScrape(TestTemplate):
         assert entry.mutating is False
         assert reddit_svc  # module imported
 
+    def test_scrape_start_is_mutating(self):
+        # reddit_scrape_start enqueues a paid Apify run, so the API transport
+        # must enforce an Idempotency-Key: it is registered as mutating.
+        discover_services()
+        entry = next(e for e in get_registry() if e.name == "reddit_scrape_start")
+        assert entry.mutating is True
+
     def test_lite_post_normalizes_engagement_to_none(self):
         # reddit-scraper-lite omits engagement counts -> nullable fields stay
         # None (never faked as 0), while identity fields still map through.
@@ -245,6 +252,27 @@ class TestRedditScrape(TestTemplate):
         assert item.num_comments == 4
         assert item.created_at is not None
         assert item.created_at.startswith("2023-06-09T")
+
+    def test_non_finite_numbers_normalize_to_none(self):
+        # NaN/Infinity have no int/float form we can hand back; they normalize
+        # to None (matching the TS normalizer) instead of aborting the map.
+        raw = {
+            "kind": "t3",
+            "score": float("nan"),
+            "num_comments": float("inf"),
+            "upvote_ratio": float("nan"),
+        }
+        item = normalize_item(raw, "someone~custom-reddit-actor")
+        assert item.score is None
+        assert item.num_comments is None
+        assert item.upvote_ratio is None
+
+    def test_numeric_created_utc_uses_canonical_z_suffix(self):
+        # A numeric epoch becomes an ISO8601 string with a `Z` suffix (not
+        # `+00:00`) so Python matches the Worker's Date.toISOString() exactly.
+        raw = {"kind": "t3", "created_utc": 1686288195}
+        item = normalize_item(raw, "someone~custom-reddit-actor")
+        assert item.created_at == "2023-06-09T05:23:15Z"
 
     def test_scrape_normalizes_items_end_to_end(self):
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -375,3 +403,42 @@ class TestRedditScrapeAsync(TestTemplate):
     def test_fetch_missing_token_raises(self):
         with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
             reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+    def test_fetch_missing_status_raises(self):
+        # A run envelope with no status is malformed, not a silent non-terminal:
+        # it must raise rather than flow on as "UNKNOWN" with empty items.
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": {"defaultDatasetId": "DS123"}})
+
+        with (
+            _token("test-token"),
+            _mock_http(handler),
+            pytest.raises(ApifyError, match="missing status"),
+        ):
+            reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+    def test_fetch_input_rejects_path_injection_run_id(self):
+        # run_id is interpolated into the actor-runs path, so an id carrying
+        # path/query syntax (or an empty id) is rejected at the model boundary.
+        for bad in ("", "../../datasets", "RUN/../x", "RUN?token=x", "a b"):
+            with pytest.raises(ValueError):
+                RedditScrapeFetchInput(run_id=bad)
+        # A well-formed opaque id passes.
+        assert RedditScrapeFetchInput(run_id="HG7ML7M8z78Yc-AP_EB").run_id
+
+    def test_fetch_trailing_slash_base_does_not_double_slash(self):
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            return httpx.Response(200, json={"data": {"status": "RUNNING"}})
+
+        with (
+            _token("test-token"),
+            patch.object(reddit_svc, "_APIFY_BASE", "https://api.apify.com/v2/"),
+            _mock_http(handler),
+        ):
+            reddit_scrape_fetch(RedditScrapeFetchInput(run_id="RUN123"))
+
+        assert seen["path"] == "/v2/actor-runs/RUN123"
+        assert "//actor-runs" not in seen["path"]

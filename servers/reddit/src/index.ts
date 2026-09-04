@@ -24,6 +24,7 @@ import {
   DEFAULT_ACTOR_ID,
   RUN_TIMEOUT_S,
   SUCCEEDED,
+  TERMINAL_FAILURE,
   buildActorInput,
   datasetItemsUrl,
   hasTarget,
@@ -267,7 +268,14 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           "items are empty while it is still running and populated once it has SUCCEEDED. Poll again " +
           "on a non-terminal status.",
         inputSchema: {
-          run_id: z.string().describe("Apify actor-run id returned by reddit_scrape_start."),
+          // Opaque Apify run id: reject anything with path/query syntax so a
+          // caller value can never reshape the actor-runs URL (mirrors the
+          // Python RedditScrapeFetchInput.run_id guard).
+          run_id: z
+            .string()
+            .min(1)
+            .regex(/^[A-Za-z0-9_-]+$/)
+            .describe("Apify actor-run id returned by reddit_scrape_start."),
         },
         outputSchema: {
           status: z.string().describe("Apify run status at poll time."),
@@ -316,11 +324,15 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const status = parseRunStatus(runJson);
         if (!status.ok) return textError(status.error);
 
-        // Non-terminal or terminal-failure: hand back the status with no items
-        // so the caller keeps polling or stops, keying off the status string.
+        // Non-terminal or terminal-failure: hand back the status with no items.
+        // Split the two so the message states intent - a terminal failure means
+        // stop polling, a non-terminal status means poll again.
         if (status.status !== SUCCEEDED) {
+          const text = TERMINAL_FAILURE.has(status.status)
+            ? `Run ${runId} ended without items: ${status.status}`
+            : `Run ${runId} status: ${status.status} - poll again`;
           return {
-            content: [{ type: "text" as const, text: `Run ${runId} status: ${status.status}` }],
+            content: [{ type: "text" as const, text }],
             structuredContent: { status: status.status, count: 0, items: [] },
           };
         }

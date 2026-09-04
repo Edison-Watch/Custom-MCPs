@@ -194,6 +194,24 @@ describe("normalizeItem", () => {
     const item = normalizeItem({ score: true }, "someone~custom-reddit-actor");
     expect(item.score).toBeNull();
   });
+
+  test("non-finite numbers normalize to null (parity with the Python normalizer)", () => {
+    const item = normalizeItem(
+      { kind: "t3", score: NaN, num_comments: Infinity, upvote_ratio: NaN },
+      "someone~custom-reddit-actor",
+    );
+    expect(item.score).toBeNull();
+    expect(item.num_comments).toBeNull();
+    expect(item.upvote_ratio).toBeNull();
+  });
+
+  test("numeric created_utc emits a canonical Z suffix (parity with Python)", () => {
+    const item = normalizeItem(
+      { kind: "t3", created_utc: 1686288195 },
+      "someone~custom-reddit-actor",
+    );
+    expect(item.created_at).toBe("2023-06-09T05:23:15.000Z");
+  });
 });
 
 describe("normalizeItems", () => {
@@ -214,6 +232,28 @@ describe("async endpoint builders", () => {
     );
     expect(runStatusUrl("RUN123")).toBe("https://api.apify.com/v2/actor-runs/RUN123");
     expect(datasetItemsUrl("DS123")).toBe("https://api.apify.com/v2/datasets/DS123/items");
+  });
+
+  test("encodes a dynamic path segment so it cannot escape the path", () => {
+    // A run/dataset id carrying `/` or `?` is percent-encoded into one segment.
+    expect(runStatusUrl("../../datasets/evil")).toBe(
+      "https://api.apify.com/v2/actor-runs/..%2F..%2Fdatasets%2Fevil",
+    );
+    expect(datasetItemsUrl("DS?token=x")).toBe(
+      "https://api.apify.com/v2/datasets/DS%3Ftoken%3Dx/items",
+    );
+  });
+
+  test("normalizes a trailing-slash base so joins never double up", () => {
+    const base = "https://api.apify.com/v2/";
+    expect(runsUrl("trudax~reddit-scraper-lite", base)).toBe(
+      "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/runs",
+    );
+    expect(runStatusUrl("RUN123", base)).toBe("https://api.apify.com/v2/actor-runs/RUN123");
+    expect(datasetItemsUrl("DS123", base)).toBe("https://api.apify.com/v2/datasets/DS123/items");
+    expect(runSyncUrl("trudax~reddit-scraper-lite", base)).toBe(
+      "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items",
+    );
   });
 });
 

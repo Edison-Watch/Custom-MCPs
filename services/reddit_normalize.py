@@ -10,6 +10,7 @@ which all funnel their dataset items through ``normalize_items`` here.
 Mirrors the TypeScript normalizer in ``servers/reddit/src/reddit.ts``.
 """
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -110,26 +111,38 @@ def _as_int(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
+        f = value
+    elif isinstance(value, str):
         try:
-            return int(float(value.strip()))
+            f = float(value.strip())
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    # NaN/Infinity have no integer form (int(inf) raises OverflowError,
+    # int(nan) ValueError); return None to match the TS normalizer's null.
+    if not math.isfinite(f):
+        return None
+    try:
+        return int(f)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _as_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        f = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value.strip())
+            f = float(value.strip())
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    # A non-finite float (NaN/Infinity) is not a usable ratio; match TS -> None.
+    return f if math.isfinite(f) else None
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -152,7 +165,11 @@ def _as_iso(value: Any) -> str | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC).isoformat()
+        if not math.isfinite(value):
+            return None
+        # Emit the canonical `Z` suffix (not `+00:00`) so this matches the
+        # Worker's Date.toISOString() output byte for byte.
+        return datetime.fromtimestamp(value, tz=UTC).isoformat().replace("+00:00", "Z")
     if isinstance(value, str):
         return value.strip() or None
     return None

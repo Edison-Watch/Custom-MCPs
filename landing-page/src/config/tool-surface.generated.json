@@ -104,6 +104,14 @@
     "description": "Scrape Reddit posts, comments, communities, or users via a search term or explicit URLs. Returns the matched items."
   },
   {
+    "name": "reddit_scrape_fetch",
+    "description": "Poll an asynchronous Reddit scrape started by reddit_scrape_start. Returns the run status; items are empty while it is still running and populated once it has SUCCEEDED. Poll again on a non-terminal status."
+  },
+  {
+    "name": "reddit_scrape_start",
+    "description": "Start an asynchronous Reddit scrape and return immediately with a run id (no blocking). Use for slow keyword searches that outlast a synchronous call; poll reddit_scrape_fetch with the run_id for results."
+  },
+  {
     "name": "webhook_list",
     "description": "List the caller's webhook subscriptions (secrets are never returned)"
   },

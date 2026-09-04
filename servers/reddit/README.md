@@ -1,24 +1,28 @@
 # `reddit` - Edison first-party MCP server
 
-Search and scrape Reddit posts, comments, communities, and users. One tool,
-`reddit_scrape`: give it a search term (optionally scoped to a subreddit) or a
-list of Reddit URLs, and it returns the matched items in a stable, normalized
+Search and scrape Reddit posts, comments, communities, and users. Three tools:
+`reddit_scrape` (fast, synchronous) plus the `reddit_scrape_start` /
+`reddit_scrape_fetch` pair for slow queries that would outlast a synchronous
+call. Give any of them a search term (optionally scoped to a subreddit) or a
+list of Reddit URLs, and they return the matched items in a stable, normalized
 shape.
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
 - **Transport:** streamable HTTP at `/mcp`.
 - **Backing:** the [`trudax/reddit-scraper-lite`](https://apify.com/trudax/reddit-scraper-lite)
-  Apify Actor via its synchronous `run-sync-get-dataset-items` endpoint (one
-  blocking call, no polling). The Worker holds a single first-party Apify token
-  (`APIFY_TOKEN`, a secret) - callers never supply Apify credentials. The Actor
-  is swappable via `APIFY_ACTOR_ID`; every Actor's items are mapped onto the same
-  normalized output, so callers never depend on a specific Actor's field names.
+  Apify Actor. `reddit_scrape` uses the synchronous `run-sync-get-dataset-items`
+  endpoint (one blocking call); the async pair enqueues a run and polls it. The
+  Worker holds a single first-party Apify token (`APIFY_TOKEN`, a secret) -
+  callers never supply Apify credentials. The Actor is swappable via
+  `APIFY_ACTOR_ID`; every Actor's items are mapped onto the same normalized
+  output, so callers never depend on a specific Actor's field names.
 - **Auth:** the fleet auth contract (`open` | `bearer` | `edison-jwt`, see
   `src/auth.ts`); production runs `edison-jwt`.
 
-This mirrors the Python `reddit_scrape` service at the repo root
-(`services/reddit_svc.py`), which exposes the same Actor over the CLI/HTTP/stdio
-transports. This server is the standalone, Edison-hosted marketplace connector.
+This mirrors the Python `reddit_scrape` / `reddit_scrape_start` /
+`reddit_scrape_fetch` services at the repo root (`services/reddit_svc.py`), which
+expose the same Actor over the CLI/HTTP/stdio transports. This server is the
+standalone, Edison-hosted marketplace connector.
 
 ## `reddit_scrape` input
 
@@ -64,6 +68,25 @@ are `null` when the Actor does not provide them, never faked as `0`.
 `trudax/reddit-scraper-lite` omits them in its default RSS mode; the flat-rate
 `trudax/reddit-scraper` sibling returns them, and pointing `APIFY_ACTOR_ID` at
 it makes counts flow through the same normalized schema with no code change.
+
+## Async run + poll (`reddit_scrape_start` / `reddit_scrape_fetch`)
+
+The synchronous `reddit_scrape` blocks one call on the whole run, which the
+innermost MCP client can cut off before a slow keyword search finishes. The
+async pair decouples start from poll:
+
+- **`reddit_scrape_start`** takes the same input as `reddit_scrape`, enqueues a
+  non-blocking Apify run, and returns immediately with
+  `{ run_id, dataset_id, status }` (the initial `status`, e.g. `READY`, is not
+  yet terminal).
+- **`reddit_scrape_fetch`** takes `{ run_id }` (an opaque id matching
+  `^[A-Za-z0-9_-]+$`) and returns `{ status, count, items }`. While the run is
+  non-terminal (`READY`/`RUNNING`/`*ING`) `items` is empty and the caller polls
+  again; once `SUCCEEDED` it holds the normalized dataset; on a terminal failure
+  (`FAILED`/`TIMED-OUT`/`ABORTED`) `status` comes back with empty `items` so the
+  caller stops polling.
+
+Items from all three tools are normalized onto the identical shape above.
 
 ## Develop
 
