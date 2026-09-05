@@ -71,6 +71,8 @@ describe("buildActorInput", () => {
       maxPostCount: 10,
       skipComments: true,
       includeNSFW: false,
+      // Defaults off: fast RSS mode, no engagement extraction.
+      includeMediaLinks: false,
       sort: "new",
       proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
     });
@@ -86,6 +88,7 @@ describe("buildActorInput", () => {
       max_items: 25,
       include_comments: true,
       include_nsfw: true,
+      include_media_links: true,
     });
     expect(input).toMatchObject({
       sort: "top",
@@ -94,6 +97,8 @@ describe("buildActorInput", () => {
       maxPostCount: 25,
       skipComments: false,
       includeNSFW: true,
+      // On -> the Actor returns engagement fields the normalizer maps.
+      includeMediaLinks: true,
     });
   });
 

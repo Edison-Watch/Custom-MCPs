@@ -90,6 +90,14 @@ const scrapeInputSchema = {
     .optional()
     .describe("Also scrape comments on matched posts (default: false)."),
   include_nsfw: z.boolean().optional().describe("Include NSFW results (default: false)."),
+  include_media_links: z
+    .boolean()
+    .optional()
+    .describe(
+      "Extract engagement fields (upvotes, comment count, upvote ratio) and media URLs " +
+        "(default: false). Off uses the fast RSS mode that omits engagement; on switches to " +
+        "a slower detailed scrape. Enable when ranking needs reach/engagement signal.",
+    ),
 };
 
 // The stable, actor-agnostic item shape, shared by every tool that returns items.

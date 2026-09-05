@@ -53,6 +53,13 @@ class RedditScrapeInput(BaseModel):
         default=False, description="Also scrape comments on matched posts."
     )
     include_nsfw: bool = Field(default=False, description="Include NSFW results.")
+    include_media_links: bool = Field(
+        default=False,
+        description="Extract engagement fields (upvotes, comment count, upvote "
+        "ratio) and media URLs. Off by default: the Actor's fast RSS mode omits "
+        "these, so turning this on switches to a slower detailed scrape. Enable "
+        "it when downstream ranking needs reach/engagement signal.",
+    )
 
     @model_validator(mode="after")
     def _require_a_target(self) -> "RedditScrapeInput":

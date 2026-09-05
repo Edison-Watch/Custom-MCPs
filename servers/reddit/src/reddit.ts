@@ -40,6 +40,7 @@ export interface RedditScrapeArgs {
   max_items?: number;
   include_comments?: boolean;
   include_nsfw?: boolean;
+  include_media_links?: boolean;
 }
 
 /**
@@ -69,6 +70,10 @@ export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown>
     maxPostCount: maxItems,
     skipComments: !(args.include_comments ?? false),
     includeNSFW: args.include_nsfw ?? false,
+    // The Actor's fast RSS mode omits engagement fields; includeMediaLinks
+    // switches it to a detailed scrape that returns upVotes / numberOfComments
+    // / upVoteRatio (and media URLs), which the normalizer already maps.
+    includeMediaLinks: args.include_media_links ?? false,
     sort: args.sort ?? "new",
     proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
   };
@@ -218,9 +223,9 @@ type FieldMap = Record<keyof Omit<NormalizedRedditItem, "raw">, string[]>;
  * sibling) share one output schema, verified from Apify's documented actor
  * schemas: posts carry upVotes / numberOfComments / upVoteRatio; comments carry
  * numberOfVotes and their text under description. reddit-scraper-lite in its
- * default RSS mode omits the engagement fields, so they normalize to null; the
- * flat-rate reddit-scraper returns them, so pointing APIFY_ACTOR_ID at it makes
- * counts flow through this same map with no code change.
+ * default fast RSS mode omits the engagement fields, so they normalize to null;
+ * setting include_media_links (the Actor's includeMediaLinks input) switches it
+ * to a detailed scrape that returns them, and they flow through this same map.
  */
 const TRUDAX_FIELD_MAP: FieldMap = {
   id: ["id", "parsedId"],

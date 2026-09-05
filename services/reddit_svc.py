@@ -121,6 +121,10 @@ def _build_actor_input(inp: RedditScrapeInput) -> dict:
         "maxPostCount": inp.max_items,
         "skipComments": not inp.include_comments,
         "includeNSFW": inp.include_nsfw,
+        # The Actor's fast RSS mode omits engagement fields; includeMediaLinks
+        # switches it to a detailed scrape that returns upVotes / numberOfComments
+        # / upVoteRatio (and media URLs), which the normalizer already maps.
+        "includeMediaLinks": inp.include_media_links,
         "sort": inp.sort,
         "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
     }
