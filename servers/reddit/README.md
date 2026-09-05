@@ -36,6 +36,7 @@ standalone, Edison-hosted marketplace connector.
 | `max_items` | int 1-1000 | Max dataset items (default 10). |
 | `include_comments` | bool | Also scrape comments on matched posts (default false). |
 | `include_nsfw` | bool | Include NSFW results (default false). |
+| `include_media_links` | bool | Extract engagement fields + media URLs (default false). Off = fast RSS mode (no engagement); on = slower detailed scrape. |
 
 At least one of `search` or `start_urls` is required.
 
@@ -65,9 +66,12 @@ untouched Actor item is preserved under `raw`.
 
 Engagement fields (`score`, `num_comments`, `upvote_ratio`, `num_crossposts`)
 are `null` when the Actor does not provide them, never faked as `0`.
-`trudax/reddit-scraper-lite` omits them in its default RSS mode; the flat-rate
-`trudax/reddit-scraper` sibling returns them, and pointing `APIFY_ACTOR_ID` at
-it makes counts flow through the same normalized schema with no code change.
+`trudax/reddit-scraper-lite` omits them in its default fast RSS mode; set
+`include_media_links: true` to switch it to a detailed scrape that returns
+them, and they flow through the same normalized schema. (Pointing
+`APIFY_ACTOR_ID` at the flat-rate `trudax/reddit-scraper` sibling also returns
+them, but that Actor bills a monthly rental; `include_media_links` gets the same
+data on the pay-per-use lite Actor.)
 
 ## Async run + poll (`reddit_scrape_start` / `reddit_scrape_fetch`)
 

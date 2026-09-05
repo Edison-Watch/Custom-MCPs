@@ -118,6 +118,21 @@ class TestRedditScrape(TestTemplate):
         assert captured["time"] == "week"
         assert captured["maxItems"] == 25
         assert captured["skipComments"] is False  # include_comments=True
+        # Defaults off: fast RSS mode, no engagement extraction.
+        assert captured["includeMediaLinks"] is False
+
+    def test_include_media_links_maps_to_actor_input(self):
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=[])
+
+        with _token("test-token"), _mock_http(handler):
+            reddit_scrape(RedditScrapeInput(search="dlp", include_media_links=True))
+
+        # On -> the Actor returns engagement fields the normalizer maps.
+        assert captured["includeMediaLinks"] is True
 
     def test_start_urls_only_is_valid(self):
         body: dict = {}

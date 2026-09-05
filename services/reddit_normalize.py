@@ -21,9 +21,9 @@ from models.reddit import NormalizedRedditItem, RedditItemType
 # sibling) share one output schema, verified from Apify's documented actor
 # schemas: posts carry upVotes / numberOfComments / upVoteRatio; comments carry
 # numberOfVotes and their text under description. reddit-scraper-lite in its
-# default RSS mode omits the engagement fields, so they normalize to None; the
-# flat-rate reddit-scraper returns them, so pointing APIFY_ACTOR_ID at it makes
-# counts flow through this same map with no code change.
+# default fast RSS mode omits the engagement fields, so they normalize to None;
+# setting include_media_links (the Actor's includeMediaLinks input) switches it
+# to a detailed scrape that returns them, and they flow through this same map.
 _TRUDAX_FIELD_MAP: dict[str, list[str]] = {
     "id": ["id", "parsedId"],
     "type": ["dataType"],

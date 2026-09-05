@@ -45,6 +45,14 @@ def main(
     include_comments: Annotated[
         bool, typer.Option("--comments", help="Also scrape comments on matched posts.")
     ] = False,
+    include_media_links: Annotated[
+        bool,
+        typer.Option(
+            "--media-links",
+            help="Extract engagement (upvotes, comments, ratio) + media URLs; "
+            "slower detailed scrape instead of fast RSS mode.",
+        ),
+    ] = False,
     use_stdin: Annotated[
         bool, typer.Option("--stdin", help="Read the search term from stdin.")
     ] = False,
@@ -91,6 +99,7 @@ def main(
                 "sort": sort,
                 "max_items": max_items,
                 "include_comments": include_comments,
+                "include_media_links": include_media_links,
             }
         )
     )
