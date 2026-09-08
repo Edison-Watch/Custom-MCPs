@@ -4,6 +4,7 @@ import {
   buildQuotesInput,
   buildRepliesInput,
   buildRetweetersInput,
+  collectEngagerRuns,
   dedupeEngagers,
   enabledKinds,
   engagerFromBadgerUser,
@@ -180,5 +181,41 @@ describe("stripRootTweet", () => {
   test("drops the conversation's own root tweet, keeps replies", () => {
     const items = [{ id: "20", text: "root" }, { id: "21", text: "reply" }];
     expect(stripRootTweet(items, "20")).toEqual([{ id: "21", text: "reply" }]);
+  });
+});
+
+describe("collectEngagerRuns", () => {
+  const reply: Engager = { handle: "alice", engaged_via: ["reply"] };
+  const rt: Engager = { handle: "bob", engaged_via: ["retweet"] };
+  const passthrough = (items: Record<string, unknown>[]) => items as unknown as Engager[];
+
+  test("collects a successful run's extracted engagers, in input order", () => {
+    const { collected, errors } = collectEngagerRuns([
+      { kind: "reply", extract: passthrough, run: { ok: true, items: [reply as unknown as Record<string, unknown>] } },
+      { kind: "retweet", extract: passthrough, run: { ok: true, items: [rt as unknown as Record<string, unknown>] } },
+    ]);
+    expect(collected).toEqual([reply, rt]);
+    expect(errors).toEqual([]);
+  });
+
+  test("records a failed run's error but keeps the other runs' engagers (partial result)", () => {
+    const { collected, errors } = collectEngagerRuns([
+      { kind: "reply", extract: passthrough, run: { ok: true, items: [reply as unknown as Record<string, unknown>] } },
+      { kind: "retweet", extract: passthrough, run: { ok: false, message: "Apify returned 500" } },
+    ]);
+    expect(collected).toEqual([reply]);
+    expect(errors).toEqual([{ kind: "retweet", message: "Apify returned 500" }]);
+  });
+
+  test("a total wipeout yields no engagers and every kind's error", () => {
+    const { collected, errors } = collectEngagerRuns([
+      { kind: "reply", extract: passthrough, run: { ok: false, message: "boom" } },
+      { kind: "quote", extract: passthrough, run: { ok: false, message: "bang" } },
+    ]);
+    expect(collected).toEqual([]);
+    expect(errors).toEqual([
+      { kind: "reply", message: "boom" },
+      { kind: "quote", message: "bang" },
+    ]);
   });
 });

@@ -48,6 +48,7 @@ import {
   buildQuotesInput,
   buildRepliesInput,
   buildRetweetersInput,
+  collectEngagerRuns,
   dedupeEngagers,
   enabledKinds,
   engagerFromBadgerUser,
@@ -57,6 +58,7 @@ import {
   resolveTweetId,
   stripRootTweet,
   type Engager,
+  type EngagementKind,
   type XEngagersArgs,
 } from "./engagers";
 
@@ -351,47 +353,52 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const tweetActorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
         const retweetersActorId = this.env.APIFY_RETWEETERS_ACTOR_ID?.trim() || DEFAULT_RETWEETERS_ACTOR_ID;
 
-        const collected: Engager[] = [];
-        const errors: { kind: string; message: string }[] = [];
-        let enabledCount = 0;
-
+        // One job per enabled kind: its Actor + input, and how to turn that
+        // Actor's raw items into engagers. Kept in replies->quotes->retweeters
+        // order so dedupeEngagers' first-seen wins stay deterministic.
+        type Job = {
+          kind: EngagementKind;
+          actorId: string;
+          input: Record<string, unknown>;
+          extract: (items: Record<string, unknown>[]) => Engager[];
+        };
+        const jobs: Job[] = [];
         if (kinds.replies) {
-          enabledCount++;
-          const run = await runActor(this.env, tweetActorId, buildRepliesInput(tweetId, maxItems));
-          if (!run.ok) errors.push({ kind: "reply", message: run.message });
-          else {
-            for (const it of stripRootTweet(stripFillerItems(run.items), tweetId)) {
-              const e = engagerFromKaitoTweet(it, "reply");
-              if (e) collected.push(e);
-            }
-          }
+          jobs.push({
+            kind: "reply",
+            actorId: tweetActorId,
+            input: buildRepliesInput(tweetId, maxItems),
+            extract: (items) =>
+              stripRootTweet(stripFillerItems(items), tweetId).flatMap((it) => engagerFromKaitoTweet(it, "reply") ?? []),
+          });
         }
         if (kinds.quotes) {
-          enabledCount++;
-          const run = await runActor(this.env, tweetActorId, buildQuotesInput(tweetId, maxItems));
-          if (!run.ok) errors.push({ kind: "quote", message: run.message });
-          else {
-            for (const it of stripFillerItems(run.items)) {
-              const e = engagerFromKaitoTweet(it, "quote");
-              if (e) collected.push(e);
-            }
-          }
+          jobs.push({
+            kind: "quote",
+            actorId: tweetActorId,
+            input: buildQuotesInput(tweetId, maxItems),
+            extract: (items) => stripFillerItems(items).flatMap((it) => engagerFromKaitoTweet(it, "quote") ?? []),
+          });
         }
         if (kinds.retweeters) {
-          enabledCount++;
-          const run = await runActor(this.env, retweetersActorId, buildRetweetersInput(tweetId, maxItems));
-          if (!run.ok) errors.push({ kind: "retweet", message: run.message });
-          else {
-            for (const it of run.items) {
-              const e = engagerFromBadgerUser(it);
-              if (e) collected.push(e);
-            }
-          }
+          jobs.push({
+            kind: "retweet",
+            actorId: retweetersActorId,
+            input: buildRetweetersInput(tweetId, maxItems),
+            extract: (items) => items.flatMap((it) => engagerFromBadgerUser(it) ?? []),
+          });
         }
+
+        // The runs are independent, so fetch them concurrently rather than
+        // stacking each Actor's wall-clock against the Worker subrequest budget.
+        const runs = await Promise.all(jobs.map((j) => runActor(this.env, j.actorId, j.input)));
+        const { collected, errors } = collectEngagerRuns(
+          jobs.map((j, i) => ({ kind: j.kind, extract: j.extract, run: runs[i] })),
+        );
 
         // Only a total wipeout (every enabled kind's Actor run failed) is a hard
         // error; otherwise return what came back and surface partial failures.
-        if (errors.length === enabledCount) {
+        if (jobs.length > 0 && errors.length === jobs.length) {
           return textError(errors.map((e) => `${e.kind}: ${e.message}`).join("; "));
         }
 

@@ -114,7 +114,7 @@ export function hasEnabledKind(args: XEngagersArgs): boolean {
   return k.replies || k.quotes || k.retweeters;
 }
 
-/** Clamp the per-kind item cap into the schema's 1-1000 range. */
+/** Default the per-kind item cap (the tool's zod schema enforces the 1-1000 range). */
 export function engagerMaxItems(args: XEngagersArgs): number {
   return args.max_items ?? DEFAULT_ENGAGER_MAX;
 }
@@ -217,4 +217,35 @@ export function dedupeEngagers(engagers: Engager[]): Engager[] {
  */
 export function stripRootTweet(items: Record<string, unknown>[], tweetId: string): Record<string, unknown>[] {
   return items.filter((it) => String(it.id ?? "") !== tweetId);
+}
+
+/** Outcome of one Actor run (structurally the `runActor` return in index.ts). */
+export type EngagerRun =
+  | { ok: true; items: Record<string, unknown>[] }
+  | { ok: false; message: string };
+
+/** One engagement kind's run plus how to turn its raw items into engagers. */
+export interface EngagerRunResult {
+  kind: EngagementKind;
+  extract: (items: Record<string, unknown>[]) => Engager[];
+  run: EngagerRun;
+}
+
+/**
+ * Partition per-kind Actor runs into collected engagers and per-kind errors,
+ * preserving input order so {@link dedupeEngagers}'s first-seen wins stay
+ * deterministic. The caller decides what to do with a total wipeout (every run
+ * failed) versus a partial result (some ran, some errored).
+ */
+export function collectEngagerRuns(results: EngagerRunResult[]): {
+  collected: Engager[];
+  errors: { kind: EngagementKind; message: string }[];
+} {
+  const collected: Engager[] = [];
+  const errors: { kind: EngagementKind; message: string }[] = [];
+  for (const { kind, extract, run } of results) {
+    if (!run.ok) errors.push({ kind, message: run.message });
+    else collected.push(...extract(run.items));
+  }
+  return { collected, errors };
 }
