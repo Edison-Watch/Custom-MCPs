@@ -1,7 +1,7 @@
 {
   "id": "x-scraper",
   "displayName": "X (Twitter) Scraper",
-  "description": "Search and scrape X (formerly Twitter). `x_scrape` returns tweets by term (X advanced-search operators like from:, filter:, since:, until: supported) and/or account; `x_profile` returns user profiles (bio, follower/following counts, verified status, join date) by handle or profile URL.",
+  "description": "Search and scrape X (formerly Twitter). `x_scrape` returns tweets by term (X advanced-search operators like from:, filter:, since:, until: supported) and/or account; `x_profile` returns user profiles (bio, follower/following counts, verified status, join date) by handle or profile URL; `x_engagers` lists the accounts that engaged with a tweet (replies + quotes, and optionally retweeters).",
   "author": "SealGate",
   "edison_hosted": true,
   "category": "data",
@@ -24,6 +24,12 @@
       "acl": "PUBLIC"
     },
     "x_profile": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    },
+    "x_engagers": {
       "write_operation": false,
       "read_private_data": false,
       "read_untrusted_public_data": true,
