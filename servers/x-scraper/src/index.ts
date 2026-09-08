@@ -1,11 +1,14 @@
 /**
  * x - an Edison first-party MCP server for X (formerly Twitter).
  *
- * Two tools over the same Worker, each wrapping a public Apify Actor via its
+ * Three tools over the same Worker, each wrapping a public Apify Actor via its
  * synchronous `run-sync-get-dataset-items` endpoint (one blocking call, no
  * polling):
- *   - `x_scrape`  - tweets, via `kaitoeasyapi/twitter-x-data-tweet-scraper` (x.ts)
- *   - `x_profile` - user profiles, via `apidojo/twitter-user-scraper` (profile.ts)
+ *   - `x_scrape`   - tweets, via `kaitoeasyapi/twitter-x-data-tweet-scraper` (x.ts)
+ *   - `x_profile`  - user profiles, via `apidojo/twitter-user-scraper` (profile.ts)
+ *   - `x_engagers` - who engaged with a tweet (engagers.ts): replies + quotes via
+ *     the same KaitoEasyAPI Actor, and (opt-in) retweeters via a second Actor,
+ *     `scrape.badger/twitter-tweets-scraper`, the only one that lists reposters.
  * The Worker holds a single first-party Apify token (APIFY_TOKEN, a secret) and
  * authenticates *callers* separately via the fleet auth contract; no per-user
  * Apify credentials.
@@ -40,6 +43,24 @@ import {
   validateDatasetItems,
   type XScrapeArgs,
 } from "./x";
+import {
+  DEFAULT_RETWEETERS_ACTOR_ID,
+  buildQuotesInput,
+  buildRepliesInput,
+  buildRetweetersInput,
+  collectEngagerRuns,
+  dedupeEngagers,
+  enabledKinds,
+  engagerFromBadgerUser,
+  engagerFromKaitoTweet,
+  engagerMaxItems,
+  hasEnabledKind,
+  resolveTweetId,
+  stripRootTweet,
+  type Engager,
+  type EngagementKind,
+  type XEngagersArgs,
+} from "./engagers";
 
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
@@ -49,6 +70,8 @@ export interface Env {
   // Optional overrides (public config).
   APIFY_ACTOR_ID?: string;
   APIFY_PROFILE_ACTOR_ID?: string;
+  // Retweeters Actor for `x_engagers` (badger); replies/quotes reuse APIFY_ACTOR_ID.
+  APIFY_RETWEETERS_ACTOR_ID?: string;
   APIFY_BASE_URL?: string;
   // Fleet auth (see ./auth, ./jwt).
   AUTH_TOKEN?: string;
@@ -117,6 +140,7 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
   async init(): Promise<void> {
     this.registerScrapeTool();
     this.registerProfileTool();
+    this.registerEngagersTool();
   }
 
   private registerScrapeTool(): void {
@@ -257,6 +281,131 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         return {
           content: [{ type: "text" as const, text: `X profile lookup returned ${profiles.length} profile(s)` }],
           structuredContent: { count: profiles.length, profiles },
+        };
+      },
+    );
+  }
+
+  private registerEngagersTool(): void {
+    this.server.registerTool(
+      "x_engagers",
+      {
+        description:
+          "List the accounts that ENGAGED with one X (formerly Twitter) tweet, as profile records " +
+          "(handle, name, followers, verified, can_dm). Provide `tweet_id` or `tweet_url`. Replies " +
+          "and quotes are returned by default; set `include_retweeters` to also list who reposted it " +
+          "(a second, extra-cost Actor run - off by default). Likers are not available: X removed the " +
+          "public who-liked list, so no source can return them.",
+        inputSchema: {
+          tweet_id: z
+            .string()
+            .optional()
+            .describe("Numeric tweet id, e.g. '1934468786985501089'. Provide this or `tweet_url`."),
+          tweet_url: z
+            .string()
+            .max(2048)
+            .optional()
+            .describe("Full tweet URL, e.g. 'https://x.com/user/status/1934468786985501089'."),
+          include_replies: z
+            .boolean()
+            .optional()
+            .describe("Include accounts that replied to the tweet (default: true)."),
+          include_quotes: z
+            .boolean()
+            .optional()
+            .describe("Include accounts that quote-tweeted the tweet (default: true)."),
+          include_retweeters: z
+            .boolean()
+            .optional()
+            .describe("Include accounts that retweeted the tweet. Extra paid Actor run (default: false)."),
+          max_items: z
+            .number()
+            .int()
+            .min(1)
+            .max(1000)
+            .optional()
+            .describe("Approximate max accounts per engagement kind (default: 50); each kind is a separate run."),
+        },
+        outputSchema: {
+          count: z.number().describe("Number of unique engagers returned."),
+          engagers: z
+            .array(z.record(z.string(), z.any()))
+            .describe("Deduped engager profiles; each carries `engaged_via` naming its engagement kind(s)."),
+          errors: z
+            .array(z.object({ kind: z.string(), message: z.string() }))
+            .describe("Per-kind Actor failures, when a partial result was still returned."),
+        },
+      },
+      async (args: XEngagersArgs) => {
+        const tweetId = resolveTweetId(args);
+        if (!tweetId) {
+          return textError("provide a 'tweet_id' or a 'tweet_url' (an x.com/<user>/status/<id> link)");
+        }
+        if (!hasEnabledKind(args)) {
+          return textError("enable at least one of include_replies, include_quotes, include_retweeters");
+        }
+        if (!this.env.APIFY_TOKEN?.trim()) {
+          return textError("server misconfigured: APIFY_TOKEN not set");
+        }
+
+        const kinds = enabledKinds(args);
+        const maxItems = engagerMaxItems(args);
+        const tweetActorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
+        const retweetersActorId = this.env.APIFY_RETWEETERS_ACTOR_ID?.trim() || DEFAULT_RETWEETERS_ACTOR_ID;
+
+        // One job per enabled kind: its Actor + input, and how to turn that
+        // Actor's raw items into engagers. Kept in replies->quotes->retweeters
+        // order so dedupeEngagers' first-seen wins stay deterministic.
+        type Job = {
+          kind: EngagementKind;
+          actorId: string;
+          input: Record<string, unknown>;
+          extract: (items: Record<string, unknown>[]) => Engager[];
+        };
+        const jobs: Job[] = [];
+        if (kinds.replies) {
+          jobs.push({
+            kind: "reply",
+            actorId: tweetActorId,
+            input: buildRepliesInput(tweetId, maxItems),
+            extract: (items) =>
+              stripRootTweet(stripFillerItems(items), tweetId).flatMap((it) => engagerFromKaitoTweet(it, "reply") ?? []),
+          });
+        }
+        if (kinds.quotes) {
+          jobs.push({
+            kind: "quote",
+            actorId: tweetActorId,
+            input: buildQuotesInput(tweetId, maxItems),
+            extract: (items) => stripFillerItems(items).flatMap((it) => engagerFromKaitoTweet(it, "quote") ?? []),
+          });
+        }
+        if (kinds.retweeters) {
+          jobs.push({
+            kind: "retweet",
+            actorId: retweetersActorId,
+            input: buildRetweetersInput(tweetId, maxItems),
+            extract: (items) => items.flatMap((it) => engagerFromBadgerUser(it) ?? []),
+          });
+        }
+
+        // The runs are independent, so fetch them concurrently rather than
+        // stacking each Actor's wall-clock against the Worker subrequest budget.
+        const runs = await Promise.all(jobs.map((j) => runActor(this.env, j.actorId, j.input)));
+        const { collected, errors } = collectEngagerRuns(
+          jobs.map((j, i) => ({ kind: j.kind, extract: j.extract, run: runs[i] })),
+        );
+
+        // Only a total wipeout (every enabled kind's Actor run failed) is a hard
+        // error; otherwise return what came back and surface partial failures.
+        if (jobs.length > 0 && errors.length === jobs.length) {
+          return textError(errors.map((e) => `${e.kind}: ${e.message}`).join("; "));
+        }
+
+        const engagers = dedupeEngagers(collected);
+        return {
+          content: [{ type: "text" as const, text: `X engagers returned ${engagers.length} unique account(s)` }],
+          structuredContent: { count: engagers.length, engagers, errors },
         };
       },
     );

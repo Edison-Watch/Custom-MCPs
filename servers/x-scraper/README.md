@@ -1,6 +1,6 @@
 # `x-scraper` - Edison first-party MCP server
 
-Search and scrape X (formerly Twitter). Two tools:
+Search and scrape X (formerly Twitter). Three tools:
 
 - **`x_scrape`** - tweets: give it a search query (X advanced-search operators
   like `from:`, `filter:media`, `since:` are supported) and/or a `from_user`
@@ -8,15 +8,21 @@ Search and scrape X (formerly Twitter). Two tools:
 - **`x_profile`** - user profiles: give it handles or profile URLs and it returns
   each account's profile object (bio, follower/following counts, verified status,
   tweet count, join date, location).
+- **`x_engagers`** - who engaged with a tweet: give it a `tweet_id`/`tweet_url`
+  and it returns the accounts that replied, quoted, and (opt-in) retweeted it, as
+  deduped profile records tagged with how each engaged.
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
 - **Transport:** streamable HTTP at `/mcp`.
-- **Backing:** two public Apify Actors via their synchronous
+- **Backing:** public Apify Actors via their synchronous
   `run-sync-get-dataset-items` endpoint (one blocking call, no polling) -
   [`kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest`](https://apify.com/kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest)
-  for tweets and [`apidojo/twitter-user-scraper`](https://apify.com/apidojo/twitter-user-scraper)
-  for profiles. The Worker holds a single first-party Apify token (`APIFY_TOKEN`,
-  a secret) - callers never supply Apify credentials.
+  for tweets and for `x_engagers` replies/quotes,
+  [`apidojo/twitter-user-scraper`](https://apify.com/apidojo/twitter-user-scraper)
+  for profiles, and [`scrape.badger/twitter-tweets-scraper`](https://apify.com/scrape.badger/twitter-tweets-scraper)
+  for `x_engagers` retweeters (the only Actor that lists reposters). The Worker
+  holds a single first-party Apify token (`APIFY_TOKEN`, a secret) - callers never
+  supply Apify credentials.
 - **Auth:** the fleet auth contract (`open` | `bearer` | `edison-jwt`, see
   `src/auth.ts`); production runs `edison-jwt`.
 
@@ -62,6 +68,30 @@ ordering is unstable (asking for `sama` at `maxItems: 1` can return `paulg`). Th
 Worker over-fetches by a fixed buffer and then filters the dataset back down to
 exactly the requested accounts, so callers only ever see profiles they asked for.
 Follower/following *lists* (the Actor's expensive per-query events) are not exposed.
+
+## `x_engagers` input
+
+| field | type | notes |
+|-------|------|-------|
+| `tweet_id` | string | Numeric tweet id, e.g. `1934468786985501089`. Provide this or `tweet_url`. |
+| `tweet_url` | string | Full tweet URL, e.g. `https://x.com/user/status/1934468786985501089`. |
+| `include_replies` | bool | Include accounts that replied (default `true`). |
+| `include_quotes` | bool | Include accounts that quote-tweeted (default `true`). |
+| `include_retweeters` | bool | Include accounts that retweeted. **Extra paid Actor run** (default `false`). |
+| `max_items` | int 1-1000 | Approximate max accounts per engagement kind (default `50`); each enabled kind is a separate run. |
+
+Provide `tweet_id` or `tweet_url`, and enable at least one engagement kind.
+Returns a deduped `engagers` array (each account carries `engaged_via`, the kind(s)
+that surfaced it) plus an `errors` array when one kind's Actor run failed but others
+succeeded (a total wipeout is a hard error instead).
+
+**Cost / coverage:** replies and quotes are pulled from the same KaitoEasyAPI Actor
+as `x_scrape`. Retweeters are opt-in because they require a second Actor
+(`scrape.badger`) and so a second billed run - leave `include_retweeters` off unless
+you need reposters. **Likers are not available from any source:** X removed the
+public who-liked list, so no Actor can return it (badger's `Get Favoriters` returns
+`no_results` even on a 500k-like tweet). Reply > quote > retweet are all
+higher-intent engagement signals than a like.
 
 ## Develop
 
