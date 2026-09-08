@@ -34,6 +34,12 @@ describe("tweetIdFromUrl", () => {
     expect(tweetIdFromUrl("https://example.com/jack/status/20")).toBeUndefined();
     expect(tweetIdFromUrl("not a url")).toBeUndefined();
   });
+
+  test("rejects malformed routes that merely contain a later /status segment", () => {
+    expect(tweetIdFromUrl("https://x.com/i/lists/status/123")).toBeUndefined();
+    expect(tweetIdFromUrl("https://x.com/foo/bar/status/123")).toBeUndefined();
+    expect(tweetIdFromUrl("https://x.com/status/123")).toBeUndefined();
+  });
 });
 
 describe("normalizeTweetId", () => {
@@ -85,9 +91,13 @@ describe("engagerMaxItems", () => {
 
 describe("actor input builders", () => {
   test("route each kind to its documented Actor field", () => {
-    expect(buildRepliesInput("20", 25)).toEqual({ conversation_id: "20", maxItems: 25, queryType: "Latest" });
     expect(buildQuotesInput("20", 25)).toEqual({ quoted_tweet_id: "20", maxItems: 25, queryType: "Latest" });
     expect(buildRetweetersInput("20", 25)).toEqual({ mode: "Get Retweeters", id: "20", max_results: 25 });
+  });
+
+  test("replies over-fetch by one (root tweet is dropped later), capped at 1000", () => {
+    expect(buildRepliesInput("20", 25)).toEqual({ conversation_id: "20", maxItems: 26, queryType: "Latest" });
+    expect(buildRepliesInput("20", 1000)).toEqual({ conversation_id: "20", maxItems: 1000, queryType: "Latest" });
   });
 });
 

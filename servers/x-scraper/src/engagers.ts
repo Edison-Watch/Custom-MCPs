@@ -77,8 +77,10 @@ export function tweetIdFromUrl(url: string): string | undefined {
     return undefined;
   }
   if (host !== "x.com" && host !== "twitter.com" && host !== "mobile.twitter.com") return undefined;
-  // /<handle>/status/<id> - also matches the /i/web/status/<id> form.
-  const m = path.match(/\/status(?:es)?\/(\d{1,25})(?:\/|$)/);
+  // Anchor to a real status permalink: /<handle>/status/<id> or the
+  // /i/web/status/<id> form. Matching a bare `/status/<id>` anywhere in the
+  // path would accept malformed routes and pay for a run that can only fail.
+  const m = path.match(/^\/(?:[A-Za-z0-9_]{1,15}\/status(?:es)?|i\/web\/status(?:es)?)\/(\d{1,25})(?:\/|$)/);
   return m ? m[1] : undefined;
 }
 
@@ -119,9 +121,12 @@ export function engagerMaxItems(args: XEngagersArgs): number {
   return args.max_items ?? DEFAULT_ENGAGER_MAX;
 }
 
-/** Kaito input for replies to a tweet: every post in the conversation thread. */
+/** Kaito input for replies to a tweet: every post in the conversation thread.
+ * The conversation includes the root tweet, which {@link stripRootTweet} drops
+ * afterwards - so fetch one extra item (capped at the schema max) to leave room
+ * for `maxItems` actual replies even at a small cap. */
 export function buildRepliesInput(tweetId: string, maxItems: number): Record<string, unknown> {
-  return { conversation_id: tweetId, maxItems, queryType: "Latest" };
+  return { conversation_id: tweetId, maxItems: Math.min(maxItems + 1, 1000), queryType: "Latest" };
 }
 
 /** Kaito input for quote-tweets of a tweet. */
