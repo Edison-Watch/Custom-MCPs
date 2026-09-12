@@ -199,7 +199,14 @@
       "else": {
         "required": [
           "url"
-        ]
+        ],
+        "not": {
+          "anyOf": [
+            { "required": ["command"] },
+            { "required": ["args"] },
+            { "required": ["env"] }
+          ]
+        }
       }
     },
     {

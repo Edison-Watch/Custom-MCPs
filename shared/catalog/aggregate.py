@@ -199,12 +199,66 @@ def _has_scaffold_placeholder(entry: dict[str, Any]) -> bool:
     return isinstance(tags, list) and any(_todo(tag) for tag in tags)
 
 
+def _transport_problems(entry: dict[str, Any]) -> list[tuple[bool, str]]:
+    """(is_bad, message) pairs for the transport contract, in one place.
+
+    http (the default) needs a valid url and carries no command/args/env; stdio
+    needs command + args, forbids url, restricts auth to STDIO_AUTH_MODES, and is
+    never edison_hosted. Mirrors the transport allOf in schema.json - keep the
+    two in lockstep. `auth` is a required key, so it is present here.
+    """
+    transport = entry.get("transport", "http")
+    is_stdio = transport == "stdio"
+    return [
+        (transport not in TRANSPORTS, f"transport '{transport}' not in {TRANSPORTS}"),
+        # http: valid url, no stdio-only keys. stdio: command + args, no url.
+        (
+            not is_stdio and _url_is_bad(str(entry.get("url", ""))),
+            f"transport 'http' requires url https://<host>/…/mcp, got '{entry.get('url')}'",
+        ),
+        (
+            is_stdio and "url" in entry,
+            "transport 'stdio' must not set 'url' (the daemon spawns a local process)",
+        ),
+        (
+            is_stdio
+            and (not isinstance(entry.get("command"), str) or not entry.get("command")),
+            "transport 'stdio' requires a non-empty string 'command' (e.g. 'npx')",
+        ),
+        (
+            is_stdio and "args" not in entry,
+            "transport 'stdio' requires an 'args' array (may be empty)",
+        ),
+        (
+            is_stdio and "args" in entry and _args_bad(entry["args"]),
+            "'args' must be an array of strings",
+        ),
+        (_env_bad(entry), "'env' must be an object of string values"),
+        (
+            "command" in entry and not is_stdio,
+            "'command' is only valid for transport 'stdio'",
+        ),
+        (
+            "args" in entry and not is_stdio,
+            "'args' is only valid for transport 'stdio'",
+        ),
+        ("env" in entry and not is_stdio, "'env' is only valid for transport 'stdio'"),
+        (
+            is_stdio and entry["auth"] not in STDIO_AUTH_MODES,
+            f"transport 'stdio' auth must be one of {STDIO_AUTH_MODES} "
+            "(a local process has no remote issuer for oauth/edison-jwt)",
+        ),
+        (
+            is_stdio and entry.get("edison_hosted") is True,
+            "transport 'stdio' cannot be 'edison_hosted' (it runs on the user's machine)",
+        ),
+    ]
+
+
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
     """(is_bad, message) pairs for one entry, assuming required keys are present."""
     icon = str(entry["icon"])
     hosted = entry.get("edison_hosted")
-    transport = entry.get("transport", "http")
-    is_stdio = transport == "stdio"
     return [
         (
             entry["id"] != server_dir.name,
@@ -248,57 +302,7 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             entry["auth"] not in AUTH_MODES,
             f"auth '{entry['auth']}' not in {AUTH_MODES}",
         ),
-        (
-            transport not in TRANSPORTS,
-            f"transport '{transport}' not in {TRANSPORTS}",
-        ),
-        # http (the default): needs a valid url; stdio: needs command + args.
-        (
-            not is_stdio and _url_is_bad(str(entry.get("url", ""))),
-            f"transport 'http' requires url https://<host>/…/mcp, got '{entry.get('url')}'",
-        ),
-        (
-            is_stdio and "url" in entry,
-            "transport 'stdio' must not set 'url' (the daemon spawns a local process)",
-        ),
-        (
-            is_stdio
-            and (not isinstance(entry.get("command"), str) or not entry.get("command")),
-            "transport 'stdio' requires a non-empty string 'command' (e.g. 'npx')",
-        ),
-        (
-            is_stdio and "args" not in entry,
-            "transport 'stdio' requires an 'args' array (may be empty)",
-        ),
-        (
-            is_stdio and "args" in entry and _args_bad(entry["args"]),
-            "'args' must be an array of strings",
-        ),
-        (
-            _env_bad(entry),
-            "'env' must be an object of string values",
-        ),
-        (
-            "command" in entry and not is_stdio,
-            "'command' is only valid for transport 'stdio'",
-        ),
-        (
-            "args" in entry and not is_stdio,
-            "'args' is only valid for transport 'stdio'",
-        ),
-        (
-            "env" in entry and not is_stdio,
-            "'env' is only valid for transport 'stdio'",
-        ),
-        (
-            is_stdio and entry["auth"] not in STDIO_AUTH_MODES,
-            f"transport 'stdio' auth must be one of {STDIO_AUTH_MODES} "
-            "(a local process has no remote issuer for oauth/edison-jwt)",
-        ),
-        (
-            is_stdio and entry.get("edison_hosted") is True,
-            "transport 'stdio' cannot be 'edison_hosted' (it runs on the user's machine)",
-        ),
+        *_transport_problems(entry),
         (not icon.endswith(".svg"), f"icon '{icon}' must be an .svg"),
         (
             icon != Path(icon).name,

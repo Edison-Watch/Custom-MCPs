@@ -206,40 +206,22 @@ export function withSerial(serial: string | undefined, args: string[]): string[]
   return serial ? ['-s', serial, ...args] : args
 }
 
-/** Spawn adb and collect stdout/stderr as UTF-8 text. */
-export function runAdb(args: string[], timeoutMs = 60_000): Promise<AdbResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(ADB_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    let timedOut = false
-    const timer = setTimeout(() => {
-      timedOut = true
-      child.kill('SIGKILL')
-    }, timeoutMs)
-    timer.unref()
-    child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')))
-    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')))
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (timedOut) {
-        resolve({ stdout, stderr: `${stderr}\n(adb timed out after ${timeoutMs}ms)`, code: null })
-      } else {
-        resolve({ stdout, stderr, code })
-      }
-    })
-  })
+/** Raw result of a spawn: stdout as bytes, so both the text and binary faces
+ *  can derive from one implementation. */
+interface AdbBytesResult {
+  data: Buffer
+  stderr: string
+  code: number | null
 }
 
-/** Spawn adb and collect stdout as raw bytes (for `exec-out screencap -p`). */
-export function runAdbBinary(
-  args: string[],
-  timeoutMs = 60_000
-): Promise<{ data: Buffer; stderr: string; code: number | null }> {
+/**
+ * The single spawn/timeout/error/close implementation. Collects stdout as raw
+ * bytes (the text wrapper decodes it) plus stderr as UTF-8, kills the process on
+ * timeout and reports it as `code: null` with a stderr suffix. Both public
+ * wrappers below are thin typed faces over this, so the tricky process/timeout
+ * logic lives in exactly one place.
+ */
+function spawnAdb(args: string[], timeoutMs: number): Promise<AdbBytesResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(ADB_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
@@ -265,6 +247,17 @@ export function runAdbBinary(
       })
     })
   })
+}
+
+/** Spawn adb and collect stdout/stderr as UTF-8 text. */
+export async function runAdb(args: string[], timeoutMs = 60_000): Promise<AdbResult> {
+  const { data, stderr, code } = await spawnAdb(args, timeoutMs)
+  return { stdout: data.toString('utf8'), stderr, code }
+}
+
+/** Spawn adb and collect stdout as raw bytes (for `exec-out screencap -p`). */
+export function runAdbBinary(args: string[], timeoutMs = 60_000): Promise<AdbBytesResult> {
+  return spawnAdb(args, timeoutMs)
 }
 
 /**
