@@ -91,12 +91,12 @@ def test_non_object_config_rejected():
 
 def test_edison_hosted_without_tools_configurations_rejected():
     entry = dict(_BASE_ENTRY, edison_hosted=True)
-    assert _AGG._edison_hosted_unclassified(entry) is True
+    assert _AGG._unclassified(entry) is True
 
 
 def test_edison_hosted_with_empty_tools_configurations_rejected():
     entry = dict(_BASE_ENTRY, edison_hosted=True, tools_configurations={})
-    assert _AGG._edison_hosted_unclassified(entry) is True
+    assert _AGG._unclassified(entry) is True
 
 
 def test_edison_hosted_with_classification_ok():
@@ -105,15 +105,28 @@ def test_edison_hosted_with_classification_ok():
         edison_hosted=True,
         tools_configurations={"t": dict(_VALID_TOOL_CFG)},
     )
-    assert _AGG._edison_hosted_unclassified(entry) is False
+    assert _AGG._unclassified(entry) is False
 
 
-def test_non_hosted_without_tools_configurations_ok():
-    # OSS/self-host connectors don't install via the marketplace JWT path, so
-    # the mandatory-classification gate only applies to edison_hosted entries.
-    assert _AGG._edison_hosted_unclassified(dict(_BASE_ENTRY)) is False
+def test_non_hosted_http_without_tools_configurations_ok():
+    # A plain OSS/self-host HTTP connector doesn't install via the marketplace
+    # autoconfig-skipping path, so the mandatory-classification gate does not
+    # apply to it (only to edison_hosted and stdio entries).
+    assert _AGG._unclassified(dict(_BASE_ENTRY)) is False
+    assert _AGG._unclassified(dict(_BASE_ENTRY, edison_hosted=False)) is False
+
+
+def test_stdio_without_tools_configurations_rejected():
+    # stdio connectors also install via the marketplace (autoconfig skipped), so
+    # they must ship a classification too - the rule is not edison_hosted-only.
+    assert _AGG._unclassified({"transport": "stdio"}) is True
     assert (
-        _AGG._edison_hosted_unclassified(dict(_BASE_ENTRY, edison_hosted=False))
+        _AGG._unclassified({"transport": "stdio", "tools_configurations": {}}) is True
+    )
+    assert (
+        _AGG._unclassified(
+            {"transport": "stdio", "tools_configurations": {"t": dict(_VALID_TOOL_CFG)}}
+        )
         is False
     )
 
@@ -175,7 +188,7 @@ def test_classification_rule_agrees_across_views():
         dict(_BASE_ENTRY),  # ok: no edison_hosted key
     ]
     for entry in rows:
-        agg_rejects = _AGG._edison_hosted_unclassified(entry)
+        agg_rejects = _AGG._unclassified(entry)
         schema_rejects = bool(list(validator.iter_errors(entry)))
         assert agg_rejects == schema_rejects, entry
 
