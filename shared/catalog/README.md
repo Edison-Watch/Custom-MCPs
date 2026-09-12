@@ -4,6 +4,25 @@ How a fleet server advertises itself to the Edison marketplace. Each server
 declares one `servers/<id>/catalog-entry.json`; edison-watch's sync upserts
 those into its static catalog and badges the Edison-hosted ones.
 
+## Transports
+
+An entry is one of two shapes, keyed by `transport`:
+
+- **`http`** (default when omitted) - a remote streamable-HTTP server Edison
+  hosts. Requires `url` (`https://…/mcp`). This is what the fleet's Worker
+  servers use. Add one with the `add-fleet-connector` skill.
+- **`stdio`** - a local process the SealGate daemon spawns on the user's machine
+  (a published npm/PyPI package run via `npx`/`uvx`). Requires `command` + `args`,
+  no `url`, never `edison_hosted`, `auth` in `none`/`token`. For connectors that
+  must run client-side (wrapping a local CLI/device, e.g. `adb`). Add one with
+  the `add-stdio-connector` skill. Worked example:
+  [`../../servers/android-adb/`](../../servers/android-adb). Downstream this
+  becomes a `transport_type: stdio_tunnel` marketplace row (like the hand-curated
+  `playwright`/`postgres` entries).
+
+Both shapes must ship `tools_configurations` (see below): every marketplace
+install skips autoconfig, so an unclassified tool blocks.
+
 ## Contract
 
 - **Schema:** [`schema.json`](./schema.json) - the entry shape (draft 2020-12).

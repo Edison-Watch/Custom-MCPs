@@ -1,0 +1,52 @@
+{
+  "name": "@sealgate/android-adb-mcp",
+  "version": "0.1.0",
+  "description": "SealGate stdio MCP server that exposes Android Debug Bridge (adb) on the local machine: packages, UI layout, screenshots, action intents, and raw adb commands.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "adb",
+    "android",
+    "android-debug-bridge",
+    "sealgate",
+    "stdio"
+  ],
+  "license": "MIT",
+  "author": "SealGate",
+  "homepage": "https://github.com/Edison-Watch/custom-mcps/tree/main/servers/android-adb",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Edison-Watch/custom-mcps.git",
+    "directory": "servers/android-adb"
+  },
+  "type": "module",
+  "bin": {
+    "android-adb-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.19.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  }
+}
