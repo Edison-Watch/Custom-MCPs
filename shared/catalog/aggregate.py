@@ -47,17 +47,24 @@ REQUIRED = (
     "author",
     "category",
     "tags",
-    "url",
     "auth",
     "icon",
 )
 AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
+# auth modes a locally-spawned stdio process can use (no remote issuer/discovery).
+STDIO_AUTH_MODES = ("none", "token")
+TRANSPORTS = ("http", "stdio")
 # Mirror of schema.json `properties` (additionalProperties:false) + the id regex.
 ALLOWED_KEYS = frozenset(REQUIRED) | {
     "edison_hosted",
     "headers",
     "template_fields",
     "tools_configurations",
+    "transport",
+    "command",
+    "args",
+    "env",
+    "url",
 }
 ACL_VALUES = ("PUBLIC", "PRIVATE", "SECRET")
 # The four trifecta/ACL keys every tools_configurations entry must carry.
@@ -82,6 +89,23 @@ def _tags_bad(tags: Any) -> bool:
     if not isinstance(tags, list) or not tags:
         return True
     return any(not isinstance(t, str) or not t for t in tags)
+
+
+def _args_bad(args: Any) -> bool:
+    """schema: an array of strings (may be empty)."""
+    if not isinstance(args, list):
+        return True
+    return any(not isinstance(a, str) for a in args)
+
+
+def _env_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object mapping string -> string."""
+    if "env" not in entry:
+        return False
+    env = entry["env"]
+    if not isinstance(env, dict):
+        return True
+    return any(not isinstance(v, str) for v in env.values())
 
 
 def _headers_bad(entry: dict[str, Any]) -> bool:
@@ -137,16 +161,21 @@ def _tools_configurations_bad(entry: dict[str, Any]) -> bool:
     return False
 
 
-def _edison_hosted_unclassified(entry: dict[str, Any]) -> bool:
-    """True when an edison_hosted connector ships no classification.
+def _requires_classification(entry: dict[str, Any]) -> bool:
+    """True for entries that install via the marketplace (which skips autoconfig
+    auto-labeling): edison_hosted connectors and every stdio connector. Both
+    mount an unclassified tool at the protective default (full trifecta + SECRET)
+    and block, so both must ship a reviewed `tools_configurations`."""
+    return entry.get("edison_hosted") is True or entry.get("transport") == "stdio"
 
-    edison_hosted connectors install via the marketplace, which skips autoconfig
-    auto-labeling: a tool with no config mounts at the protective default (full
-    trifecta + SECRET) and blocks. Require an explicit, reviewed
-    `tools_configurations` (non-empty) instead of shipping empty.
-    `_tools_configurations_bad` still validates the shape of whatever is present.
-    """
-    return entry.get("edison_hosted") is True and not entry.get("tools_configurations")
+
+def _unclassified(entry: dict[str, Any]) -> bool:
+    """True when an entry that requires classification ships none.
+
+    Require an explicit, reviewed `tools_configurations` (non-empty) instead of
+    shipping empty; `_tools_configurations_bad` still validates the shape of
+    whatever is present."""
+    return _requires_classification(entry) and not entry.get("tools_configurations")
 
 
 def _has_scaffold_placeholder(entry: dict[str, Any]) -> bool:
@@ -168,6 +197,62 @@ def _has_scaffold_placeholder(entry: dict[str, Any]) -> bool:
         return True
     tags = entry.get("tags")
     return isinstance(tags, list) and any(_todo(tag) for tag in tags)
+
+
+def _transport_problems(entry: dict[str, Any]) -> list[tuple[bool, str]]:
+    """(is_bad, message) pairs for the transport contract, in one place.
+
+    http (the default) needs a valid url and carries no command/args/env; stdio
+    needs command + args, forbids url, restricts auth to STDIO_AUTH_MODES, and is
+    never edison_hosted. Mirrors the transport allOf in schema.json - keep the
+    two in lockstep. `auth` is a required key, so it is present here.
+    """
+    transport = entry.get("transport", "http")
+    is_stdio = transport == "stdio"
+    return [
+        (transport not in TRANSPORTS, f"transport '{transport}' not in {TRANSPORTS}"),
+        # http: valid url, no stdio-only keys. stdio: command + args, no url.
+        (
+            not is_stdio and _url_is_bad(str(entry.get("url", ""))),
+            f"transport 'http' requires url https://<host>/…/mcp, got '{entry.get('url')}'",
+        ),
+        (
+            is_stdio and "url" in entry,
+            "transport 'stdio' must not set 'url' (the daemon spawns a local process)",
+        ),
+        (
+            is_stdio
+            and (not isinstance(entry.get("command"), str) or not entry.get("command")),
+            "transport 'stdio' requires a non-empty string 'command' (e.g. 'npx')",
+        ),
+        (
+            is_stdio and "args" not in entry,
+            "transport 'stdio' requires an 'args' array (may be empty)",
+        ),
+        (
+            is_stdio and "args" in entry and _args_bad(entry["args"]),
+            "'args' must be an array of strings",
+        ),
+        (_env_bad(entry), "'env' must be an object of string values"),
+        (
+            "command" in entry and not is_stdio,
+            "'command' is only valid for transport 'stdio'",
+        ),
+        (
+            "args" in entry and not is_stdio,
+            "'args' is only valid for transport 'stdio'",
+        ),
+        ("env" in entry and not is_stdio, "'env' is only valid for transport 'stdio'"),
+        (
+            is_stdio and entry["auth"] not in STDIO_AUTH_MODES,
+            f"transport 'stdio' auth must be one of {STDIO_AUTH_MODES} "
+            "(a local process has no remote issuer for oauth/edison-jwt)",
+        ),
+        (
+            is_stdio and entry.get("edison_hosted") is True,
+            "transport 'stdio' cannot be 'edison_hosted' (it runs on the user's machine)",
+        ),
+    ]
 
 
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
@@ -197,11 +282,12 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             f"{ACL_VALUES}",
         ),
         (
-            _edison_hosted_unclassified(entry),
-            "'edison_hosted' connectors must declare a non-empty "
+            _unclassified(entry),
+            "edison_hosted and stdio connectors must declare a non-empty "
             "'tools_configurations' (classify each tool, or run the "
-            "add-fleet-connector skill); an unclassified tool installs at the "
-            "SECRET + full-trifecta default and trips the lethal-trifecta guard",
+            "add-fleet-connector / add-stdio-connector skill); an unclassified "
+            "tool installs at the SECRET + full-trifecta default and trips the "
+            "lethal-trifecta guard",
         ),
         (
             _has_scaffold_placeholder(entry),
@@ -216,10 +302,7 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             entry["auth"] not in AUTH_MODES,
             f"auth '{entry['auth']}' not in {AUTH_MODES}",
         ),
-        (
-            _url_is_bad(str(entry["url"])),
-            f"url must be https://<host>/…/mcp, got '{entry['url']}'",
-        ),
+        *_transport_problems(entry),
         (not icon.endswith(".svg"), f"icon '{icon}' must be an .svg"),
         (
             icon != Path(icon).name,

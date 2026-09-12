@@ -1,0 +1,45 @@
+{
+  "id": "android-adb",
+  "displayName": "Android (ADB)",
+  "description": "Control a connected Android device or emulator over adb - list packages, dump the UI layout with tap coordinates, take screenshots, inspect package intents, and run raw adb commands. Runs locally via the SealGate daemon.",
+  "author": "SealGate",
+  "category": "development",
+  "tags": ["android", "adb", "mobile", "emulator", "local", "stdio"],
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@sealgate/android-adb-mcp"],
+  "auth": "none",
+  "icon": "android-adb.svg",
+  "tools_configurations": {
+    "get_packages": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
+    },
+    "execute_adb_command": {
+      "write_operation": true,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "SECRET"
+    },
+    "get_uilayout": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "PRIVATE"
+    },
+    "get_screenshot": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "PRIVATE"
+    },
+    "get_package_action_intents": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
+    }
+  }
+}
