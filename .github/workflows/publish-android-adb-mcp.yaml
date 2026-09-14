@@ -1,0 +1,66 @@
+name: Publish android-adb-mcp
+
+# Publishes @sealgate/android-adb-mcp to npm when a matching tag is pushed.
+# Mirrors edison-watch's publish-agent-cli-mcp.yaml, adapted for this repo where
+# servers/android-adb is a standalone package (not an npm workspace).
+#
+# First-run setup (once):
+#   1. Ensure an npm automation token with publish rights to the @sealgate scope
+#      is stored as the repository secret NPM_TOKEN.
+#
+# Release:
+#   Bump "version" in servers/android-adb/package.json, then:
+#     git tag android-adb-mcp-v0.1.0
+#     git push origin android-adb-mcp-v0.1.0
+#   (or run this workflow manually via workflow_dispatch to publish the current
+#   package.json version).
+
+on:
+  push:
+    tags:
+      - "android-adb-mcp-v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: servers/android-adb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#android-adb-mcp-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
