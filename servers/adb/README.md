@@ -59,7 +59,7 @@ error listing the connected serials rather than guessing.
 `execute_adb_command` is effectively arbitrary `adb shell`: it can read app
 data, dump databases, and move files off the device. Behind SealGate it should
 be classified `SECRET` and gated. The catalog entry ships that classification;
-see `tools_configurations` in the marketplace `servers/adb.json`.
+see `tools_configurations` in this server's `catalog-entry.json`.
 
 ## Development
 

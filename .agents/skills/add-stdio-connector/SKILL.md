@@ -79,15 +79,21 @@ every tool is classified. Key each entry by the tool's **native name**.
 
 | Field | True when the tool... |
 |-------|-----------------------|
-| `write_operation` | modifies external state (writes a file, installs, taps, sends) |
+| `write_operation` | sends/writes to an **external** service or another party (the trifecta's exfil leg); mutating the user's *own* local device or machine does not count |
 | `read_private_data` | reads private/sensitive data off the device or machine |
 | `read_untrusted_public_data` | surfaces untrusted external content (on-screen web/app content, fetched pages, logs) |
 | `acl` | `PUBLIC` / `PRIVATE` / `SECRET` - sensitivity of the data it handles |
 
-A raw "run any command" tool (arbitrary shell/adb/exec) is `write_operation:
-true`, all read legs true, `acl: SECRET`. Classify each tool for what *it* does;
-do not pad flags "to be safe" - an over-broad classification blocks a legitimate
-connector. See `servers/adb/catalog-entry.json` for a worked set.
+`write_operation` is the lethal-trifecta's external-write/exfil leg, so a tool
+whose effects stay on the user's own device or machine is `write_operation:
+false` even when it "runs any command" - gate its power with `acl: SECRET`
+instead. A raw local-exec tool (arbitrary `adb`/shell on the local device) is
+therefore `write_operation: false`, all read legs true, `acl: SECRET`. Classify
+each tool for what *it* does; do not pad flags "to be safe" - an over-broad
+classification blocks a legitimate connector. See
+`servers/adb/catalog-entry.json` for a worked set (`execute_adb_command` is
+`SECRET` with `write_operation: false` because adb acts on the local device, not
+an external service).
 
 ## 5. Publish the package
 
