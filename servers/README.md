@@ -14,7 +14,7 @@ are polyglot by design:
   processes - a published npm/PyPI package run via `npx`/`uvx` - for connectors
   that must run client-side (wrapping a local CLI or device, e.g. `adb`). They
   are not hosted by Edison. Add one with the `add-stdio-connector` skill
-  (`make new-stdio-connector id=<id>`); worked example: [`android-adb/`](./android-adb).
+  (`make new-stdio-connector id=<id>`); worked example: [`adb/`](./adb).
 
 Two contracts keep the fleet coherent regardless of language:
 
@@ -33,4 +33,4 @@ for the full strategy and [`../shared/`](../shared) for the shared pieces.
 |--------|---------|--------|-----------|
 | [`image-host/`](./image-host) | TS · Cloudflare Worker + R2 | built + tested (unit + workerd integration) | `bearer` |
 | [`reddit/`](./reddit) | TS · Cloudflare Worker (Apify-backed) | built + tested (unit + workerd integration) | `edison-jwt` |
-| [`android-adb/`](./android-adb) | TS · stdio (npx `@sealgate/android-adb-mcp`) | built + tested (unit) | `none` |
+| [`adb/`](./adb) | TS · stdio (npx `@sealgate/android-adb-mcp`) | built + tested (unit) | `none` |

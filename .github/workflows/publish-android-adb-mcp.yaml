@@ -31,7 +31,7 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: servers/android-adb
+        working-directory: servers/adb
     steps:
       - name: Checkout
         uses: actions/checkout@v7

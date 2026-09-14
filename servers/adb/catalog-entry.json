@@ -1,5 +1,5 @@
 {
-  "id": "android-adb",
+  "id": "adb",
   "displayName": "Android (ADB)",
   "description": "Control a connected Android device or emulator over adb - list packages, dump the UI layout with tap coordinates, take screenshots, inspect package intents, and run raw adb commands. Runs locally via the SealGate daemon.",
   "author": "SealGate",
@@ -9,7 +9,7 @@
   "command": "npx",
   "args": ["-y", "@sealgate/android-adb-mcp"],
   "auth": "none",
-  "icon": "android-adb.svg",
+  "icon": "adb.svg",
   "tools_configurations": {
     "get_packages": {
       "write_operation": false,
@@ -18,7 +18,7 @@
       "acl": "PRIVATE"
     },
     "execute_adb_command": {
-      "write_operation": true,
+      "write_operation": false,
       "read_private_data": true,
       "read_untrusted_public_data": true,
       "acl": "SECRET"
