@@ -1,8 +1,9 @@
 name: Publish android-adb-mcp
 
 # Publishes @sealgate/android-adb-mcp to npm when a matching tag is pushed.
-# Mirrors edison-watch's publish-agent-cli-mcp.yaml, adapted for this repo where
-# servers/android-adb is a standalone package (not an npm workspace).
+# Adapted from edison-watch's publish-agent-cli-mcp.yaml for this repo, where
+# servers/android-adb is a standalone package and the fleet installs with bun
+# from a committed lockfile (matching servers_ts.yaml / servers/reddit).
 #
 # First-run setup (once):
 #   1. Ensure an npm automation token with publish rights to the @sealgate scope
@@ -35,20 +36,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # setup-node is what wires npm auth: registry-url writes an .npmrc that
+      # reads NODE_AUTH_TOKEN, so the `npm publish` step below can authenticate.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: npm install
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
-      - name: Build
-        run: npm run build
+      # Frozen lockfile keeps the release build reproducible (the committed
+      # bun.lock pins every transitive dependency).
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Test
-        run: npm test
+        run: bun run test
 
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
@@ -60,6 +67,8 @@ jobs:
             exit 1
           fi
 
+      # `npm publish` runs prepublishOnly (tsc build) before packing, so the
+      # published dist is compiled here; no separate build step needed.
       - name: Publish to npm
         run: npm publish --access public
         env:
