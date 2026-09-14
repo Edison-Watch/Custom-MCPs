@@ -16,7 +16,7 @@ An entry is one of two shapes, keyed by `transport`:
   no `url`, never `edison_hosted`, `auth` in `none`/`token`. For connectors that
   must run client-side (wrapping a local CLI/device, e.g. `adb`). Add one with
   the `add-stdio-connector` skill. Worked example:
-  [`../../servers/android-adb/`](../../servers/android-adb). Downstream this
+  [`../../servers/adb/`](../../servers/adb). Downstream this
   becomes a `transport_type: stdio_tunnel` marketplace row (like the hand-curated
   `playwright`/`postgres` entries).
 

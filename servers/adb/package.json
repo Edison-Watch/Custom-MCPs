@@ -13,11 +13,11 @@
   ],
   "license": "MIT",
   "author": "SealGate",
-  "homepage": "https://github.com/Edison-Watch/custom-mcps/tree/main/servers/android-adb",
+  "homepage": "https://github.com/Edison-Watch/custom-mcps/tree/main/servers/adb",
   "repository": {
     "type": "git",
     "url": "https://github.com/Edison-Watch/custom-mcps.git",
-    "directory": "servers/android-adb"
+    "directory": "servers/adb"
   },
   "type": "module",
   "bin": {

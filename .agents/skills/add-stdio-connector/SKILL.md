@@ -9,7 +9,7 @@ A stdio connector is an MCP server the **SealGate daemon spawns on the user's
 machine** and talks to over stdio, instead of a remote HTTP endpoint Edison
 hosts. Use it when the server must run client-side - wrapping a local CLI or
 device bridge (e.g. `adb`), reading local files, or driving a local app - so
-there is nothing to host and no `url`. Worked example: `servers/android-adb`.
+there is nothing to host and no `url`. Worked example: `servers/adb`.
 
 This differs from an HTTP fleet connector (`add-fleet-connector`) in three ways:
 
@@ -36,7 +36,7 @@ Writes `servers/<id>/catalog-entry.json` (a stdio skeleton with TODOs, no
 
 The scaffold covers the **catalog entry only**. Write the actual MCP server as a
 small, publishable package co-located in `servers/<id>/`, mirroring
-`servers/android-adb` (TypeScript, `@modelcontextprotocol/sdk` over
+`servers/adb` (TypeScript, `@modelcontextprotocol/sdk` over
 `StdioServerTransport`, built with `tsc`, unit-tested with `vitest`):
 
 - `package.json` - published name `@sealgate/<id>-mcp`, a `bin` pointing at
@@ -45,7 +45,7 @@ small, publishable package co-located in `servers/<id>/`, mirroring
   `wrangler.jsonc`, no `shared/auth` re-exports (those are HTTP-server auth).
 - `src/` - put the pure parsing/decision logic in its own module so it is
   unit-testable without the external process, and keep the process/`spawn`
-  wrappers thin (see `servers/android-adb/src/adb.ts`).
+  wrappers thin (see `servers/adb/src/adb.ts`).
 - `test/` - unit-test the pure logic; it must pass with no device/CLI present.
 
 **Validate and bound tool inputs.** Anything a tool shells out to a local
@@ -79,15 +79,21 @@ every tool is classified. Key each entry by the tool's **native name**.
 
 | Field | True when the tool... |
 |-------|-----------------------|
-| `write_operation` | modifies external state (writes a file, installs, taps, sends) |
+| `write_operation` | sends/writes to an **external** service or another party (the trifecta's exfil leg); mutating the user's *own* local device or machine does not count |
 | `read_private_data` | reads private/sensitive data off the device or machine |
 | `read_untrusted_public_data` | surfaces untrusted external content (on-screen web/app content, fetched pages, logs) |
 | `acl` | `PUBLIC` / `PRIVATE` / `SECRET` - sensitivity of the data it handles |
 
-A raw "run any command" tool (arbitrary shell/adb/exec) is `write_operation:
-true`, all read legs true, `acl: SECRET`. Classify each tool for what *it* does;
-do not pad flags "to be safe" - an over-broad classification blocks a legitimate
-connector. See `servers/android-adb/catalog-entry.json` for a worked set.
+`write_operation` is the lethal-trifecta's external-write/exfil leg, so a tool
+whose effects stay on the user's own device or machine is `write_operation:
+false` even when it "runs any command" - gate its power with `acl: SECRET`
+instead. A raw local-exec tool (arbitrary `adb`/shell on the local device) is
+therefore `write_operation: false`, all read legs true, `acl: SECRET`. Classify
+each tool for what *it* does; do not pad flags "to be safe" - an over-broad
+classification blocks a legitimate connector. See
+`servers/adb/catalog-entry.json` for a worked set (`execute_adb_command` is
+`SECRET` with `write_operation: false` because adb acts on the local device, not
+an external service).
 
 ## 5. Publish the package
 

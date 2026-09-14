@@ -63,7 +63,7 @@ jobs:
       fail-fast: false
       matrix:
         server:
-          - android-adb
+          - adb
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}
