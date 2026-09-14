@@ -7,7 +7,7 @@
   "tags": ["android", "adb", "mobile", "emulator", "local", "stdio"],
   "transport": "stdio",
   "command": "npx",
-  "args": ["-y", "@sealgate/android-adb-mcp"],
+  "args": ["-y", "@sealgate/android-adb-mcp@0.1.0"],
   "auth": "none",
   "icon": "adb.svg",
   "tools_configurations": {
