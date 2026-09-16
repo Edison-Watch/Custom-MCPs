@@ -9,13 +9,17 @@ shape.
 
 - **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
 - **Transport:** streamable HTTP at `/mcp`.
-- **Backing:** the [`trudax/reddit-scraper-lite`](https://apify.com/trudax/reddit-scraper-lite)
-  Apify Actor. `reddit_scrape` uses the synchronous `run-sync-get-dataset-items`
-  endpoint (one blocking call); the async pair enqueues a run and polls it. The
-  Worker holds a single first-party Apify token (`APIFY_TOKEN`, a secret) -
-  callers never supply Apify credentials. The Actor is swappable via
-  `APIFY_ACTOR_ID`; every Actor's items are mapped onto the same normalized
-  output, so callers never depend on a specific Actor's field names.
+- **Backing:** the [`fatihtahta/reddit-scraper-search-fast`](https://apify.com/fatihtahta/reddit-scraper-search-fast)
+  Apify Actor by default (chosen for cost: in production it ran ~2.5x cheaper per
+  run than `trudax/reddit-scraper-lite` and, unlike lite, never timed out on
+  keyword searches). `reddit_scrape` uses the synchronous
+  `run-sync-get-dataset-items` endpoint (one blocking call); the async pair
+  enqueues a run and polls it. The Worker holds a single first-party Apify token
+  (`APIFY_TOKEN`, a secret) - callers never supply Apify credentials. The Actor
+  is swappable via `APIFY_ACTOR_ID` (e.g. back to `trudax/reddit-scraper-lite`,
+  a supported fallback); each supported Actor has an adapter that maps its own
+  input and output schema onto this server's stable surface, so callers never
+  depend on a specific Actor's field names.
 - **Auth:** the fleet auth contract (`open` | `bearer` | `edison-jwt`, see
   `src/auth.ts`); production runs `edison-jwt`.
 
@@ -65,13 +69,13 @@ untouched Actor item is preserved under `raw`.
 | `raw` | object | The untouched Actor dataset item. |
 
 Engagement fields (`score`, `num_comments`, `upvote_ratio`, `num_crossposts`)
-are `null` when the Actor does not provide them, never faked as `0`.
-`trudax/reddit-scraper-lite` omits them in its default fast RSS mode; set
-`include_media_links: true` to switch it to a detailed scrape that returns
-them, and they flow through the same normalized schema. (Pointing
-`APIFY_ACTOR_ID` at the flat-rate `trudax/reddit-scraper` sibling also returns
-them, but that Actor bills a monthly rental; `include_media_links` gets the same
-data on the pay-per-use lite Actor.)
+are `null` when the Actor does not provide them, never faked as `0`. The default
+`fatihtahta/reddit-scraper-search-fast` always returns them, so
+`include_media_links` is a no-op there. On the `trudax/reddit-scraper-lite`
+fallback they are omitted in its fast RSS mode; set `include_media_links: true`
+to switch it to a detailed scrape that returns them (the flat-rate
+`trudax/reddit-scraper` sibling returns them too, but bills a monthly rental).
+Either way they flow through the same normalized schema.
 
 ## Async run + poll (`reddit_scrape_start` / `reddit_scrape_fetch`)
 

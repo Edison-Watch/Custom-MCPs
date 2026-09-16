@@ -15,10 +15,22 @@
 export const APIFY_BASE = "https://api.apify.com/v2";
 
 /**
- * trudax/reddit-scraper-lite: pay-per-result (~$0.0038/item), same input schema
- * as the $45/mo flat-rate sibling. Tilde form is the URL-safe "username~name".
+ * The reddit-scraper Actor the fleet server runs by default. Every supported
+ * Actor maps onto the same normalized item shape via a per-Actor adapter (input
+ * builder + output field map; see below), so the choice is a cost/reliability
+ * decision, not a contract change:
+ *
+ *  - fatihtahta/reddit-scraper-search-fast ("Enterprise Grade") - the default.
+ *    In production it ran ~2.5x cheaper per run than trudax/reddit-scraper-lite
+ *    ($0.042 vs $0.105) and, unlike lite, never TIMED-OUT on keyword searches
+ *    (lite timed out on ~16% of runs, each still billed). Reddit-native
+ *    snake_case output.
+ *  - trudax/reddit-scraper-lite - the prior default, kept fully supported as an
+ *    instant rollback: set APIFY_ACTOR_ID to it (no redeploy of logic needed).
+ *
+ * Tilde form is the URL-safe "username~name".
  */
-export const DEFAULT_ACTOR_ID = "trudax~reddit-scraper-lite";
+export const DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast";
 
 /**
  * Cap the synchronous Apify run. Lower than the Python service's 300s: a Worker
@@ -59,8 +71,22 @@ export function hasTarget(args: RedditScrapeArgs): boolean {
   return Boolean(normalizeSearch(args.search)) || (args.start_urls?.length ?? 0) > 0;
 }
 
-/** Map the first-party input onto the Actor's input schema. */
-export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown> {
+// --- Per-Actor input builders ----------------------------------------------
+//
+// Each supported Actor takes a different input schema, so the first-party args
+// are mapped per-Actor. buildActorInput dispatches to one of these via the
+// adapter registry down in the normalization section (an Actor's input builder
+// and its output field map are the two halves of one adapter).
+
+/**
+ * trudax/reddit-scraper-lite and its flat-rate reddit-scraper sibling share one
+ * input schema: `searches`, `searchCommunityName`, `startUrls` as {url} objects,
+ * `skipComments`, `time`, and an explicit residential-proxy block. Its fast RSS
+ * mode omits engagement fields; `includeMediaLinks` switches it to a detailed
+ * scrape that returns upVotes / numberOfComments / upVoteRatio (and media URLs),
+ * which the trudax field map picks up.
+ */
+function buildTrudaxInput(args: RedditScrapeArgs): Record<string, unknown> {
   const search = normalizeSearch(args.search);
   const startUrls = args.start_urls ?? [];
   const maxItems = args.max_items ?? 10;
@@ -70,9 +96,6 @@ export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown>
     maxPostCount: maxItems,
     skipComments: !(args.include_comments ?? false),
     includeNSFW: args.include_nsfw ?? false,
-    // The Actor's fast RSS mode omits engagement fields; includeMediaLinks
-    // switches it to a detailed scrape that returns upVotes / numberOfComments
-    // / upVoteRatio (and media URLs), which the normalizer already maps.
     includeMediaLinks: args.include_media_links ?? false,
     sort: args.sort ?? "new",
     proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
@@ -82,6 +105,42 @@ export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown>
   if (startUrls.length > 0) actorInput.startUrls = startUrls.map((url) => ({ url }));
   if (args.time_filter) actorInput.time = args.time_filter;
   return actorInput;
+}
+
+/**
+ * fatihtahta/reddit-scraper-search-fast uses its own input schema: `queries`
+ * (not `searches`), `maxPosts` (not maxItems/maxPostCount), `urls` as bare
+ * strings (not {url} objects), `scrapeComments` (not skipComments),
+ * `subredditName` (not searchCommunityName), `timeframe` (not time), and
+ * `includeNsfw`. It handles its own proxying, so no `proxy` block is sent, and
+ * it always returns engagement fields, so `include_media_links` is a no-op here.
+ */
+function buildFatihtahtaInput(args: RedditScrapeArgs): Record<string, unknown> {
+  const search = normalizeSearch(args.search);
+  const startUrls = args.start_urls ?? [];
+  const maxItems = args.max_items ?? 10;
+
+  const actorInput: Record<string, unknown> = {
+    maxPosts: maxItems,
+    scrapeComments: args.include_comments ?? false,
+    includeNsfw: args.include_nsfw ?? false,
+    sort: fatihtahtaSort(args.sort ?? "new"),
+  };
+  if (search) actorInput.queries = [search];
+  if (args.subreddit) actorInput.subredditName = args.subreddit;
+  if (startUrls.length > 0) actorInput.urls = startUrls;
+  if (args.time_filter) actorInput.timeframe = args.time_filter;
+  return actorInput;
+}
+
+/**
+ * This Actor's `sort` enum omits "rising" (it offers relevance/hot/top/new/
+ * comments). Map that one unsupported value onto the nearest trending sort so a
+ * caller asking for "rising" gets sensible ordering instead of an Actor
+ * input-validation error; every other value passes straight through.
+ */
+function fatihtahtaSort(sort: RedditSort): string {
+  return sort === "rising" ? "hot" : sort;
 }
 
 /** Strip any trailing slashes from the API base so path joins never double up. */
@@ -267,10 +326,69 @@ const DEFAULT_FIELD_MAP: FieldMap = {
   num_crossposts: ["num_crossposts", "numberOfCrossposts", "crossposts"],
 };
 
-const FIELD_MAP_BY_ACTOR: Record<string, FieldMap> = {
-  "trudax~reddit-scraper-lite": TRUDAX_FIELD_MAP,
-  "trudax~reddit-scraper": TRUDAX_FIELD_MAP,
+/**
+ * fatihtahta/reddit-scraper-search-fast emits Reddit's native snake_case fields
+ * plus derived extras. `kind` is the post/comment discriminator; `created_utc`
+ * arrives as an ISO8601 string here (asIso also accepts an epoch number, so a
+ * numeric variant still normalizes). Engagement counts are always present.
+ */
+const FATIHTAHTA_FIELD_MAP: FieldMap = {
+  id: ["id"],
+  type: ["kind"],
+  title: ["title"],
+  body: ["body"],
+  author: ["author"],
+  subreddit: ["subreddit", "subreddit_name_prefixed"],
+  url: ["url", "canonical_url"],
+  permalink: ["permalink"],
+  created_at: ["created_utc"],
+  score: ["score"],
+  num_comments: ["num_comments"],
+  upvote_ratio: ["upvote_ratio"],
+  over_18: ["over_18"],
+  num_crossposts: ["num_crossposts"],
 };
+
+// --- Per-Actor adapters -----------------------------------------------------
+//
+// An adapter pairs an Actor's input builder with its output field map. Adding an
+// Actor is a data change (one adapter + one registry entry), not new dispatch
+// code. buildActorInput and fieldMapForActor both resolve through here so the
+// input we send and the output we normalize can never disagree on the Actor.
+
+interface ActorAdapter {
+  buildInput: (args: RedditScrapeArgs) => Record<string, unknown>;
+  fieldMap: FieldMap;
+}
+
+const TRUDAX_ADAPTER: ActorAdapter = { buildInput: buildTrudaxInput, fieldMap: TRUDAX_FIELD_MAP };
+const FATIHTAHTA_ADAPTER: ActorAdapter = {
+  buildInput: buildFatihtahtaInput,
+  fieldMap: FATIHTAHTA_FIELD_MAP,
+};
+// Unknown Actor: the long-standing trudax-style input shape plus the broad,
+// best-effort output map. A bespoke Actor should get its own adapter instead.
+const DEFAULT_ADAPTER: ActorAdapter = { buildInput: buildTrudaxInput, fieldMap: DEFAULT_FIELD_MAP };
+
+const ADAPTER_BY_ACTOR: Record<string, ActorAdapter> = {
+  "trudax~reddit-scraper-lite": TRUDAX_ADAPTER,
+  "trudax~reddit-scraper": TRUDAX_ADAPTER,
+  "fatihtahta~reddit-scraper-search-fast": FATIHTAHTA_ADAPTER,
+};
+
+export function adapterForActor(actorId: string): ActorAdapter {
+  // Strip an Apify build tag (`actor:tag`) before lookup.
+  const base = actorId.split(":", 1)[0];
+  return ADAPTER_BY_ACTOR[base] ?? DEFAULT_ADAPTER;
+}
+
+/** Map the first-party input onto the configured Actor's own input schema. */
+export function buildActorInput(
+  args: RedditScrapeArgs,
+  actorId: string,
+): Record<string, unknown> {
+  return adapterForActor(actorId).buildInput(args);
+}
 
 /** Raw type/kind discriminators (incl. Reddit's t1/t3/t5/t2 codes) -> our literal. */
 const TYPE_ALIASES: Record<string, RedditItemType> = {
@@ -289,9 +407,7 @@ const TYPE_ALIASES: Record<string, RedditItemType> = {
 };
 
 export function fieldMapForActor(actorId: string): FieldMap {
-  // Strip an Apify build tag (`actor:tag`) before lookup.
-  const base = actorId.split(":", 1)[0];
-  return FIELD_MAP_BY_ACTOR[base] ?? DEFAULT_FIELD_MAP;
+  return adapterForActor(actorId).fieldMap;
 }
 
 function firstPresent(raw: Record<string, unknown>, keys: string[]): unknown {

@@ -62,9 +62,31 @@ _DEFAULT_FIELD_MAP: dict[str, list[str]] = {
     "num_crossposts": ["num_crossposts", "numberOfCrossposts", "crossposts"],
 }
 
+# fatihtahta/reddit-scraper-search-fast emits Reddit's native snake_case fields
+# plus derived extras. ``kind`` is the post/comment discriminator; ``created_utc``
+# arrives as an ISO8601 string (``_as_iso`` also accepts an epoch number, so a
+# numeric variant still normalizes). Engagement counts are always present.
+_FATIHTAHTA_FIELD_MAP: dict[str, list[str]] = {
+    "id": ["id"],
+    "type": ["kind"],
+    "title": ["title"],
+    "body": ["body"],
+    "author": ["author"],
+    "subreddit": ["subreddit", "subreddit_name_prefixed"],
+    "url": ["url", "canonical_url"],
+    "permalink": ["permalink"],
+    "created_at": ["created_utc"],
+    "score": ["score"],
+    "num_comments": ["num_comments"],
+    "upvote_ratio": ["upvote_ratio"],
+    "over_18": ["over_18"],
+    "num_crossposts": ["num_crossposts"],
+}
+
 _FIELD_MAP_BY_ACTOR: dict[str, dict[str, list[str]]] = {
     "trudax~reddit-scraper-lite": _TRUDAX_FIELD_MAP,
     "trudax~reddit-scraper": _TRUDAX_FIELD_MAP,
+    "fatihtahta~reddit-scraper-search-fast": _FATIHTAHTA_FIELD_MAP,
 }
 
 # Raw type/kind discriminators (incl. Reddit's t1/t3/t5/t2 codes) -> our literal.

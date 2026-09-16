@@ -61,9 +61,12 @@ describe("hasTarget", () => {
   });
 });
 
-describe("buildActorInput", () => {
-  test("maps a search query onto the Actor schema with defaults", () => {
-    const input = buildActorInput({ search: "claude code", subreddit: "programming" });
+const TRUDAX = "trudax~reddit-scraper-lite";
+const FATIHTAHTA = "fatihtahta~reddit-scraper-search-fast";
+
+describe("buildActorInput (trudax)", () => {
+  test("maps a search query onto the trudax schema with defaults", () => {
+    const input = buildActorInput({ search: "claude code", subreddit: "programming" }, TRUDAX);
     expect(input).toMatchObject({
       searches: ["claude code"],
       searchCommunityName: "programming",
@@ -81,15 +84,18 @@ describe("buildActorInput", () => {
   });
 
   test("honors overrides and include_comments flips skipComments", () => {
-    const input = buildActorInput({
-      search: "keyboards",
-      sort: "top",
-      time_filter: "week",
-      max_items: 25,
-      include_comments: true,
-      include_nsfw: true,
-      include_media_links: true,
-    });
+    const input = buildActorInput(
+      {
+        search: "keyboards",
+        sort: "top",
+        time_filter: "week",
+        max_items: 25,
+        include_comments: true,
+        include_nsfw: true,
+        include_media_links: true,
+      },
+      TRUDAX,
+    );
     expect(input).toMatchObject({
       sort: "top",
       time: "week",
@@ -103,9 +109,53 @@ describe("buildActorInput", () => {
   });
 
   test("maps start_urls to {url} objects and drops a blank search", () => {
-    const input = buildActorInput({ search: "   ", start_urls: ["https://www.reddit.com/r/python/"] });
+    const input = buildActorInput(
+      { search: "   ", start_urls: ["https://www.reddit.com/r/python/"] },
+      TRUDAX,
+    );
     expect(input.startUrls).toEqual([{ url: "https://www.reddit.com/r/python/" }]);
     expect(input.searches).toBeUndefined();
+  });
+});
+
+describe("buildActorInput (fatihtahta, the default Actor)", () => {
+  test("maps onto fatihtahta's distinct schema, omitting trudax-only keys", () => {
+    const input = buildActorInput(
+      {
+        search: "keyboards",
+        subreddit: "MechanicalKeyboards",
+        sort: "top",
+        time_filter: "week",
+        max_items: 25,
+        include_comments: true,
+      },
+      FATIHTAHTA,
+    );
+    expect(input).toMatchObject({
+      queries: ["keyboards"],
+      subredditName: "MechanicalKeyboards",
+      sort: "top",
+      timeframe: "week",
+      maxPosts: 25,
+      scrapeComments: true,
+    });
+    // trudax-only keys are never sent to this Actor.
+    expect(input.searches).toBeUndefined();
+    expect(input.maxItems).toBeUndefined();
+    expect(input.proxy).toBeUndefined();
+    expect(input.includeMediaLinks).toBeUndefined();
+  });
+
+  test("takes urls as bare strings (not {url} objects)", () => {
+    const input = buildActorInput({ start_urls: ["https://www.reddit.com/r/python/"] }, FATIHTAHTA);
+    expect(input.urls).toEqual(["https://www.reddit.com/r/python/"]);
+    expect(input.queries).toBeUndefined();
+  });
+
+  test("maps the unsupported 'rising' sort onto 'hot'", () => {
+    expect(buildActorInput({ search: "rust", sort: "rising" }, FATIHTAHTA).sort).toBe("hot");
+    // A supported value passes straight through.
+    expect(buildActorInput({ search: "rust", sort: "new" }, FATIHTAHTA).sort).toBe("new");
   });
 });
 
@@ -139,14 +189,18 @@ describe("validateDatasetItems", () => {
 });
 
 describe("fieldMapForActor", () => {
-  test("both trudax actors share one map; unknown actors fall back", () => {
+  test("both trudax actors share one map; fatihtahta + unknown differ", () => {
     const lite = fieldMapForActor("trudax~reddit-scraper-lite");
     const full = fieldMapForActor("trudax~reddit-scraper");
+    const fast = fieldMapForActor("fatihtahta~reddit-scraper-search-fast");
     const other = fieldMapForActor("someone~custom-reddit-actor");
     expect(lite).toBe(full);
+    expect(fast).not.toBe(lite);
     expect(other).not.toBe(lite);
+    expect(other).not.toBe(fast);
     // A build tag is stripped before lookup.
     expect(fieldMapForActor("trudax~reddit-scraper-lite:latest")).toBe(lite);
+    expect(fieldMapForActor("fatihtahta~reddit-scraper-search-fast:latest")).toBe(fast);
   });
 });
 
@@ -172,6 +226,39 @@ describe("normalizeItem", () => {
     expect(item.num_comments).toBe(42);
     expect(item.upvote_ratio).toBe(0.98);
     expect(item.num_crossposts).toBe(3);
+  });
+
+  test("fatihtahta post: Reddit-native fields map through with engagement", () => {
+    const item = normalizeItem(
+      {
+        id: "1widcup",
+        kind: "post",
+        title: "How do you cope with AI in the workplace?",
+        body: "Lately, I feel like I have lost my passion for programming.",
+        author: "Lumpy_Response_3443",
+        subreddit: "antiai",
+        subreddit_name_prefixed: "r/antiai",
+        url: "https://www.reddit.com/r/antiai/comments/1widcup/how_do_you_cope/",
+        permalink: "/r/antiai/comments/1widcup/how_do_you_cope/",
+        created_utc: "2026-09-16T23:28:56.000Z",
+        score: 2,
+        num_comments: 5,
+        upvote_ratio: 1,
+        over_18: false,
+        num_crossposts: 0,
+      },
+      "fatihtahta~reddit-scraper-search-fast",
+    );
+    expect(item.id).toBe("1widcup");
+    expect(item.type).toBe("post"); // from `kind`
+    expect(item.author).toBe("Lumpy_Response_3443");
+    expect(item.subreddit).toBe("antiai");
+    expect(item.permalink).toBe("/r/antiai/comments/1widcup/how_do_you_cope/");
+    expect(item.created_at).toBe("2026-09-16T23:28:56.000Z");
+    expect(item.score).toBe(2);
+    expect(item.num_comments).toBe(5);
+    expect(item.upvote_ratio).toBe(1);
+    expect(item.over_18).toBe(false);
   });
 
   test("default map reads Reddit's snake_case JSON API (epoch -> ISO8601)", () => {

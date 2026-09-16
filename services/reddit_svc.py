@@ -43,11 +43,13 @@ __all__ = [
     "reddit_scrape_start",
 ]
 
-# Default Actor slug in tilde form (username~name). trudax/reddit-scraper-lite is
-# pay-per-result (~$0.0038/item) rather than the $45/mo flat-rate sibling.
-# Overridable at runtime via APIFY_ACTOR_ID; the normalizer maps whichever Actor
-# is configured onto the stable NormalizedRedditItem shape (see below).
-_DEFAULT_ACTOR_ID = "trudax~reddit-scraper-lite"
+# Default Actor slug in tilde form (username~name). fatihtahta/reddit-scraper-
+# search-fast ran ~2.5x cheaper per run than trudax/reddit-scraper-lite in
+# production ($0.042 vs $0.105) and never TIMED-OUT (lite timed out on ~16% of
+# runs, each still billed). Overridable at runtime via APIFY_ACTOR_ID; each
+# supported Actor has an adapter (input builder + field map) that maps it onto
+# the stable NormalizedRedditItem shape, so trudax stays an instant rollback.
+_DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast"
 _APIFY_BASE = "https://api.apify.com/v2"
 # Apify's hard ceiling for a synchronous run; also what we ask the run to honour.
 _RUN_TIMEOUT_S = 300
@@ -114,8 +116,16 @@ def _normalize_dataset(items: Any, actor_id: str) -> list[NormalizedRedditItem]:
     return normalize_items(items, actor_id)
 
 
-def _build_actor_input(inp: RedditScrapeInput) -> dict:
-    """Map the first-party input onto the Actor's input schema."""
+# --- Per-Actor input builders ----------------------------------------------
+#
+# Each supported Actor takes a different input schema, so the first-party input
+# is mapped per-Actor. _build_actor_input dispatches on the configured Actor;
+# its output field map (services/reddit_normalize.py) is the other half of the
+# same adapter, so the input we send and the output we normalize stay in sync.
+
+
+def _build_trudax_input(inp: RedditScrapeInput) -> dict:
+    """trudax/reddit-scraper-lite (and its flat-rate sibling) input schema."""
     actor_input: dict = {
         "maxItems": inp.max_items,
         "maxPostCount": inp.max_items,
@@ -139,6 +149,57 @@ def _build_actor_input(inp: RedditScrapeInput) -> dict:
     return actor_input
 
 
+def _fatihtahta_sort(sort: str) -> str:
+    # This Actor's sort enum omits "rising" (relevance/hot/top/new/comments);
+    # map that one value onto the nearest trending sort instead of sending an
+    # input the Actor would reject. Every other value passes straight through.
+    return "hot" if sort == "rising" else sort
+
+
+def _build_fatihtahta_input(inp: RedditScrapeInput) -> dict:
+    """fatihtahta/reddit-scraper-search-fast input schema.
+
+    Distinct from trudax: ``queries`` (not ``searches``), ``maxPosts`` (not
+    maxItems/maxPostCount), ``urls`` as bare strings (not ``{"url": ...}``),
+    ``scrapeComments`` (not skipComments), ``subredditName`` (not
+    searchCommunityName), ``timeframe`` (not time), ``includeNsfw``. It handles
+    its own proxying (no ``proxy`` block) and always returns engagement fields,
+    so ``include_media_links`` has no effect here.
+    """
+    actor_input: dict = {
+        "maxPosts": inp.max_items,
+        "scrapeComments": inp.include_comments,
+        "includeNsfw": inp.include_nsfw,
+        "sort": _fatihtahta_sort(inp.sort),
+    }
+    if inp.search:
+        actor_input["queries"] = [inp.search]
+    if inp.subreddit:
+        actor_input["subredditName"] = inp.subreddit
+    if inp.start_urls:
+        actor_input["urls"] = list(inp.start_urls)
+    if inp.time_filter:
+        actor_input["timeframe"] = inp.time_filter
+    return actor_input
+
+
+# Input builders keyed by base Actor slug (build tag stripped). An unknown Actor
+# falls back to the long-standing trudax-style input, matching the normalizer's
+# best-effort default field map.
+_INPUT_BUILDER_BY_ACTOR = {
+    "trudax~reddit-scraper-lite": _build_trudax_input,
+    "trudax~reddit-scraper": _build_trudax_input,
+    "fatihtahta~reddit-scraper-search-fast": _build_fatihtahta_input,
+}
+
+
+def _build_actor_input(inp: RedditScrapeInput, actor_id: str) -> dict:
+    """Map the first-party input onto the configured Actor's input schema."""
+    base = actor_id.split(":", 1)[0]
+    builder = _INPUT_BUILDER_BY_ACTOR.get(base, _build_trudax_input)
+    return builder(inp)
+
+
 @service(
     name="reddit_scrape",
     description=(
@@ -157,7 +218,7 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
     # Bearer header rather than a ?token= query param: Apify recommends it, and
     # it keeps the secret out of URLs that proxies and servers may log.
     headers = {"Authorization": f"Bearer {token}"}
-    actor_input = _build_actor_input(input)
+    actor_input = _build_actor_input(input, actor_id)
 
     log.info("reddit_scrape: starting Apify run for actor {}", actor_id)
     try:
@@ -235,7 +296,7 @@ def reddit_scrape_start(input: RedditScrapeInput) -> RedditScrapeStartResult:
     actor_id = _actor_id()
     url = f"{_apify_base()}/acts/{actor_id}/runs"
     headers = {"Authorization": f"Bearer {token}"}
-    actor_input = _build_actor_input(input)
+    actor_input = _build_actor_input(input, actor_id)
 
     log.info("reddit_scrape_start: enqueuing async Apify run for actor {}", actor_id)
     try:
