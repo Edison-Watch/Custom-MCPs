@@ -95,9 +95,11 @@ const scrapeInputSchema = {
     .boolean()
     .optional()
     .describe(
-      "Extract engagement fields (upvotes, comment count, upvote ratio) and media URLs " +
-        "(default: false). Off uses the fast RSS mode that omits engagement; on switches to " +
-        "a slower detailed scrape. Enable when ranking needs reach/engagement signal.",
+      "Only affects the trudax/reddit-scraper-lite Actor (set via APIFY_ACTOR_ID): it " +
+        "switches lite from its fast RSS mode to a slower detailed scrape that returns " +
+        "engagement fields (upvotes, comment count, upvote ratio) and media URLs. No-op on " +
+        "the default fatihtahta/reddit-scraper-search-fast Actor, which always returns " +
+        "engagement fields on posts (default: false).",
     ),
 };
 

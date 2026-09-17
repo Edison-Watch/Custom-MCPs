@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 from models.reddit import NormalizedRedditItem
-from services.reddit_adapters import ADAPTER_BY_ACTOR
+from services.reddit_adapters import ADAPTER_BY_ACTOR, adapter_for
 from services.reddit_svc import normalize_item
 from tests.test_template import TestTemplate
 
@@ -176,8 +176,13 @@ class TestRedditActorAdapters(TestTemplate):
 
     def test_every_adapter_field_map_covers_all_normalized_fields(self):
         # A half-written adapter (field map missing a normalized field) would
-        # silently normalize that field to None. Fail loudly instead.
-        for slug, adapter in ADAPTER_BY_ACTOR.items():
+        # silently normalize that field to None. Fail loudly instead. Cover the
+        # default fallback adapter too (it isn't in ADAPTER_BY_ACTOR): an
+        # unregistered Actor resolves to it, so a dropped key there would silently
+        # null that field for every such Actor.
+        default = adapter_for("someone~unregistered-actor")
+        registered = list(ADAPTER_BY_ACTOR.items())
+        for slug, adapter in [*registered, ("<default>", default)]:
             assert set(adapter.field_map) == _NORMALIZED_FIELDS, (
                 f"{slug} field map keys do not match NormalizedRedditItem"
             )

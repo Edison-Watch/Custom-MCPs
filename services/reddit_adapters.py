@@ -10,8 +10,8 @@ which reads ``field_map``) resolve through ``adapter_for``.
 
 Adding an Actor is a one-line data change here (one registry entry), never an
 edit spread across modules. Mirrors the TypeScript adapters in
-``servers/reddit/src/reddit.ts`` - the two registries must register the same
-Actor slugs (``tests/test_reddit_scraper.py`` asserts this cross-language).
+``servers/reddit/src/adapters.ts`` - the two registries must register the same
+Actor slugs (``tests/test_reddit_adapters.py`` asserts this cross-language).
 """
 
 from collections.abc import Callable

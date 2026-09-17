@@ -69,8 +69,9 @@ untouched Actor item is preserved under `raw`.
 | `raw` | object | The untouched Actor dataset item. |
 
 Engagement fields (`score`, `num_comments`, `upvote_ratio`, `num_crossposts`)
-are `null` when the Actor does not provide them, never faked as `0`. The default
-`fatihtahta/reddit-scraper-search-fast` always returns them, so
+are `null` when the Actor does not provide them, never faked as `0` (comment
+items, for example, carry no `num_crossposts`). The default
+`fatihtahta/reddit-scraper-search-fast` returns them on its post results, so
 `include_media_links` is a no-op there. On the `trudax/reddit-scraper-lite`
 fallback they are omitted in its fast RSS mode; set `include_media_links: true`
 to switch it to a detailed scrape that returns them (the flat-rate
