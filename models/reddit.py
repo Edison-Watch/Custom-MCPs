@@ -55,10 +55,12 @@ class RedditScrapeInput(BaseModel):
     include_nsfw: bool = Field(default=False, description="Include NSFW results.")
     include_media_links: bool = Field(
         default=False,
-        description="Extract engagement fields (upvotes, comment count, upvote "
-        "ratio) and media URLs. Off by default: the Actor's fast RSS mode omits "
-        "these, so turning this on switches to a slower detailed scrape. Enable "
-        "it when downstream ranking needs reach/engagement signal.",
+        description="Only affects the trudax/reddit-scraper-lite Actor (set via "
+        "APIFY_ACTOR_ID): it switches lite from its fast RSS mode to a slower "
+        "detailed scrape that returns engagement fields (upvotes, comment count, "
+        "upvote ratio) and media URLs. No-op on the default "
+        "fatihtahta/reddit-scraper-search-fast Actor, which always returns "
+        "engagement fields on posts.",
     )
 
     @model_validator(mode="after")

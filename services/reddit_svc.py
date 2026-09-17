@@ -30,6 +30,7 @@ from models.reddit import (
     RedditScrapeStartResult,
 )
 from services import service
+from services.reddit_adapters import adapter_for
 from services.reddit_normalize import normalize_item, normalize_items
 
 # Re-exported so callers keep importing the normalizer from this module even
@@ -43,11 +44,13 @@ __all__ = [
     "reddit_scrape_start",
 ]
 
-# Default Actor slug in tilde form (username~name). trudax/reddit-scraper-lite is
-# pay-per-result (~$0.0038/item) rather than the $45/mo flat-rate sibling.
-# Overridable at runtime via APIFY_ACTOR_ID; the normalizer maps whichever Actor
-# is configured onto the stable NormalizedRedditItem shape (see below).
-_DEFAULT_ACTOR_ID = "trudax~reddit-scraper-lite"
+# Default Actor slug in tilde form (username~name). fatihtahta/reddit-scraper-
+# search-fast ran ~2.5x cheaper per run than trudax/reddit-scraper-lite in
+# production ($0.042 vs $0.105) and never TIMED-OUT (lite timed out on ~16% of
+# runs, each still billed). Overridable at runtime via APIFY_ACTOR_ID; each
+# supported Actor has an adapter (input builder + field map) that maps it onto
+# the stable NormalizedRedditItem shape, so trudax stays an instant rollback.
+_DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast"
 _APIFY_BASE = "https://api.apify.com/v2"
 # Apify's hard ceiling for a synchronous run; also what we ask the run to honour.
 _RUN_TIMEOUT_S = 300
@@ -114,29 +117,17 @@ def _normalize_dataset(items: Any, actor_id: str) -> list[NormalizedRedditItem]:
     return normalize_items(items, actor_id)
 
 
-def _build_actor_input(inp: RedditScrapeInput) -> dict:
-    """Map the first-party input onto the Actor's input schema."""
-    actor_input: dict = {
-        "maxItems": inp.max_items,
-        "maxPostCount": inp.max_items,
-        "skipComments": not inp.include_comments,
-        "includeNSFW": inp.include_nsfw,
-        # The Actor's fast RSS mode omits engagement fields; includeMediaLinks
-        # switches it to a detailed scrape that returns upVotes / numberOfComments
-        # / upVoteRatio (and media URLs), which the normalizer already maps.
-        "includeMediaLinks": inp.include_media_links,
-        "sort": inp.sort,
-        "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
-    }
-    if inp.search:
-        actor_input["searches"] = [inp.search]
-    if inp.subreddit:
-        actor_input["searchCommunityName"] = inp.subreddit
-    if inp.start_urls:
-        actor_input["startUrls"] = [{"url": u} for u in inp.start_urls]
-    if inp.time_filter:
-        actor_input["time"] = inp.time_filter
-    return actor_input
+# --- Per-Actor input building ----------------------------------------------
+#
+# Each supported Actor takes a different input schema. The mapping lives in the
+# per-Actor adapter (services/reddit_adapters.py) alongside that Actor's output
+# field map, so the input we send and the output we normalize resolve from one
+# source of truth. Build the request via ``adapter_for(actor_id).build_input``.
+
+
+def _build_actor_input(inp: RedditScrapeInput, actor_id: str) -> dict:
+    """Map the first-party input onto the configured Actor's input schema."""
+    return adapter_for(actor_id).build_input(inp)
 
 
 @service(
@@ -157,7 +148,7 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
     # Bearer header rather than a ?token= query param: Apify recommends it, and
     # it keeps the secret out of URLs that proxies and servers may log.
     headers = {"Authorization": f"Bearer {token}"}
-    actor_input = _build_actor_input(input)
+    actor_input = _build_actor_input(input, actor_id)
 
     log.info("reddit_scrape: starting Apify run for actor {}", actor_id)
     try:
@@ -235,7 +226,7 @@ def reddit_scrape_start(input: RedditScrapeInput) -> RedditScrapeStartResult:
     actor_id = _actor_id()
     url = f"{_apify_base()}/acts/{actor_id}/runs"
     headers = {"Authorization": f"Bearer {token}"}
-    actor_input = _build_actor_input(input)
+    actor_input = _build_actor_input(input, actor_id)
 
     log.info("reddit_scrape_start: enqueuing async Apify run for actor {}", actor_id)
     try:

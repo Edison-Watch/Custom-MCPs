@@ -12,13 +12,30 @@
  * wraps the same Actor for the CLI/HTTP/stdio transports.
  */
 
+// Per-Actor field maps live in ./adapters; normalizeItem resolves one through
+// this helper. The import is call-time only (used inside normalizeItem), so the
+// reddit <-> adapters cycle is safe: neither module touches the other at init.
+import { fieldMapForActor } from "./adapters";
+
 export const APIFY_BASE = "https://api.apify.com/v2";
 
 /**
- * trudax/reddit-scraper-lite: pay-per-result (~$0.0038/item), same input schema
- * as the $45/mo flat-rate sibling. Tilde form is the URL-safe "username~name".
+ * The reddit-scraper Actor the fleet server runs by default. Every supported
+ * Actor maps onto the same normalized item shape via a per-Actor adapter (input
+ * builder + output field map; see below), so the choice is a cost/reliability
+ * decision, not a contract change:
+ *
+ *  - fatihtahta/reddit-scraper-search-fast ("Enterprise Grade") - the default.
+ *    In production it ran ~2.5x cheaper per run than trudax/reddit-scraper-lite
+ *    ($0.042 vs $0.105) and, unlike lite, never TIMED-OUT on keyword searches
+ *    (lite timed out on ~16% of runs, each still billed). Reddit-native
+ *    snake_case output.
+ *  - trudax/reddit-scraper-lite - the prior default, kept fully supported as an
+ *    instant rollback: set APIFY_ACTOR_ID to it (no redeploy of logic needed).
+ *
+ * Tilde form is the URL-safe "username~name".
  */
-export const DEFAULT_ACTOR_ID = "trudax~reddit-scraper-lite";
+export const DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast";
 
 /**
  * Cap the synchronous Apify run. Lower than the Python service's 300s: a Worker
@@ -59,30 +76,9 @@ export function hasTarget(args: RedditScrapeArgs): boolean {
   return Boolean(normalizeSearch(args.search)) || (args.start_urls?.length ?? 0) > 0;
 }
 
-/** Map the first-party input onto the Actor's input schema. */
-export function buildActorInput(args: RedditScrapeArgs): Record<string, unknown> {
-  const search = normalizeSearch(args.search);
-  const startUrls = args.start_urls ?? [];
-  const maxItems = args.max_items ?? 10;
-
-  const actorInput: Record<string, unknown> = {
-    maxItems,
-    maxPostCount: maxItems,
-    skipComments: !(args.include_comments ?? false),
-    includeNSFW: args.include_nsfw ?? false,
-    // The Actor's fast RSS mode omits engagement fields; includeMediaLinks
-    // switches it to a detailed scrape that returns upVotes / numberOfComments
-    // / upVoteRatio (and media URLs), which the normalizer already maps.
-    includeMediaLinks: args.include_media_links ?? false,
-    sort: args.sort ?? "new",
-    proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
-  };
-  if (search) actorInput.searches = [search];
-  if (args.subreddit) actorInput.searchCommunityName = args.subreddit;
-  if (startUrls.length > 0) actorInput.startUrls = startUrls.map((url) => ({ url }));
-  if (args.time_filter) actorInput.time = args.time_filter;
-  return actorInput;
-}
+// Per-Actor input building (and output field maps) live in ./adapters, keyed by
+// Actor slug. buildActorInput / fieldMapForActor there resolve from one registry
+// so the input we send and the output we normalize can never disagree.
 
 /** Strip any trailing slashes from the API base so path joins never double up. */
 function normalizeBase(base: string): string {
@@ -189,12 +185,11 @@ export function validateDatasetItems(json: unknown): DatasetResult {
 
 // --- Normalization ---------------------------------------------------------
 //
-// Each Actor names its output fields differently, so callers should never depend
-// on a specific Actor's raw keys. These per-Actor field maps translate an Actor's
-// item onto the stable NormalizedRedditItem shape. A map keys a normalized field
-// to an ordered list of candidate source keys; the first key present with a
-// non-null value wins. Adding a new Actor is a data change (one map + one
-// registry entry), not new mapping code. Mirrors services/reddit_svc.py.
+// Callers never depend on a specific Actor's raw keys: normalizeItem maps every
+// item onto the stable NormalizedRedditItem shape using that Actor's field map
+// (a normalized field -> ordered candidate source keys; first present wins),
+// resolved via fieldMapForActor in ./adapters. Mirrors the Python normalizer in
+// services/reddit_normalize.py.
 
 export type RedditItemType = "post" | "comment" | "community" | "user";
 
@@ -216,61 +211,12 @@ export interface NormalizedRedditItem {
   raw: Record<string, unknown>;
 }
 
-type FieldMap = Record<keyof Omit<NormalizedRedditItem, "raw">, string[]>;
-
 /**
- * The trudax family (reddit-scraper-lite and its flat-rate reddit-scraper
- * sibling) share one output schema, verified from Apify's documented actor
- * schemas: posts carry upVotes / numberOfComments / upVoteRatio; comments carry
- * numberOfVotes and their text under description. reddit-scraper-lite in its
- * default fast RSS mode omits the engagement fields, so they normalize to null;
- * setting include_media_links (the Actor's includeMediaLinks input) switches it
- * to a detailed scrape that returns them, and they flow through this same map.
+ * A field map keys a normalized field to an ordered list of candidate source
+ * keys. Defined here (beside NormalizedRedditItem) but populated per-Actor in
+ * ./adapters.
  */
-const TRUDAX_FIELD_MAP: FieldMap = {
-  id: ["id", "parsedId"],
-  type: ["dataType"],
-  title: ["title"],
-  body: ["body", "description", "html"],
-  author: ["username", "author"],
-  subreddit: ["communityName", "parsedCommunityName"],
-  url: ["url"],
-  permalink: ["permalink"],
-  created_at: ["createdAt"],
-  score: ["upVotes", "numberOfVotes"],
-  num_comments: ["numberOfComments"],
-  upvote_ratio: ["upVoteRatio"],
-  over_18: ["over18"],
-  num_crossposts: ["numberOfCrossposts"],
-};
-
-/**
- * Fallback for an Actor with no registered map: a broad candidate-key list
- * spanning snake_case (Reddit's own JSON API) and common camelCase variants.
- * Best-effort only - a bespoke Actor should get its own entry in
- * FIELD_MAP_BY_ACTOR rather than rely on these guesses.
- */
-const DEFAULT_FIELD_MAP: FieldMap = {
-  id: ["id", "name"],
-  type: ["type", "dataType", "kind"],
-  title: ["title"],
-  body: ["body", "selftext", "text", "description", "html"],
-  author: ["author", "username", "user"],
-  subreddit: ["subreddit", "communityName", "community"],
-  url: ["url", "link"],
-  permalink: ["permalink"],
-  created_at: ["created_at", "createdAt", "created_utc", "created"],
-  score: ["score", "upVotes", "ups", "numberOfVotes"],
-  num_comments: ["num_comments", "numberOfComments", "comments", "commentCount"],
-  upvote_ratio: ["upvote_ratio", "upVoteRatio"],
-  over_18: ["over_18", "over18", "nsfw"],
-  num_crossposts: ["num_crossposts", "numberOfCrossposts", "crossposts"],
-};
-
-const FIELD_MAP_BY_ACTOR: Record<string, FieldMap> = {
-  "trudax~reddit-scraper-lite": TRUDAX_FIELD_MAP,
-  "trudax~reddit-scraper": TRUDAX_FIELD_MAP,
-};
+export type FieldMap = Record<keyof Omit<NormalizedRedditItem, "raw">, string[]>;
 
 /** Raw type/kind discriminators (incl. Reddit's t1/t3/t5/t2 codes) -> our literal. */
 const TYPE_ALIASES: Record<string, RedditItemType> = {
@@ -287,12 +233,6 @@ const TYPE_ALIASES: Record<string, RedditItemType> = {
   account: "user",
   t2: "user",
 };
-
-export function fieldMapForActor(actorId: string): FieldMap {
-  // Strip an Apify build tag (`actor:tag`) before lookup.
-  const base = actorId.split(":", 1)[0];
-  return FIELD_MAP_BY_ACTOR[base] ?? DEFAULT_FIELD_MAP;
-}
 
 function firstPresent(raw: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) {

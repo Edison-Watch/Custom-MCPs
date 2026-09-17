@@ -2,7 +2,8 @@
  * reddit - an Edison first-party MCP server.
  *
  * Search and scrape Reddit posts, comments, communities, and users. Wraps the
- * `trudax/reddit-scraper-lite` Apify Actor (swappable via APIFY_ACTOR_ID). The
+ * `fatihtahta/reddit-scraper-search-fast` Apify Actor (swappable via
+ * APIFY_ACTOR_ID; trudax/reddit-scraper-lite is a supported fallback). The
  * fast `reddit_scrape` tool uses the synchronous `run-sync-get-dataset-items`
  * endpoint (one blocking call); the `reddit_scrape_start` / `reddit_scrape_fetch`
  * pair runs a slow query asynchronously (enqueue a run, then poll it). All three
@@ -18,6 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
+import { buildActorInput } from "./adapters";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
@@ -25,7 +27,6 @@ import {
   RUN_TIMEOUT_S,
   SUCCEEDED,
   TERMINAL_FAILURE,
-  buildActorInput,
   datasetItemsUrl,
   hasTarget,
   normalizeItems,
@@ -94,9 +95,11 @@ const scrapeInputSchema = {
     .boolean()
     .optional()
     .describe(
-      "Extract engagement fields (upvotes, comment count, upvote ratio) and media URLs " +
-        "(default: false). Off uses the fast RSS mode that omits engagement; on switches to " +
-        "a slower detailed scrape. Enable when ranking needs reach/engagement signal.",
+      "Only affects the trudax/reddit-scraper-lite Actor (set via APIFY_ACTOR_ID): it " +
+        "switches lite from its fast RSS mode to a slower detailed scrape that returns " +
+        "engagement fields (upvotes, comment count, upvote ratio) and media URLs. No-op on " +
+        "the default fatihtahta/reddit-scraper-search-fast Actor, which always returns " +
+        "engagement fields on posts (default: false).",
     ),
 };
 
@@ -163,7 +166,7 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
             // Bearer header rather than a ?token= query param: keeps the secret
             // out of URLs that proxies and servers may log.
             headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify(buildActorInput(args)),
+            body: JSON.stringify(buildActorInput(args, actorId)),
             signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
           });
         } catch (err) {
@@ -232,7 +235,7 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           res = await fetch(runsUrl(actorId, base), {
             method: "POST",
             headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify(buildActorInput(args)),
+            body: JSON.stringify(buildActorInput(args, actorId)),
             // Short budget: this call only enqueues a run, it never waits on it.
             signal: AbortSignal.timeout(30_000),
           });

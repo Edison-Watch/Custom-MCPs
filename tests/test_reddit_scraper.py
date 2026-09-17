@@ -1,8 +1,9 @@
 """Tests for the Apify-backed Reddit scraper service (fast tier, no network).
 
 HTTP is stubbed with an httpx.MockTransport so no Apify call is made. Covers the
-happy path, input-to-Actor mapping, output normalization + the per-actor mapping
-layer, the missing-token guard, and error mapping.
+happy path, per-Actor input-to-Actor mapping, the missing-token guard, error
+mapping, and the async run + poll pair. Output normalization and the adapter
+registry guards live in ``tests/test_reddit_adapters.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from models.reddit import RedditScrapeFetchInput, RedditScrapeInput
 from services import discover_services, get_registry, reddit_svc
 from services.reddit_svc import (
     ApifyError,
-    normalize_item,
     reddit_scrape,
     reddit_scrape_fetch,
     reddit_scrape_start,
@@ -90,17 +90,86 @@ class TestRedditScrape(TestTemplate):
         # The untouched Actor item is preserved under `raw`.
         assert result.items[0].raw == {"title": "a"}
 
-    def test_maps_input_onto_actor_schema(self):
+    def test_maps_input_onto_default_fatihtahta_schema(self):
+        # The default Actor is fatihtahta/reddit-scraper-search-fast, whose input
+        # schema differs from trudax: queries/maxPosts/subredditName/timeframe/
+        # scrapeComments, no proxy block, includeMediaLinks has no equivalent.
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured.update(json.loads(request.content))
-            # Token travels in the Authorization header, never the URL.
             assert request.headers["Authorization"] == "Bearer test-token"
             assert "token" not in request.url.params
             return httpx.Response(200, json=[])
 
         with _token("test-token"), _mock_http(handler):
+            reddit_scrape(
+                RedditScrapeInput(
+                    search="keyboards",
+                    subreddit="MechanicalKeyboards",
+                    sort="top",
+                    time_filter="week",
+                    max_items=25,
+                    include_comments=True,
+                )
+            )
+
+        assert captured["queries"] == ["keyboards"]
+        assert captured["subredditName"] == "MechanicalKeyboards"
+        assert captured["sort"] == "top"
+        assert captured["timeframe"] == "week"
+        assert captured["maxPosts"] == 25
+        assert captured["scrapeComments"] is True  # include_comments=True
+        # trudax-only keys are never sent to this Actor.
+        assert "searches" not in captured
+        assert "proxy" not in captured
+        assert "includeMediaLinks" not in captured
+
+    def test_fatihtahta_maps_start_urls_as_bare_strings(self):
+        body: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body.update(json.loads(request.content))
+            return httpx.Response(200, json=[])
+
+        with _token("test-token"), _mock_http(handler):
+            reddit_scrape(
+                RedditScrapeInput(start_urls=["https://www.reddit.com/r/python/"])
+            )
+
+        # fatihtahta takes `urls` as bare strings, not trudax's {"url": ...}.
+        assert body["urls"] == ["https://www.reddit.com/r/python/"]
+
+    def test_fatihtahta_rising_sort_maps_to_hot(self):
+        # fatihtahta's sort enum omits "rising"; the adapter maps it to the
+        # nearest trending sort so the Actor never rejects the input.
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=[])
+
+        with _token("test-token"), _mock_http(handler):
+            reddit_scrape(RedditScrapeInput(search="rust", sort="rising"))
+
+        assert captured["sort"] == "hot"
+
+    def test_maps_input_onto_trudax_schema(self):
+        # Pinning APIFY_ACTOR_ID at trudax uses its distinct input schema:
+        # searches/maxItems/searchCommunityName/time/skipComments + proxy.
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            assert request.headers["Authorization"] == "Bearer test-token"
+            assert "token" not in request.url.params
+            return httpx.Response(200, json=[])
+
+        with (
+            _token("test-token"),
+            _actor("trudax~reddit-scraper-lite"),
+            _mock_http(handler),
+        ):
             reddit_scrape(
                 RedditScrapeInput(
                     search="keyboards",
@@ -121,27 +190,35 @@ class TestRedditScrape(TestTemplate):
         # Defaults off: fast RSS mode, no engagement extraction.
         assert captured["includeMediaLinks"] is False
 
-    def test_include_media_links_maps_to_actor_input(self):
+    def test_include_media_links_maps_to_trudax_input(self):
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured.update(json.loads(request.content))
             return httpx.Response(200, json=[])
 
-        with _token("test-token"), _mock_http(handler):
+        with (
+            _token("test-token"),
+            _actor("trudax~reddit-scraper-lite"),
+            _mock_http(handler),
+        ):
             reddit_scrape(RedditScrapeInput(search="dlp", include_media_links=True))
 
         # On -> the Actor returns engagement fields the normalizer maps.
         assert captured["includeMediaLinks"] is True
 
-    def test_start_urls_only_is_valid(self):
+    def test_trudax_maps_start_urls_to_url_objects(self):
         body: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             body.update(json.loads(request.content))
             return httpx.Response(200, json=[])
 
-        with _token("test-token"), _mock_http(handler):
+        with (
+            _token("test-token"),
+            _actor("trudax~reddit-scraper-lite"),
+            _mock_http(handler),
+        ):
             reddit_scrape(
                 RedditScrapeInput(start_urls=["https://www.reddit.com/r/python/"])
             )
@@ -223,72 +300,6 @@ class TestRedditScrape(TestTemplate):
         entry = next(e for e in get_registry() if e.name == "reddit_scrape_start")
         assert entry.mutating is True
 
-    def test_lite_post_normalizes_engagement_to_none(self):
-        # reddit-scraper-lite omits engagement counts -> nullable fields stay
-        # None (never faked as 0), while identity fields still map through.
-        item = normalize_item(_LITE_POST, "trudax~reddit-scraper-lite")
-        assert item.type == "post"
-        assert item.title == "Async runtimes in Rust"
-        assert item.author == "ferris"
-        assert item.subreddit == "rust"  # "r/" prefix stripped
-        assert item.created_at == "2023-06-09T05:23:15.000Z"
-        assert item.over_18 is False
-        assert item.score is None
-        assert item.num_comments is None
-        assert item.upvote_ratio is None
-        assert item.permalink == "/r/rust/comments/abc/async_runtimes/"
-
-    def test_full_actor_engagement_flows_through_same_map(self):
-        # Pointing APIFY_ACTOR_ID at the flat-rate sibling makes counts flow
-        # with no code change - same trudax field map.
-        item = normalize_item(_FULL_POST, "trudax~reddit-scraper")
-        assert item.score == 1500
-        assert item.num_comments == 42
-        assert item.upvote_ratio == 0.98
-        assert item.num_crossposts == 3
-
-    def test_default_map_reads_reddit_api_snake_case(self):
-        # An unregistered Actor falls back to broad candidate keys, including
-        # Reddit's own snake_case JSON API (epoch created_utc -> ISO8601).
-        raw = {
-            "kind": "t3",
-            "title": "hi",
-            "author": "spez",
-            "subreddit": "announcements",
-            "score": 9,
-            "num_comments": 4,
-            "upvote_ratio": 0.9,
-            "created_utc": 1686288195,
-        }
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.type == "post"
-        assert item.author == "spez"
-        assert item.score == 9
-        assert item.num_comments == 4
-        assert item.created_at is not None
-        assert item.created_at.startswith("2023-06-09T")
-
-    def test_non_finite_numbers_normalize_to_none(self):
-        # NaN/Infinity have no int/float form we can hand back; they normalize
-        # to None (matching the TS normalizer) instead of aborting the map.
-        raw = {
-            "kind": "t3",
-            "score": float("nan"),
-            "num_comments": float("inf"),
-            "upvote_ratio": float("nan"),
-        }
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.score is None
-        assert item.num_comments is None
-        assert item.upvote_ratio is None
-
-    def test_numeric_created_utc_uses_canonical_z_suffix(self):
-        # A numeric epoch becomes an ISO8601 string with a `Z` suffix (not
-        # `+00:00`) so Python matches the Worker's Date.toISOString() exactly.
-        raw = {"kind": "t3", "created_utc": 1686288195}
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.created_at == "2023-06-09T05:23:15.000Z"
-
     def test_scrape_normalizes_items_end_to_end(self):
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=[_FULL_POST])
@@ -334,8 +345,8 @@ class TestRedditScrapeAsync(TestTemplate):
         assert result.run_id == "RUN123"
         assert result.dataset_id == "DS123"
         assert result.status == "READY"
-        # The same actor-input mapping the sync path uses.
-        assert captured["searches"] == ["rust"]
+        # The same actor-input mapping the sync path uses (default fatihtahta).
+        assert captured["queries"] == ["rust"]
 
     def test_start_missing_token_raises(self):
         with _token(None), pytest.raises(ApifyError, match="APIFY_API_KEY"):
