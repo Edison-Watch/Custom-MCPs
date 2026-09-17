@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import { buildActorInput, fieldMapForActor } from "../../src/adapters";
 import {
-  buildActorInput,
   datasetItemsUrl,
-  fieldMapForActor,
   hasTarget,
   normalizeItem,
   normalizeItems,

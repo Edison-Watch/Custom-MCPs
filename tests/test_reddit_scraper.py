@@ -1,8 +1,9 @@
 """Tests for the Apify-backed Reddit scraper service (fast tier, no network).
 
 HTTP is stubbed with an httpx.MockTransport so no Apify call is made. Covers the
-happy path, input-to-Actor mapping, output normalization + the per-actor mapping
-layer, the missing-token guard, and error mapping.
+happy path, per-Actor input-to-Actor mapping, the missing-token guard, error
+mapping, and the async run + poll pair. Output normalization and the adapter
+registry guards live in ``tests/test_reddit_adapters.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from models.reddit import RedditScrapeFetchInput, RedditScrapeInput
 from services import discover_services, get_registry, reddit_svc
 from services.reddit_svc import (
     ApifyError,
-    normalize_item,
     reddit_scrape,
     reddit_scrape_fetch,
     reddit_scrape_start,
@@ -74,27 +74,6 @@ _FULL_POST = {
     "numberOfComments": 42,
     "upVoteRatio": 0.98,
     "numberOfCrossposts": 3,
-}
-
-# A representative fatihtahta/reddit-scraper-search-fast POST item (trimmed from
-# a real run): Reddit-native snake_case with engagement counts always present.
-_FATIHTAHTA_POST = {
-    "id": "1widcup",
-    "kind": "post",
-    "title": "How do you cope with AI in the workplace?",
-    "body": "Lately, I feel like I have lost my passion for programming.",
-    "author": "Lumpy_Response_3443",
-    "subreddit": "antiai",
-    "subreddit_name_prefixed": "r/antiai",
-    "url": "https://www.reddit.com/r/antiai/comments/1widcup/how_do_you_cope/",
-    "canonical_url": "https://www.reddit.com/r/antiai/comments/1widcup/how_do_you_cope/",
-    "permalink": "/r/antiai/comments/1widcup/how_do_you_cope/",
-    "created_utc": "2026-09-16T23:28:56.000Z",
-    "score": 2,
-    "num_comments": 5,
-    "upvote_ratio": 1.0,
-    "over_18": False,
-    "num_crossposts": 0,
 }
 
 
@@ -320,89 +299,6 @@ class TestRedditScrape(TestTemplate):
         discover_services()
         entry = next(e for e in get_registry() if e.name == "reddit_scrape_start")
         assert entry.mutating is True
-
-    def test_lite_post_normalizes_engagement_to_none(self):
-        # reddit-scraper-lite omits engagement counts -> nullable fields stay
-        # None (never faked as 0), while identity fields still map through.
-        item = normalize_item(_LITE_POST, "trudax~reddit-scraper-lite")
-        assert item.type == "post"
-        assert item.title == "Async runtimes in Rust"
-        assert item.author == "ferris"
-        assert item.subreddit == "rust"  # "r/" prefix stripped
-        assert item.created_at == "2023-06-09T05:23:15.000Z"
-        assert item.over_18 is False
-        assert item.score is None
-        assert item.num_comments is None
-        assert item.upvote_ratio is None
-        assert item.permalink == "/r/rust/comments/abc/async_runtimes/"
-
-    def test_full_actor_engagement_flows_through_same_map(self):
-        # Pointing APIFY_ACTOR_ID at the flat-rate sibling makes counts flow
-        # with no code change - same trudax field map.
-        item = normalize_item(_FULL_POST, "trudax~reddit-scraper")
-        assert item.score == 1500
-        assert item.num_comments == 42
-        assert item.upvote_ratio == 0.98
-        assert item.num_crossposts == 3
-
-    def test_fatihtahta_post_normalizes_with_engagement(self):
-        # The default Actor's Reddit-native fields map onto the same stable shape
-        # as trudax, engagement counts included (parity with the live output).
-        item = normalize_item(_FATIHTAHTA_POST, "fatihtahta~reddit-scraper-search-fast")
-        assert item.id == "1widcup"
-        assert item.type == "post"  # from `kind`
-        assert item.title == "How do you cope with AI in the workplace?"
-        assert item.author == "Lumpy_Response_3443"
-        assert item.subreddit == "antiai"
-        assert item.permalink == "/r/antiai/comments/1widcup/how_do_you_cope/"
-        assert item.created_at == "2026-09-16T23:28:56.000Z"
-        assert item.score == 2
-        assert item.num_comments == 5
-        assert item.upvote_ratio == 1.0
-        assert item.over_18 is False
-        assert item.num_crossposts == 0
-
-    def test_default_map_reads_reddit_api_snake_case(self):
-        # An unregistered Actor falls back to broad candidate keys, including
-        # Reddit's own snake_case JSON API (epoch created_utc -> ISO8601).
-        raw = {
-            "kind": "t3",
-            "title": "hi",
-            "author": "spez",
-            "subreddit": "announcements",
-            "score": 9,
-            "num_comments": 4,
-            "upvote_ratio": 0.9,
-            "created_utc": 1686288195,
-        }
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.type == "post"
-        assert item.author == "spez"
-        assert item.score == 9
-        assert item.num_comments == 4
-        assert item.created_at is not None
-        assert item.created_at.startswith("2023-06-09T")
-
-    def test_non_finite_numbers_normalize_to_none(self):
-        # NaN/Infinity have no int/float form we can hand back; they normalize
-        # to None (matching the TS normalizer) instead of aborting the map.
-        raw = {
-            "kind": "t3",
-            "score": float("nan"),
-            "num_comments": float("inf"),
-            "upvote_ratio": float("nan"),
-        }
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.score is None
-        assert item.num_comments is None
-        assert item.upvote_ratio is None
-
-    def test_numeric_created_utc_uses_canonical_z_suffix(self):
-        # A numeric epoch becomes an ISO8601 string with a `Z` suffix (not
-        # `+00:00`) so Python matches the Worker's Date.toISOString() exactly.
-        raw = {"kind": "t3", "created_utc": 1686288195}
-        item = normalize_item(raw, "someone~custom-reddit-actor")
-        assert item.created_at == "2023-06-09T05:23:15.000Z"
 
     def test_scrape_normalizes_items_end_to_end(self):
         def handler(_request: httpx.Request) -> httpx.Response:

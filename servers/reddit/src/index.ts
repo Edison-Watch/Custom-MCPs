@@ -19,6 +19,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
+import { buildActorInput } from "./adapters";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
@@ -26,7 +27,6 @@ import {
   RUN_TIMEOUT_S,
   SUCCEEDED,
   TERMINAL_FAILURE,
-  buildActorInput,
   datasetItemsUrl,
   hasTarget,
   normalizeItems,

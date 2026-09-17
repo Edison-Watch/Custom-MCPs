@@ -7,6 +7,10 @@ this pure mapping layer out of ``services/reddit_svc.py`` keeps that module
 focused on the Apify HTTP transport (sync run and the async run + poll pair),
 which all funnel their dataset items through ``normalize_items`` here.
 
+The per-Actor field map (which raw keys feed each normalized field) lives with
+that Actor's input builder in ``services/reddit_adapters.py``; this module reads
+it via ``adapter_for`` and owns only the coercion helpers (types, dates, etc.).
+
 Mirrors the TypeScript normalizer in ``servers/reddit/src/reddit.ts``.
 """
 
@@ -16,78 +20,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from models.reddit import NormalizedRedditItem, RedditItemType
-
-# The trudax family (reddit-scraper-lite and its flat-rate reddit-scraper
-# sibling) share one output schema, verified from Apify's documented actor
-# schemas: posts carry upVotes / numberOfComments / upVoteRatio; comments carry
-# numberOfVotes and their text under description. reddit-scraper-lite in its
-# default fast RSS mode omits the engagement fields, so they normalize to None;
-# setting include_media_links (the Actor's includeMediaLinks input) switches it
-# to a detailed scrape that returns them, and they flow through this same map.
-_TRUDAX_FIELD_MAP: dict[str, list[str]] = {
-    "id": ["id", "parsedId"],
-    "type": ["dataType"],
-    "title": ["title"],
-    "body": ["body", "description", "html"],
-    "author": ["username", "author"],
-    "subreddit": ["communityName", "parsedCommunityName"],
-    "url": ["url"],
-    "permalink": ["permalink"],
-    "created_at": ["createdAt"],
-    "score": ["upVotes", "numberOfVotes"],
-    "num_comments": ["numberOfComments"],
-    "upvote_ratio": ["upVoteRatio"],
-    "over_18": ["over18"],
-    "num_crossposts": ["numberOfCrossposts"],
-}
-
-# Fallback for an Actor with no registered map: a broad candidate-key list
-# spanning snake_case (Reddit's own JSON API) and common camelCase variants.
-# Best-effort only - a bespoke Actor should get its own entry in
-# _FIELD_MAP_BY_ACTOR rather than rely on these guesses.
-_DEFAULT_FIELD_MAP: dict[str, list[str]] = {
-    "id": ["id", "name"],
-    "type": ["type", "dataType", "kind"],
-    "title": ["title"],
-    "body": ["body", "selftext", "text", "description", "html"],
-    "author": ["author", "username", "user"],
-    "subreddit": ["subreddit", "communityName", "community"],
-    "url": ["url", "link"],
-    "permalink": ["permalink"],
-    "created_at": ["created_at", "createdAt", "created_utc", "created"],
-    "score": ["score", "upVotes", "ups", "numberOfVotes"],
-    "num_comments": ["num_comments", "numberOfComments", "comments", "commentCount"],
-    "upvote_ratio": ["upvote_ratio", "upVoteRatio"],
-    "over_18": ["over_18", "over18", "nsfw"],
-    "num_crossposts": ["num_crossposts", "numberOfCrossposts", "crossposts"],
-}
-
-# fatihtahta/reddit-scraper-search-fast emits Reddit's native snake_case fields
-# plus derived extras. ``kind`` is the post/comment discriminator; ``created_utc``
-# arrives as an ISO8601 string (``_as_iso`` also accepts an epoch number, so a
-# numeric variant still normalizes). Engagement counts are always present.
-_FATIHTAHTA_FIELD_MAP: dict[str, list[str]] = {
-    "id": ["id"],
-    "type": ["kind"],
-    "title": ["title"],
-    "body": ["body"],
-    "author": ["author"],
-    "subreddit": ["subreddit", "subreddit_name_prefixed"],
-    "url": ["url", "canonical_url"],
-    "permalink": ["permalink"],
-    "created_at": ["created_utc"],
-    "score": ["score"],
-    "num_comments": ["num_comments"],
-    "upvote_ratio": ["upvote_ratio"],
-    "over_18": ["over_18"],
-    "num_crossposts": ["num_crossposts"],
-}
-
-_FIELD_MAP_BY_ACTOR: dict[str, dict[str, list[str]]] = {
-    "trudax~reddit-scraper-lite": _TRUDAX_FIELD_MAP,
-    "trudax~reddit-scraper": _TRUDAX_FIELD_MAP,
-    "fatihtahta~reddit-scraper-search-fast": _FATIHTAHTA_FIELD_MAP,
-}
+from services.reddit_adapters import adapter_for
 
 # Raw type/kind discriminators (incl. Reddit's t1/t3/t5/t2 codes) -> our literal.
 _TYPE_ALIASES: dict[str, RedditItemType] = {
@@ -104,12 +37,6 @@ _TYPE_ALIASES: dict[str, RedditItemType] = {
     "account": "user",
     "t2": "user",
 }
-
-
-def _field_map_for(actor_id: str) -> dict[str, list[str]]:
-    # Strip an Apify build tag (`actor:tag`) before lookup.
-    base = actor_id.split(":", 1)[0]
-    return _FIELD_MAP_BY_ACTOR.get(base, _DEFAULT_FIELD_MAP)
 
 
 def _first_present(raw: dict[str, Any], keys: list[str]) -> Any:
@@ -242,7 +169,7 @@ def _derive_permalink(explicit: Any, url: Any) -> str | None:
 
 def normalize_item(raw: dict[str, Any], actor_id: str) -> NormalizedRedditItem:
     """Map one raw Actor item onto the stable NormalizedRedditItem shape."""
-    fmap = _field_map_for(actor_id)
+    fmap = adapter_for(actor_id).field_map
 
     def pick(field: str) -> Any:
         return _first_present(raw, fmap.get(field, []))

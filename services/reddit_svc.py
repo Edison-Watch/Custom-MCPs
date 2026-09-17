@@ -30,6 +30,7 @@ from models.reddit import (
     RedditScrapeStartResult,
 )
 from services import service
+from services.reddit_adapters import adapter_for
 from services.reddit_normalize import normalize_item, normalize_items
 
 # Re-exported so callers keep importing the normalizer from this module even
@@ -116,88 +117,17 @@ def _normalize_dataset(items: Any, actor_id: str) -> list[NormalizedRedditItem]:
     return normalize_items(items, actor_id)
 
 
-# --- Per-Actor input builders ----------------------------------------------
+# --- Per-Actor input building ----------------------------------------------
 #
-# Each supported Actor takes a different input schema, so the first-party input
-# is mapped per-Actor. _build_actor_input dispatches on the configured Actor;
-# its output field map (services/reddit_normalize.py) is the other half of the
-# same adapter, so the input we send and the output we normalize stay in sync.
-
-
-def _build_trudax_input(inp: RedditScrapeInput) -> dict:
-    """trudax/reddit-scraper-lite (and its flat-rate sibling) input schema."""
-    actor_input: dict = {
-        "maxItems": inp.max_items,
-        "maxPostCount": inp.max_items,
-        "skipComments": not inp.include_comments,
-        "includeNSFW": inp.include_nsfw,
-        # The Actor's fast RSS mode omits engagement fields; includeMediaLinks
-        # switches it to a detailed scrape that returns upVotes / numberOfComments
-        # / upVoteRatio (and media URLs), which the normalizer already maps.
-        "includeMediaLinks": inp.include_media_links,
-        "sort": inp.sort,
-        "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
-    }
-    if inp.search:
-        actor_input["searches"] = [inp.search]
-    if inp.subreddit:
-        actor_input["searchCommunityName"] = inp.subreddit
-    if inp.start_urls:
-        actor_input["startUrls"] = [{"url": u} for u in inp.start_urls]
-    if inp.time_filter:
-        actor_input["time"] = inp.time_filter
-    return actor_input
-
-
-def _fatihtahta_sort(sort: str) -> str:
-    # This Actor's sort enum omits "rising" (relevance/hot/top/new/comments);
-    # map that one value onto the nearest trending sort instead of sending an
-    # input the Actor would reject. Every other value passes straight through.
-    return "hot" if sort == "rising" else sort
-
-
-def _build_fatihtahta_input(inp: RedditScrapeInput) -> dict:
-    """fatihtahta/reddit-scraper-search-fast input schema.
-
-    Distinct from trudax: ``queries`` (not ``searches``), ``maxPosts`` (not
-    maxItems/maxPostCount), ``urls`` as bare strings (not ``{"url": ...}``),
-    ``scrapeComments`` (not skipComments), ``subredditName`` (not
-    searchCommunityName), ``timeframe`` (not time), ``includeNsfw``. It handles
-    its own proxying (no ``proxy`` block) and always returns engagement fields,
-    so ``include_media_links`` has no effect here.
-    """
-    actor_input: dict = {
-        "maxPosts": inp.max_items,
-        "scrapeComments": inp.include_comments,
-        "includeNsfw": inp.include_nsfw,
-        "sort": _fatihtahta_sort(inp.sort),
-    }
-    if inp.search:
-        actor_input["queries"] = [inp.search]
-    if inp.subreddit:
-        actor_input["subredditName"] = inp.subreddit
-    if inp.start_urls:
-        actor_input["urls"] = list(inp.start_urls)
-    if inp.time_filter:
-        actor_input["timeframe"] = inp.time_filter
-    return actor_input
-
-
-# Input builders keyed by base Actor slug (build tag stripped). An unknown Actor
-# falls back to the long-standing trudax-style input, matching the normalizer's
-# best-effort default field map.
-_INPUT_BUILDER_BY_ACTOR = {
-    "trudax~reddit-scraper-lite": _build_trudax_input,
-    "trudax~reddit-scraper": _build_trudax_input,
-    "fatihtahta~reddit-scraper-search-fast": _build_fatihtahta_input,
-}
+# Each supported Actor takes a different input schema. The mapping lives in the
+# per-Actor adapter (services/reddit_adapters.py) alongside that Actor's output
+# field map, so the input we send and the output we normalize resolve from one
+# source of truth. Build the request via ``adapter_for(actor_id).build_input``.
 
 
 def _build_actor_input(inp: RedditScrapeInput, actor_id: str) -> dict:
     """Map the first-party input onto the configured Actor's input schema."""
-    base = actor_id.split(":", 1)[0]
-    builder = _INPUT_BUILDER_BY_ACTOR.get(base, _build_trudax_input)
-    return builder(inp)
+    return adapter_for(actor_id).build_input(inp)
 
 
 @service(
