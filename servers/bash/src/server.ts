@@ -144,6 +144,15 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
       // One progress notification per complete output line. A logical line can
       // arrive split across chunks, so buffer per stream and only emit on a
       // newline; flush any trailing partial line when the process finishes.
+      //
+      // The pending-line buffer is itself bounded: `execCommand` caps CAPTURED
+      // output at MAX_STREAM_BYTES, but it still calls onStdout/onStderr for
+      // every raw chunk, so a command emitting a huge line with no newline
+      // (`head -c 1G /dev/zero`) would otherwise grow `buf` without limit and
+      // exhaust the connector. A progress message is only ever sliced to 200
+      // chars, so retaining more than ~1 KiB of an unfinished line is useless;
+      // keep the head, drop the overflow, and still emit once at the newline.
+      const MAX_PENDING = 1024
       const makeLineEmitter = () => {
         let buf = ''
         const send = (line: string): void => {
@@ -154,11 +163,16 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
         }
         return {
           emit(chunk: string): void {
-            buf += chunk
-            let nl: number
-            while ((nl = buf.indexOf('\n')) >= 0) {
-              send(buf.slice(0, nl))
-              buf = buf.slice(nl + 1)
+            let start = 0
+            while (start < chunk.length) {
+              const nl = chunk.indexOf('\n', start)
+              const end = nl >= 0 ? nl : chunk.length
+              const room = MAX_PENDING - buf.length
+              if (room > 0) buf += chunk.slice(start, Math.min(end, start + room))
+              if (nl < 0) break
+              send(buf)
+              buf = ''
+              start = nl + 1
             }
           },
           flush(): void {

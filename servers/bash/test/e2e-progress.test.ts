@@ -97,6 +97,25 @@ describe('bash-mcp e2e progress notifications', () => {
     expect(progress.some((p) => (p.message ?? '').includes('running'))).toBe(true)
   }, 30_000)
 
+  it('keeps progress messages bounded for a huge line with no newline', async () => {
+    // A single ~2 MiB line with no trailing newline. The captured output is
+    // bounded by execCommand's BoundedBuffer, but the progress line-emitter has
+    // its own buffer that must not grow with the line: every progress message
+    // must stay small (<=200 chars after slicing), proving the pending buffer is
+    // capped rather than retaining the whole megabyte.
+    const client = await connect({ BASH_MCP_HEARTBEAT_MS: '30' })
+    const { isError, progress } = await runWithProgress(
+      client,
+      'head -c 2000000 /dev/zero | tr "\\0" a'
+    )
+    await client.close()
+
+    expect(isError).toBe(false)
+    for (const p of progress) {
+      expect((p.message ?? '').length).toBeLessThanOrEqual(200)
+    }
+  }, 30_000)
+
   it('sends no progress when the caller omits a progressToken', async () => {
     const client = await connect()
     // Observe the wire: register a progress-notification handler so a spurious
