@@ -1,0 +1,52 @@
+{
+  "name": "@sealgate/bash-mcp",
+  "version": "0.1.0",
+  "description": "SealGate stdio MCP server that exposes full bash command execution on the local machine as a single `run` tool.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "bash",
+    "shell",
+    "command",
+    "sealgate",
+    "stdio"
+  ],
+  "license": "MIT",
+  "author": "SealGate",
+  "homepage": "https://github.com/Edison-Watch/custom-mcps/tree/main/servers/bash",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Edison-Watch/custom-mcps.git",
+    "directory": "servers/bash"
+  },
+  "type": "module",
+  "bin": {
+    "bash-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.19.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.18"
+  }
+}

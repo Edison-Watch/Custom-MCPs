@@ -64,6 +64,7 @@ jobs:
       matrix:
         server:
           - adb
+          - bash
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}
