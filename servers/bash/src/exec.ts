@@ -164,11 +164,16 @@ export function execCommand(command: string, opts: ExecOptions = {}): Promise<Ex
       }
     }
 
+    // The SIGKILL escalation is tracked so it can be cancelled once the process
+    // has actually exited: otherwise a delayed `kill(-pid)` could land on a
+    // reused process-group id and take down an unrelated later invocation.
+    let killTimer: ReturnType<typeof setTimeout> | undefined
     const timer = setTimeout(() => {
       timedOut = true
       killTree('SIGTERM')
       // Escalate if the group ignores SIGTERM.
-      setTimeout(() => killTree('SIGKILL'), 5000).unref()
+      killTimer = setTimeout(() => killTree('SIGKILL'), 5000)
+      killTimer.unref()
     }, timeout)
 
     child.stdout?.on('data', (d: Buffer) => {
@@ -188,6 +193,9 @@ export function execCommand(command: string, opts: ExecOptions = {}): Promise<Ex
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // Cancel a pending SIGKILL: the group has exited, so a later signal to the
+      // (possibly reused) pgid must not fire.
+      if (killTimer !== undefined) clearTimeout(killTimer)
       resolve({
         code,
         signal,

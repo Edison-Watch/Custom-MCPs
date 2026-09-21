@@ -49,15 +49,6 @@ function optionalNonBlank<T extends z.ZodTypeAny>(schema: T) {
     .optional()
 }
 
-/** Split a raw chunk into trimmed, non-empty lines capped for a progress message. */
-export function progressLines(chunk: string): string[] {
-  return chunk
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => l.slice(0, 200))
-}
-
 /**
  * Resolve server-level defaults from the launch argv (`--cwd <dir>` or the `=`
  * form) and the BASH_MCP_CWD env var. A launch flag wins over the env var; a
@@ -113,8 +104,15 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
     async ({ command, cwd, stdin, timeout_ms }, extra) => {
       // Working-directory precedence: a valid per-call `cwd` wins; otherwise the
       // launch default; otherwise the server's own cwd. A bad cwd fails loudly.
-      // Trim here so a padded-but-valid path like `'/repo '` resolves.
-      const chosenCwd = (cwd ?? defaults.cwd)?.trim() || undefined
+      // Prefer the path exactly as given (a directory may legitimately have
+      // leading/trailing spaces); only fall back to a trimmed value when the
+      // exact path is unusable, to absorb client-added padding like `'/repo '`.
+      const rawCwd = cwd ?? defaults.cwd
+      let chosenCwd = rawCwd
+      if (rawCwd !== undefined && validateCwd(rawCwd) !== undefined) {
+        const trimmed = rawCwd.trim()
+        chosenCwd = trimmed === '' ? undefined : trimmed
+      }
       const cwdError = validateCwd(chosenCwd)
       if (cwdError) {
         return { content: [{ type: 'text', text: cwdError }], isError: true }
@@ -143,14 +141,34 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
             // Client disconnected or does not accept progress; ignore.
           })
       }
-      // Emit one progress notification per line of a chunk (both streams), so
-      // multi-line chunks are not collapsed to a single message.
-      const emitLines = (chunk: string): void => {
-        for (const line of progressLines(chunk)) {
-          latest = line
-          sendProgress(line)
+      // One progress notification per complete output line. A logical line can
+      // arrive split across chunks, so buffer per stream and only emit on a
+      // newline; flush any trailing partial line when the process finishes.
+      const makeLineEmitter = () => {
+        let buf = ''
+        const send = (line: string): void => {
+          const trimmed = line.trim()
+          if (!trimmed) return
+          latest = trimmed.slice(0, 200)
+          sendProgress(latest)
+        }
+        return {
+          emit(chunk: string): void {
+            buf += chunk
+            let nl: number
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              send(buf.slice(0, nl))
+              buf = buf.slice(nl + 1)
+            }
+          },
+          flush(): void {
+            send(buf)
+            buf = ''
+          }
         }
       }
+      const outEmit = makeLineEmitter()
+      const errEmit = makeLineEmitter()
 
       const heartbeat = setInterval(() => {
         sendProgress(latest || 'running...')
@@ -162,9 +180,11 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
           cwd: chosenCwd,
           stdin,
           timeoutMs: timeout_ms,
-          onStdout: emitLines,
-          onStderr: emitLines
+          onStdout: outEmit.emit,
+          onStderr: errEmit.emit
         })
+        outEmit.flush()
+        errEmit.flush()
         return {
           content: [{ type: 'text', text: formatResult(command, result) }],
           isError: isErrorResult(result)
