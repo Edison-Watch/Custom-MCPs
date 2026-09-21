@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { ProgressNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -98,13 +99,22 @@ describe('bash-mcp e2e progress notifications', () => {
 
   it('sends no progress when the caller omits a progressToken', async () => {
     const client = await connect()
+    // Observe the wire: register a progress-notification handler so a spurious
+    // notification (e.g. one sent with a fabricated token) would be caught.
+    let progressCount = 0
+    client.setNotificationHandler(ProgressNotificationSchema, async () => {
+      progressCount++
+    })
     // callTool without onprogress → SDK attaches no progressToken → server stays quiet.
     const res = (await client.callTool({
       name: 'run',
       arguments: { command: 'echo quiet' }
     })) as { content: Array<{ text: string }>; isError?: boolean }
+    // Let any stray notification flush before asserting.
+    await new Promise((r) => setTimeout(r, 100))
     await client.close()
     expect(res.isError === true).toBe(false)
     expect(res.content.map((c) => c.text).join('\n')).toContain('quiet')
+    expect(progressCount).toBe(0)
   }, 30_000)
 })

@@ -4,12 +4,17 @@ import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildServer, parseServerDefaults } from '../src/index.js'
-import type { ServerDefaults } from '../src/index.js'
+import { buildServer, parseServerDefaults } from '../src/server.js'
+import type { ServerDefaults } from '../src/server.js'
 
-const savedEnv = { ...process.env }
+// Hermetic env: snapshot a baseline with all BASH_MCP_* keys removed so an
+// ambient value in the runner's shell (e.g. a developer's BASH_MCP_ALLOW) cannot
+// leak into these tests, and restore to that baseline after each test.
+const baseEnv = { ...process.env }
+for (const k of Object.keys(baseEnv)) if (k.startsWith('BASH_MCP_')) delete baseEnv[k]
+process.env = { ...baseEnv }
 afterEach(() => {
-  process.env = { ...savedEnv }
+  process.env = { ...baseEnv }
 })
 
 /** Spin up the real server + an MCP client wired over an in-memory transport. */

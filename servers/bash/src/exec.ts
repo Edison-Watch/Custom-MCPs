@@ -97,12 +97,18 @@ export function validateCwd(cwd: string | undefined): string | undefined {
   return undefined
 }
 
+/** Matches a leading `NAME=value` shell environment-assignment token. */
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+
 /**
  * Optional command allowlist. When BASH_MCP_ALLOW is set to a comma-separated
- * list of program names, the FIRST bare word of the command must be one of them.
- * This is a coarse guard (it does not parse the full command), meant as a
- * defence-in-depth knob on top of the SealGate firewall, not a substitute for
- * it. Unset means "allow anything", the default for full-bash exposure.
+ * list of program names, the first *program* word of the command must be one of
+ * them. Leading `NAME=value` environment assignments (e.g. `FOO=bar ls`) are
+ * skipped so they do not masquerade as the executable. This is a coarse guard
+ * (it does not parse the full command - pipes, `sh -c`, `$(...)` all slip past),
+ * meant as a defence-in-depth knob on top of the SealGate firewall, not a
+ * substitute for it. Unset means "allow anything", the default for full-bash
+ * exposure.
  */
 export function checkAllowlist(command: string): string | undefined {
   const raw = process.env.BASH_MCP_ALLOW
@@ -113,8 +119,10 @@ export function checkAllowlist(command: string): string | undefined {
       .map((s) => s.trim())
       .filter(Boolean)
   )
-  const firstWord = command.trim().split(/\s+/)[0] ?? ''
-  const program = basename(firstWord)
+  const tokens = command.trim().split(/\s+/)
+  let i = 0
+  while (i < tokens.length && ENV_ASSIGNMENT.test(tokens[i]!)) i++
+  const program = basename(tokens[i] ?? '')
   if (!allowed.has(program)) {
     return `command "${program}" is not in BASH_MCP_ALLOW (${[...allowed].join(', ')})`
   }
@@ -139,14 +147,28 @@ export function execCommand(command: string, opts: ExecOptions = {}): Promise<Ex
     const child = spawn(shell, ['-c', command], {
       cwd: opts.cwd,
       env: process.env,
-      stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe']
+      stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      // Own process group so a timeout can signal the whole tree (the command
+      // and any children it spawned), not just the top-level shell.
+      detached: true
     })
+
+    // Signal the child's entire process group (negative pid). Falls back to the
+    // bare child if the group send fails (e.g. it already exited -> ESRCH).
+    const killTree = (signal: NodeJS.Signals): void => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, signal)
+        else child.kill(signal)
+      } catch {
+        // Process/group already gone; nothing to do.
+      }
+    }
 
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
-      // Escalate if the process ignores SIGTERM.
-      setTimeout(() => child.kill('SIGKILL'), 5000).unref()
+      killTree('SIGTERM')
+      // Escalate if the group ignores SIGTERM.
+      setTimeout(() => killTree('SIGKILL'), 5000).unref()
     }, timeout)
 
     child.stdout?.on('data', (d: Buffer) => {

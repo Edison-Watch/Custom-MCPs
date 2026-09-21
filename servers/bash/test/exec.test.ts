@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,9 +11,22 @@ import {
   validateCwd
 } from '../src/exec.js'
 
-const savedEnv = { ...process.env }
+// Hermetic env: strip ambient BASH_MCP_* so the runner's shell can't skew tests.
+const baseEnv = { ...process.env }
+for (const k of Object.keys(baseEnv)) if (k.startsWith('BASH_MCP_')) delete baseEnv[k]
+process.env = { ...baseEnv }
+
+// Track temp dirs created by tests and remove them afterwards.
+const tmpDirs: string[] = []
+function mkTmp(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'bash-mcp-test-'))
+  tmpDirs.push(dir)
+  return dir
+}
+
 afterEach(() => {
-  process.env = { ...savedEnv }
+  process.env = { ...baseEnv }
+  while (tmpDirs.length) rmSync(tmpDirs.pop()!, { recursive: true, force: true })
 })
 
 describe('execCommand', () => {
@@ -43,7 +56,7 @@ describe('execCommand', () => {
   })
 
   it('runs in the given cwd', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-mcp-test-'))
+    const dir = mkTmp()
     writeFileSync(join(dir, 'marker.txt'), 'x')
     const result = await execCommand('ls', { cwd: dir })
     expect(result.stdout).toContain('marker.txt')
@@ -83,7 +96,7 @@ describe('validateCwd', () => {
   })
 
   it('rejects a file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bash-mcp-test-'))
+    const dir = mkTmp()
     const file = join(dir, 'f.txt')
     writeFileSync(file, 'x')
     expect(validateCwd(file)).toContain('not a directory')
