@@ -37,8 +37,8 @@ Everything downstream of "hosted HTTP MCP exists": already built.
   - Edison speaks full MCP authorization spec as client, today
 - `*_authenticate` stubs: `src/single_user_mcp_auth_stub.py`
   - NEEDS_AUTH → single click-through auth tool; unchanged for generated OAuth connectors
-- Hosted-MCP precedent: this repo: root Python/Gmail app + `servers/` fleet (image-host, CF Workers)
-  - generated connectors land the same way: `servers/<name>/`
+- Hosted-MCP precedent: this repo: root Python/Gmail app + `servers/` fleet (7 servers as of 2026-09: image-host, reddit, x-scraper, linkedin-scraper, youtube on CF Workers; adb, bash stdio); `shared/auth/ts/` = extracted fleet auth; `add-fleet-connector` skill = scaffold + ACL classification
+  - generated connectors land the same way: `servers/<name>/`, via the same scaffold
 - ACL classification: autoconfig, `src/api/v1/routes/autoconfig.py`
   - PUBLIC/PRIVATE/SECRET recommendations free
 - Code mode: `builtin_code_mode` + `codegen-oss` (MCP → typed TS client)
@@ -216,7 +216,7 @@ Marketplace flow unchanged:
 
 - Phase 0: TS kit validation (§7); output = Phase-1 skeleton
 - Phase 1: API-key connectors + generator skeleton; zero OAuth work
-  - kit + compiler CLI; per-server deploys; response shaping; CI (tool budget, spec-drift check)
+  - kit + compiler CLI, extending the `add-fleet-connector` scaffold; per-server deploys; response shaping; CI (tool budget, spec-drift check)
   - ship 2-3 `auth: "token"` connectors through *unchanged* gateway (`headers` + `template_fields` + encrypted `EnvArgsTemplateValues`); lineup §0.6
 - Phase 2: upstream OAuth broker; gateway work; Xero flagship
   - configured-OAuth mode in `oauth_manager`/`oauth_web_flow`; `RefreshingHeaderAuth`; per-user refresh lock; `oauth_upstream` entry variant + provider-metadata schema
@@ -232,7 +232,7 @@ Marketplace flow unchanged:
 2. ~~zero-knowledge boundary~~ resolved §0.5
 3. spec drift: pinned snapshots + scheduled diff job opening curation PRs, vs live re-parse at boot; recommend pinned: determinism > freshness, registries (§3C) presuppose pinning
 4. tool budget: 40 = Cursor practical cap; confirm vs own client telemetry
-5. auth header planes: final `X-Upstream-*` naming; `edison-jwt` + upstream injection together in Phase 2, or `edison-jwt` first (fleet already sequences `bearer` → `edison-jwt`)
+5. auth header planes: final `X-Upstream-*` naming; `edison-jwt` already live on `servers/reddit/` (2026-09), so only upstream-injection timing open
 
 ## 7. Validation plan (2-3 days; TS rationale: §0.2)
 
