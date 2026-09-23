@@ -20,6 +20,7 @@ import {
   base64PayloadTooLarge,
   decodeBase64,
   generateKey,
+  isDeleteAuthorized,
   validateImage,
 } from "./images";
 
@@ -44,6 +45,13 @@ const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 interface Props extends Record<string, unknown> {
   /** Origin the client connected on, used as the URL base when PUBLIC_BASE_URL is unset. */
   baseUrl?: string;
+  /**
+   * Authenticated caller identity (the JWT `sub` under edison-jwt; a constant
+   * like "bearer"/"anonymous" in single-tenant modes). Recorded as the object
+   * owner on upload and enforced on delete so one caller cannot delete another's
+   * image. Resolved by `checkAuth` before any tool runs.
+   */
+  subject?: string;
 }
 
 function parsePositiveInt(value: string | undefined): number | null {
@@ -122,8 +130,21 @@ export class ImageHostMCP extends McpAgent<Env, unknown, Props> {
 
         const key = generateKey({ ext: validated.ext, filename, prefix: prefix ?? this.env.KEY_PREFIX });
 
+        // Record who uploaded this object so delete_image can enforce ownership.
+        // customMetadata is private R2 metadata - serveImage only writes
+        // httpMetadata, so the owner is never exposed on the public URL.
+        //
+        // Fail closed if the subject is missing. checkAuth always resolves one
+        // (open mode included, as "anonymous"), and the fetch handler always
+        // injects it, so an absent subject here is a broken invariant - props
+        // failed to propagate - not a caller we may stamp with a default
+        // identity. Defaulting would let a plumbing bug collapse every caller to
+        // one owner and silently enable cross-caller deletion.
+        const owner = this.props?.subject;
+        if (!owner) return textError("server misconfigured: authenticated subject missing");
         await this.env.IMAGE_BUCKET.put(key, validated.bytes, {
           httpMetadata: { contentType: validated.contentType, cacheControl: IMMUTABLE_CACHE },
+          customMetadata: { owner },
         });
 
         const url = `${base}${IMAGE_PATH_PREFIX}${key}`;
@@ -143,18 +164,38 @@ export class ImageHostMCP extends McpAgent<Env, unknown, Props> {
     this.server.registerTool(
       "delete_image",
       {
-        description: "Delete a previously uploaded image by the key returned from upload_image.",
+        description:
+          "Delete a previously uploaded image by the key returned from upload_image. " +
+          "You can only delete images you uploaded.",
         inputSchema: { key: z.string().describe("The storage key returned by upload_image.") },
         outputSchema: { deleted: z.boolean(), key: z.string() },
       },
       async ({ key }) => {
         // R2 `delete` is a no-op on a missing key and resolves either way, so
-        // check existence first to report an honest `deleted` boolean.
-        const existed = (await this.env.IMAGE_BUCKET.head(key)) !== null;
+        // head first: it reports honest existence AND carries the owner metadata
+        // we need for the authorization check - no extra R2 round-trip.
+        const head = await this.env.IMAGE_BUCKET.head(key);
+        if (head === null) {
+          return {
+            content: [{ type: "text" as const, text: `No object found for ${key}` }],
+            structuredContent: { deleted: false, key },
+          };
+        }
+        // Same fail-closed contract as upload: a missing subject is a broken
+        // invariant, never a caller to default to a shared identity.
+        const caller = this.props?.subject;
+        if (!caller) return textError("server misconfigured: authenticated subject missing");
+        if (!isDeleteAuthorized(head.customMetadata?.owner, caller)) {
+          // Refuse without echoing the real owner, so this isn't an ownership
+          // oracle. The key is not a secret that could stand in for this check -
+          // it lives in the public image URL - so authorization is what guards
+          // deletion, not knowledge of the key.
+          return textError(`not authorized to delete ${key}`);
+        }
         await this.env.IMAGE_BUCKET.delete(key);
         return {
-          content: [{ type: "text" as const, text: existed ? `Deleted ${key}` : `No object found for ${key}` }],
-          structuredContent: { deleted: existed, key },
+          content: [{ type: "text" as const, text: `Deleted ${key}` }],
+          structuredContent: { deleted: true, key },
         };
       },
     );
@@ -205,8 +246,10 @@ export default {
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
       // Inject the connected origin so upload_image can build absolute URLs
-      // without requiring PUBLIC_BASE_URL to be configured first.
-      (ctx as ExecutionContext & { props?: Props }).props = { baseUrl: url.origin };
+      // without requiring PUBLIC_BASE_URL to be configured first, plus the
+      // authenticated subject so upload can stamp ownership and delete can
+      // enforce it.
+      (ctx as ExecutionContext & { props?: Props }).props = { baseUrl: url.origin, subject: auth.subject };
       return ImageHostMCP.serve("/mcp").fetch(request, env, ctx);
     }
 

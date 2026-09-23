@@ -47,13 +47,32 @@ REQUIRED = (
     "author",
     "category",
     "tags",
-    "url",
     "auth",
     "icon",
 )
 AUTH_MODES = ("none", "token", "oauth", "edison-jwt")
+# auth modes a locally-spawned stdio process can use (no remote issuer/discovery).
+STDIO_AUTH_MODES = ("none", "token")
+TRANSPORTS = ("http", "stdio")
 # Mirror of schema.json `properties` (additionalProperties:false) + the id regex.
-ALLOWED_KEYS = frozenset(REQUIRED) | {"edison_hosted", "headers", "template_fields"}
+ALLOWED_KEYS = frozenset(REQUIRED) | {
+    "edison_hosted",
+    "headers",
+    "template_fields",
+    "tools_configurations",
+    "transport",
+    "command",
+    "args",
+    "env",
+    "url",
+}
+ACL_VALUES = ("PUBLIC", "PRIVATE", "SECRET")
+# The four trifecta/ACL keys every tools_configurations entry must carry.
+_TOOL_CONFIG_FLAGS = (
+    "write_operation",
+    "read_private_data",
+    "read_untrusted_public_data",
+)
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -70,6 +89,23 @@ def _tags_bad(tags: Any) -> bool:
     if not isinstance(tags, list) or not tags:
         return True
     return any(not isinstance(t, str) or not t for t in tags)
+
+
+def _args_bad(args: Any) -> bool:
+    """schema: an array of strings (may be empty)."""
+    if not isinstance(args, list):
+        return True
+    return any(not isinstance(a, str) for a in args)
+
+
+def _env_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object mapping string -> string."""
+    if "env" not in entry:
+        return False
+    env = entry["env"]
+    if not isinstance(env, dict):
+        return True
+    return any(not isinstance(v, str) for v in env.values())
 
 
 def _headers_bad(entry: dict[str, Any]) -> bool:
@@ -103,6 +139,122 @@ def _template_fields_bad(entry: dict[str, Any]) -> bool:
     return False
 
 
+def _tools_configurations_bad(entry: dict[str, Any]) -> bool:
+    """schema: when present, an object mapping a tool name to an object carrying
+    boolean write_operation/read_private_data/read_untrusted_public_data and an
+    acl in PUBLIC/PRIVATE/SECRET (additionalProperties:false per tool)."""
+    if "tools_configurations" not in entry:
+        return False
+    configs = entry["tools_configurations"]
+    if not isinstance(configs, dict):
+        return True
+    allowed = frozenset(_TOOL_CONFIG_FLAGS) | {"acl"}
+    for cfg in configs.values():
+        if not isinstance(cfg, dict):
+            return True
+        if set(cfg) != allowed:  # every flag required, no extras
+            return True
+        if any(not isinstance(cfg[flag], bool) for flag in _TOOL_CONFIG_FLAGS):
+            return True
+        if cfg["acl"] not in ACL_VALUES:
+            return True
+    return False
+
+
+def _requires_classification(entry: dict[str, Any]) -> bool:
+    """True for entries that install via the marketplace (which skips autoconfig
+    auto-labeling): edison_hosted connectors and every stdio connector. Both
+    mount an unclassified tool at the protective default (full trifecta + SECRET)
+    and block, so both must ship a reviewed `tools_configurations`."""
+    return entry.get("edison_hosted") is True or entry.get("transport") == "stdio"
+
+
+def _unclassified(entry: dict[str, Any]) -> bool:
+    """True when an entry that requires classification ships none.
+
+    Require an explicit, reviewed `tools_configurations` (non-empty) instead of
+    shipping empty; `_tools_configurations_bad` still validates the shape of
+    whatever is present."""
+    return _requires_classification(entry) and not entry.get("tools_configurations")
+
+
+def _has_scaffold_placeholder(entry: dict[str, Any]) -> bool:
+    """True when a human-facing field still holds an unedited scaffold TODO.
+
+    `scripts/new_connector.py` seeds displayName/description/category/tags with
+    'TODO' sentinels. Classifying the one security field must not turn the entry
+    green while its catalog copy is still placeholder text - so an unmodified
+    scaffold stays red until every TODO is replaced. Validator-only hygiene rule,
+    like the icon-file-existence check; the JSON Schema deliberately doesn't
+    police copy. Matches only the exact scaffold sentinels ('TODO' or a
+    'TODO '-prefixed string) to avoid tripping a real name like 'Todoist'.
+    """
+
+    def _todo(value: Any) -> bool:
+        return isinstance(value, str) and (value == "TODO" or value.startswith("TODO "))
+
+    if any(_todo(entry.get(key)) for key in ("displayName", "description", "category")):
+        return True
+    tags = entry.get("tags")
+    return isinstance(tags, list) and any(_todo(tag) for tag in tags)
+
+
+def _transport_problems(entry: dict[str, Any]) -> list[tuple[bool, str]]:
+    """(is_bad, message) pairs for the transport contract, in one place.
+
+    http (the default) needs a valid url and carries no command/args/env; stdio
+    needs command + args, forbids url, restricts auth to STDIO_AUTH_MODES, and is
+    never edison_hosted. Mirrors the transport allOf in schema.json - keep the
+    two in lockstep. `auth` is a required key, so it is present here.
+    """
+    transport = entry.get("transport", "http")
+    is_stdio = transport == "stdio"
+    return [
+        (transport not in TRANSPORTS, f"transport '{transport}' not in {TRANSPORTS}"),
+        # http: valid url, no stdio-only keys. stdio: command + args, no url.
+        (
+            not is_stdio and _url_is_bad(str(entry.get("url", ""))),
+            f"transport 'http' requires url https://<host>/…/mcp, got '{entry.get('url')}'",
+        ),
+        (
+            is_stdio and "url" in entry,
+            "transport 'stdio' must not set 'url' (the daemon spawns a local process)",
+        ),
+        (
+            is_stdio
+            and (not isinstance(entry.get("command"), str) or not entry.get("command")),
+            "transport 'stdio' requires a non-empty string 'command' (e.g. 'npx')",
+        ),
+        (
+            is_stdio and "args" not in entry,
+            "transport 'stdio' requires an 'args' array (may be empty)",
+        ),
+        (
+            is_stdio and "args" in entry and _args_bad(entry["args"]),
+            "'args' must be an array of strings",
+        ),
+        (_env_bad(entry), "'env' must be an object of string values"),
+        (
+            "command" in entry and not is_stdio,
+            "'command' is only valid for transport 'stdio'",
+        ),
+        (
+            "args" in entry and not is_stdio,
+            "'args' is only valid for transport 'stdio'",
+        ),
+        ("env" in entry and not is_stdio, "'env' is only valid for transport 'stdio'"),
+        (
+            is_stdio and entry["auth"] not in STDIO_AUTH_MODES,
+            f"transport 'stdio' auth must be one of {STDIO_AUTH_MODES} "
+            "(a local process has no remote issuer for oauth/edison-jwt)",
+        ),
+        (
+            is_stdio and entry.get("edison_hosted") is True,
+            "transport 'stdio' cannot be 'edison_hosted' (it runs on the user's machine)",
+        ),
+    ]
+
+
 def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool, str]]:
     """(is_bad, message) pairs for one entry, assuming required keys are present."""
     icon = str(entry["icon"])
@@ -124,6 +276,25 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
         ),
         (_headers_bad(entry), "'headers' must be an object of string values"),
         (
+            _tools_configurations_bad(entry),
+            "'tools_configurations' entries need boolean write_operation/"
+            "read_private_data/read_untrusted_public_data and an acl in "
+            f"{ACL_VALUES}",
+        ),
+        (
+            _unclassified(entry),
+            "edison_hosted and stdio connectors must declare a non-empty "
+            "'tools_configurations' (classify each tool, or run the "
+            "add-fleet-connector / add-stdio-connector skill); an unclassified "
+            "tool installs at the SECRET + full-trifecta default and trips the "
+            "lethal-trifecta guard",
+        ),
+        (
+            _has_scaffold_placeholder(entry),
+            "entry still contains scaffold 'TODO' placeholders - fill in "
+            "displayName/description/category/tags before shipping",
+        ),
+        (
             _template_fields_bad(entry),
             "'template_fields.env' entries need a non-empty string 'description' (+ optional string 'example')",
         ),
@@ -131,10 +302,7 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
             entry["auth"] not in AUTH_MODES,
             f"auth '{entry['auth']}' not in {AUTH_MODES}",
         ),
-        (
-            _url_is_bad(str(entry["url"])),
-            f"url must be https://<host>/…/mcp, got '{entry['url']}'",
-        ),
+        *_transport_problems(entry),
         (not icon.endswith(".svg"), f"icon '{icon}' must be an .svg"),
         (
             icon != Path(icon).name,
@@ -181,7 +349,9 @@ def _validate(entry: dict[str, Any], server_dir: Path) -> list[str]:
         for k in entry
         if k not in ALLOWED_KEYS
     ]
-    return unknown + [f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad]
+    return unknown + [
+        f"{where}: {msg}" for bad, msg in _field_problems(entry, server_dir) if bad
+    ]
 
 
 def collect() -> tuple[list[dict[str, Any]], list[str]]:

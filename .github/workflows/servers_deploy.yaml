@@ -1,0 +1,158 @@
+name: Deploy TS Fleet Servers
+
+# Deploys the changed servers/<id> Cloudflare Workers on merge to main, so a
+# reviewed PR ships itself - no local `wrangler deploy`. Each deploy is gated on
+# that server's own test suite (unit + typecheck + workerd integration), so a
+# server can never ship untested even if servers_ts.yaml's matrix lags behind.
+#
+# One-time setup this workflow does NOT do (and cannot, safely):
+#   - Repo secrets CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (Actions secrets).
+#   - Per-server runtime secrets, e.g. `wrangler secret put APIFY_TOKEN` for
+#     reddit - set once via the CLI or the Cloudflare dashboard; they never live
+#     in the repo, so `wrangler deploy` here does not touch them.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'servers/**'
+      - '.github/workflows/servers_deploy.yaml'
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'Server id to deploy (e.g. image-host, reddit) or "all"'
+        required: true
+        default: all
+        type: string
+
+concurrency:
+  # Serialize deploys; never cancel one mid-flight.
+  group: deploy-fleet
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Select servers to deploy
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.assemble.outputs.matrix }}
+      any: ${{ steps.assemble.outputs.any }}
+    steps:
+      # A manual dispatch checks out and deploys the dispatched ref with
+      # production Cloudflare credentials - so only allow it from main, never an
+      # arbitrary (untrusted) branch.
+      - name: Guard - manual runs only from main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        # Read the ref from the environment, never `${{ github.ref }}` inlined
+        # into the shell source: a ref like `x$(...)` would otherwise be
+        # interpolated and executed before this guard can exit.
+        run: |
+          echo "::error::workflow_dispatch for this deploy is only allowed on main (got $GITHUB_REF)"
+          exit 1
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history so the push diff base (event.before) is reachable.
+          fetch-depth: 0
+
+      - name: Assemble deploy matrix
+        id: assemble
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_SERVER: ${{ github.event.inputs.server }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Deployable servers = every servers/<id>/ carrying a wrangler config.
+          # Auto-discovered so a new server needs no edit here.
+          mapfile -t ALL < <(for d in servers/*/; do [ -f "${d}wrangler.jsonc" ] && basename "$d"; done)
+          all_json=$(printf '%s\n' "${ALL[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            inp=$(echo "${DISPATCH_SERVER:-}" | tr -d '[:space:]')
+            if [ "$inp" = "all" ]; then
+              sel="$all_json"
+            else
+              sel=$(jq -nc --arg s "$inp" '[$s]')
+            fi
+          else
+            # Diff since the previous push; on a new branch/unknown base, diff the
+            # merge commit against its first parent instead.
+            if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              changed=$(git diff --name-only "${SHA}^" "${SHA}" || true)
+            else
+              changed=$(git diff --name-only "$BEFORE" "$SHA" || true)
+            fi
+
+            mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
+            sel='[]'
+            for s in "${CH[@]:-}"; do
+              [ -n "$s" ] || continue
+              if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
+                sel=$(echo "$sel" | jq -c --arg s "$s" '. + [$s] | unique')
+              fi
+            done
+          fi
+
+          # Every selected server must be a real deployable server, so a mistyped
+          # dispatch id fails loud here instead of the deploy job blowing up on a
+          # missing servers/<bad-id> directory.
+          for s in $(echo "$sel" | jq -r '.[]'); do
+            if ! printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
+              echo "::error::unknown server '$s' (deployable: ${ALL[*]:-none})"
+              exit 1
+            fi
+          done
+
+          echo "matrix={\"server\":$sel}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$sel" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Selected servers: $sel"
+
+  deploy:
+    name: Deploy ${{ matrix.server }}
+    needs: select
+    if: needs.select.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't let one server's deploy failure abort the others; deploy serially
+      # (top-level concurrency groups the run, not the individual matrix jobs).
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: servers/${{ matrix.server }}
+        # Frozen only: never deploy freshly-resolved, unreviewed dependency
+        # versions. A lockfile error must be fixed explicitly, not worked around.
+        run: bun install --frozen-lockfile
+
+      - name: Test (gate deploy on the server's own suite)
+        working-directory: servers/${{ matrix.server }}
+        run: |
+          bun run test
+          bun run typecheck
+          bun run test:integration
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: servers/${{ matrix.server }}
+          command: deploy

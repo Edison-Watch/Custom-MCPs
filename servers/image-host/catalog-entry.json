@@ -14,5 +14,19 @@
   ],
   "url": "https://image-host.sealgate.ai/mcp",
   "auth": "edison-jwt",
-  "icon": "image-host.svg"
+  "icon": "image-host.svg",
+  "tools_configurations": {
+    "upload_image": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PUBLIC"
+    },
+    "delete_image": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PUBLIC"
+    }
+  }
 }

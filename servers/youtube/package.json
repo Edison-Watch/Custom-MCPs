@@ -1,0 +1,29 @@
+{
+  "name": "@edison/mcp-youtube",
+  "private": true,
+  "description": "Edison first-party MCP server: scrape YouTube search results and video comments via the Apify youtube-scraper + youtube-comments-scraper Actors. Cloudflare Worker.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test/unit",
+    "test:integration": "vitest run",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.13.0",
+    "agents": "^0.0.109",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.8.19",
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "@types/bun": "^1.3.14",
+    "@vitest/runner": "3.1.4",
+    "@vitest/snapshot": "3.1.4",
+    "typescript": "^5.7.3",
+    "vitest": "3.1.4",
+    "wrangler": "^4.20.0"
+  }
+}

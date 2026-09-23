@@ -100,6 +100,18 @@
     "description": "Search recent inbox threads headlessly (no UI) when doing a thorough triage pass - use this to actually look at many emails. Returns thread summaries (subject, sender, snippet, recency) each annotated with its ledger status: 'uncurated' / 'stale' threads are the delta worth reasoning about; 'curated' threads are already banked and can be skipped. Uncurated threads also carry a provisional heuristic importance_prior. Pass since_history_id (from a prior result's current_history_id) to fetch only changed threads. After reasoning over the results, bank your verdicts with inbox_save_curation."
   },
   {
+    "name": "reddit_scrape",
+    "description": "Scrape Reddit posts, comments, communities, or users via a search term or explicit URLs. Returns the matched items."
+  },
+  {
+    "name": "reddit_scrape_fetch",
+    "description": "Poll an asynchronous Reddit scrape started by reddit_scrape_start. Returns the run status; items are empty while it is still running and populated once it has SUCCEEDED. Poll again on a non-terminal status."
+  },
+  {
+    "name": "reddit_scrape_start",
+    "description": "Start an asynchronous Reddit scrape and return immediately with a run id (no blocking). Use for slow keyword searches that outlast a synchronous call; poll reddit_scrape_fetch with the run_id for results."
+  },
+  {
     "name": "webhook_list",
     "description": "List the caller's webhook subscriptions (secrets are never returned)"
   },

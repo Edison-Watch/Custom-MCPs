@@ -12,7 +12,6 @@
     "author",
     "category",
     "tags",
-    "url",
     "auth",
     "icon"
   ],
@@ -50,10 +49,36 @@
       },
       "minItems": 1
     },
+    "transport": {
+      "enum": [
+        "http",
+        "stdio"
+      ],
+      "description": "How edison-watch reaches the server. 'http' (default when omitted): a remote streamable-HTTP endpoint Edison hosts (requires 'url'). 'stdio': a local process the SealGate daemon spawns on the user's machine (requires 'command' + 'args', no 'url'); use for servers that must run client-side, e.g. wrapping a local CLI like adb."
+    },
     "url": {
       "type": "string",
       "pattern": "^https://.+/mcp$",
-      "description": "Public streamable-HTTP MCP endpoint. Ends in /mcp."
+      "description": "Public streamable-HTTP MCP endpoint. Ends in /mcp. Required for transport 'http'; forbidden for 'stdio'."
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "transport 'stdio' only: the executable the daemon spawns, e.g. 'npx' or 'uvx'. Must be on the user's PATH."
+    },
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "transport 'stdio' only: argv passed to 'command', e.g. ['-y', '@sealgate/android-adb-mcp']. May be empty but the key is required for stdio."
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "transport 'stdio' only: extra environment for the spawned process. Values may contain {PLACEHOLDER} tokens resolved from template_fields.env at install."
     },
     "auth": {
       "enum": [
@@ -99,9 +124,91 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*\\.svg$",
       "description": "Icon filename, co-located in this server directory; sync copies it into frontend-v2/public/marketplace/icons/."
+    },
+    "tools_configurations": {
+      "type": "object",
+      "description": "Reviewed per-tool ACL + lethal-trifecta defaults baked into the install. Keyed by the tool's native name as the server exposes it (e.g. 'reddit_scrape'). REQUIRED and non-empty when edison_hosted is true OR transport is 'stdio' (see allOf): every marketplace install skips autoconfig auto-labeling, so a tool with no config mounts at the protective default (write + read_private + read_untrusted + SECRET) and trips the lethal-trifecta guard on first call. An individual tool still omitted from a present map keeps that protective default, so partial drift fails closed. edison-watch's generate_marketplace_entries.py carries these into servers/<id>.json; servers_validate.py applies them at install.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "write_operation",
+          "read_private_data",
+          "read_untrusted_public_data",
+          "acl"
+        ],
+        "properties": {
+          "write_operation": {
+            "type": "boolean",
+            "description": "True if the tool can modify external state (create/update/delete/send)."
+          },
+          "read_private_data": {
+            "type": "boolean",
+            "description": "True if the tool can read private/sensitive data (not just public content)."
+          },
+          "read_untrusted_public_data": {
+            "type": "boolean",
+            "description": "True if the tool reads untrusted external content (web, scraped pages, third-party APIs)."
+          },
+          "acl": {
+            "enum": ["PUBLIC", "PRIVATE", "SECRET"],
+            "description": "Sensitivity of the data this tool handles."
+          }
+        }
+      }
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": [
+          "transport"
+        ],
+        "properties": {
+          "transport": {
+            "const": "stdio"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "command",
+          "args",
+          "tools_configurations"
+        ],
+        "not": {
+          "required": [
+            "url"
+          ]
+        },
+        "properties": {
+          "tools_configurations": {
+            "minProperties": 1
+          },
+          "auth": {
+            "enum": [
+              "none",
+              "token"
+            ]
+          },
+          "edison_hosted": {
+            "const": false
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "url"
+        ],
+        "not": {
+          "anyOf": [
+            { "required": ["command"] },
+            { "required": ["args"] },
+            { "required": ["env"] }
+          ]
+        }
+      }
+    },
     {
       "if": {
         "required": [
@@ -138,6 +245,28 @@
         "properties": {
           "edison_hosted": {
             "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "edison_hosted"
+        ],
+        "properties": {
+          "edison_hosted": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "tools_configurations"
+        ],
+        "properties": {
+          "tools_configurations": {
+            "minProperties": 1
           }
         }
       }

@@ -25,6 +25,10 @@ jobs:
       matrix:
         server:
           - image-host
+          - reddit
+          - youtube
+          - x-scraper
+          - linkedin-scraper
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}
@@ -48,3 +52,39 @@ jobs:
 
       - name: Integration tests (workerd + real R2/DO bindings)
         run: bun run test:integration
+
+  # stdio servers are npm-published local processes (no Cloudflare Worker,
+  # no workerd integration). They build with tsc and unit-test with vitest,
+  # so they get their own job instead of the Worker matrix above.
+  test-stdio:
+    name: ${{ matrix.server }} (stdio · typecheck + test + build)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - adb
+          - bash
+    defaults:
+      run:
+        working-directory: servers/${{ matrix.server }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Unit tests (offline pure logic)
+        run: bun run test
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build (tsc -> dist)
+        run: bun run build

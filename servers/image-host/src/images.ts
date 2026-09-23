@@ -165,6 +165,31 @@ export function validateImage(args: ValidateArgs): ValidatedImage | ValidationEr
   return { bytes: args.bytes, contentType: sniffed, ext: EXT_BY_TYPE[sniffed] };
 }
 
+/**
+ * Decide whether `caller` may delete an object whose stored owner is
+ * `storedOwner`. Ownership is recorded in R2 customMetadata at upload time
+ * (see index.ts `upload_image`). Two deliberate rules:
+ *
+ *   - A caller may delete an object they own (`storedOwner === caller`).
+ *   - An object with NO recorded owner (uploaded before ownership tracking, or
+ *     under a deploy that doesn't attribute callers) falls back to the pre-
+ *     ownership behavior: deletable by any authenticated caller, so we never
+ *     strand a legacy image behind an owner it can never match. This is a
+ *     bounded, legacy-only exposure, NOT a real guard: the key lives in the
+ *     public image URL, so anyone who has seen the image can reconstruct it and
+ *     delete such an object. It should be sunset (re-stamp owners on access, or
+ *     drop the fallback once legacy objects age out), not relied on.
+ *
+ * Note: single-tenant auth modes collapse every caller to one subject
+ * ("bearer"/"anonymous"), so ownership is shared there by construction - the
+ * check only isolates callers under edison-jwt, where the subject is a real
+ * per-user `sub` claim.
+ */
+export function isDeleteAuthorized(storedOwner: string | undefined, caller: string): boolean {
+  if (!storedOwner) return true; // undefined or "" -> unowned/legacy
+  return storedOwner === caller;
+}
+
 /** Turn a filename into a short, URL-safe slug (extension dropped). */
 export function slugify(name: string, fallback = "image"): string {
   const base = name.replace(/\.[^.]+$/, "");

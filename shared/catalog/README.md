@@ -4,6 +4,25 @@ How a fleet server advertises itself to the Edison marketplace. Each server
 declares one `servers/<id>/catalog-entry.json`; edison-watch's sync upserts
 those into its static catalog and badges the Edison-hosted ones.
 
+## Transports
+
+An entry is one of two shapes, keyed by `transport`:
+
+- **`http`** (default when omitted) - a remote streamable-HTTP server Edison
+  hosts. Requires `url` (`https://…/mcp`). This is what the fleet's Worker
+  servers use. Add one with the `add-fleet-connector` skill.
+- **`stdio`** - a local process the SealGate daemon spawns on the user's machine
+  (a published npm/PyPI package run via `npx`/`uvx`). Requires `command` + `args`,
+  no `url`, never `edison_hosted`, `auth` in `none`/`token`. For connectors that
+  must run client-side (wrapping a local CLI/device, e.g. `adb`). Add one with
+  the `add-stdio-connector` skill. Worked example:
+  [`../../servers/adb/`](../../servers/adb). Downstream this
+  becomes a `transport_type: stdio_tunnel` marketplace row (like the hand-curated
+  `playwright`/`postgres` entries).
+
+Both shapes must ship `tools_configurations` (see below): every marketplace
+install skips autoconfig, so an unclassified tool blocks.
+
 ## Contract
 
 - **Schema:** [`schema.json`](./schema.json) - the entry shape (draft 2020-12).
@@ -51,7 +70,41 @@ the build on any invalid entry.
   An entry flips to it once its server is deployed behind Edison's issuer URL;
   see `first_party_mcp_integration.md` for the cutover runbook.
 
-## Not here yet
+## Per-tool ACL defaults (`tools_configurations`)
 
-- Per-tool ACL defaults (`tools_configurations`): entries omit them today, so
-  installs use Edison's autoconfig path; bake them in once reviewed.
+**Mandatory for `edison_hosted` connectors** (`catalog_check` fails without it);
+optional for OSS/self-host entries. A reviewed classification baked into the
+install so a marketplace install doesn't fall back to Edison's protective
+default: every marketplace install skips autoconfig auto-labeling, so an
+unclassified tool mounts at the full-trifecta `SECRET` default - which trips the
+lethal-trifecta guard even for a plain public reader. Key each entry by the
+tool's native name as the server exposes it; every entry carries all four flags:
+
+```jsonc
+"tools_configurations": {
+  "reddit_scrape": {
+    "write_operation": false,          // never writes back to Reddit
+    "read_private_data": false,        // only public content
+    "read_untrusted_public_data": true, // scraped web content is untrusted
+    "acl": "PUBLIC"                    // public data
+  }
+}
+```
+
+A tool left out of a present map still gets the protective default, so partial
+coverage fails closed - but ship a config for every tool an `edison_hosted`
+server exposes. edison-watch's `generate_marketplace_entries.py` carries these
+into `servers/<id>.json` and `servers_validate.py` applies them at install. Bake
+a classification in only once it has been reviewed.
+
+### Adding a connector
+
+```bash
+make new-connector id=<id>   # scaffold servers/<id>/ (skeleton, no classification yet)
+```
+
+The scaffold is deliberately left one step short - it ships no
+`tools_configurations`, so `catalog_check` stays red until you classify the
+server's tools (fail-closed by construction). The `add-fleet-connector` skill
+walks through the whole flow: scaffold -> fill the entry -> list the live
+server's tools -> classify each -> validate.
