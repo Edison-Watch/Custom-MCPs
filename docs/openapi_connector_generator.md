@@ -9,6 +9,7 @@ Why parked:
 Un-park triggers:
 - ~5+ OpenAPI-backed fleet connectors sharing patterns → revive generator (§3B-D)
 - high-value OAuth API with no vendor MCP → revive broker (§3A, Phase 2)
+Dormant until an un-park trigger fires: §0.6 lineup, §3A broker, §5 phasing, §7 validation, kickoff checklist = pre-park plan (2026-08-26), kept for provenance; Xero examples illustrative only
 Problem: paste OpenAPI spec URL → hosted streamable-HTTP MCP in Edison marketplace, minimal human/agent effort. Hard part: OAuth (Xero archetype)
 Home: connectors = `servers/<name>/` fleet packages (§0.3)
 Related: [`mcp_commodity_fleet_strategy.md`](./mcp_commodity_fleet_strategy.md) (runtimes, auth contract, catalog contract), [`../servers/README.md`](../servers/README.md); edison-watch: `dev-docs/architecture/first_party_mcp_integration.md`
@@ -221,7 +222,7 @@ Marketplace flow unchanged:
 
 ---
 
-## 5. Phasing
+## 5. Phasing (dormant, see Status)
 
 - Phase 0: TS kit validation (§7); output = Phase-1 skeleton
 - Phase 1: API-key connectors + generator skeleton; zero OAuth work
@@ -243,7 +244,7 @@ Marketplace flow unchanged:
 4. tool budget: 40 = Cursor practical cap; confirm vs own client telemetry
 5. auth header planes: final `X-Upstream-*` naming; `edison-jwt` already live on `servers/reddit/` (2026-09), so only upstream-injection timing open
 
-## 7. Validation plan (2-3 days; TS rationale: §0.2)
+## 7. Validation plan (dormant, see Status; 2-3 days; TS rationale: §0.2)
 
 - build `servers/xero/` candidate: compiled registry (§3C), ~10 curated tools (invoices, contacts, payments), official MCP TS SDK on Worker
 - evaluate `mcp-from-openapi` + `openapi-mcp-generator` (§2) as CI conversion step *before* writing own conversion code
@@ -253,7 +254,7 @@ Marketplace flow unchanged:
 - output doubles as Phase-1 skeleton + first real connector
 - CF `openApiMcpServer()` reserved for §3D#4 meta-tools mode, not curated path
 
-### Kickoff prerequisites (owner: Eito)
+### Kickoff prerequisites (dormant, see Status; owner: Eito)
 
 - [ ] register Xero dev app (V2 scopes) + sandbox/demo org; client_id/secret + org creds → env secret store
 - [x] ~~pick CF account~~ settled: `servers/image-host/` already deploys from this repo's account
