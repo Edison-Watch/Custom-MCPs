@@ -29,6 +29,7 @@ jobs:
           - youtube
           - x-scraper
           - linkedin-scraper
+          - telegram-bot
     defaults:
       run:
         working-directory: servers/${{ matrix.server }}

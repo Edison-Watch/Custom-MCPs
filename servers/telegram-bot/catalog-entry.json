@@ -1,0 +1,96 @@
+{
+  "id": "telegram-bot",
+  "displayName": "Telegram Bot",
+  "description": "Drive your own Telegram bot: read the messages it receives, look up chats, and send, edit, forward, react to, pin, and delete messages. Bring a bot token from @BotFather.",
+  "author": "SealGate",
+  "edison_hosted": true,
+  "category": "communication",
+  "tags": [
+    "telegram",
+    "bot",
+    "messaging",
+    "chat"
+  ],
+  "url": "https://telegram.sealgate.ai/mcp",
+  "auth": "token",
+  "headers": {
+    "X-Telegram-Bot-Token": "{TELEGRAM_BOT_TOKEN}"
+  },
+  "template_fields": {
+    "env": {
+      "TELEGRAM_BOT_TOKEN": {
+        "description": "Bot token from @BotFather (/newbot). Use a bot no other service polls or webhooks, since Telegram delivers each update to one consumer.",
+        "example": "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawE"
+      }
+    }
+  },
+  "icon": "telegram-bot.svg",
+  "tools_configurations": {
+    "telegram_get_me": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PUBLIC"
+    },
+    "telegram_get_updates": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "PRIVATE"
+    },
+    "telegram_get_chat": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "PRIVATE"
+    },
+    "telegram_send_message": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "SECRET"
+    },
+    "telegram_send_photo": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "SECRET"
+    },
+    "telegram_send_document": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "SECRET"
+    },
+    "telegram_forward_message": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "SECRET"
+    },
+    "telegram_edit_message_text": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "SECRET"
+    },
+    "telegram_delete_message": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
+    },
+    "telegram_set_reaction": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
+    },
+    "telegram_pin_message": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
+    }
+  }
+}

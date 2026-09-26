@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "telegram-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // No Durable Object: the server is stateless on purpose, so a user's bot token
+  // lives only for the request that carries it (see src/index.ts).
+  // Company-owned hostname (zone must live in the same Cloudflare account), for
+  // the same reason as reddit: *.workers.dev bot protection intermittently 403s
+  // the Railway gateway.
+  "routes": [{ "pattern": "telegram.sealgate.ai", "custom_domain": true }],
+  "workers_dev": false,
+  "vars": {
+    // The caller's bot token (X-Telegram-Bot-Token, injected by SealGate from the
+    // user's encrypted template value) is the credential that authorizes the
+    // work: every call spends the caller's own bot, never a first-party account,
+    // so the fleet gate in front of it stays `open`. A self-hosted deploy can set
+    // AUTH_MODE=bearer plus an AUTH_TOKEN secret to lock the endpoint down.
+    "AUTH_MODE": "open"
+  },
+  "observability": { "enabled": true }
+}

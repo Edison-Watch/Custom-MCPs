@@ -35,4 +35,5 @@ OpenAPI→MCP connectors also land here as fleet servers - design in
 |--------|---------|--------|-----------|
 | [`image-host/`](./image-host) | TS · Cloudflare Worker + R2 | built + tested (unit + workerd integration) | `bearer` |
 | [`reddit/`](./reddit) | TS · Cloudflare Worker (Apify-backed) | built + tested (unit + workerd integration) | `edison-jwt` |
+| [`telegram-bot/`](./telegram-bot) | TS · Cloudflare Worker (stateless, Bot API) | built + tested (unit + workerd integration) | `token` (user's bot token) |
 | [`adb/`](./adb) | TS · stdio (npx `@sealgate/android-adb-mcp`) | built + tested (unit) | `none` |
