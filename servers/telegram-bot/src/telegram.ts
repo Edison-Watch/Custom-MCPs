@@ -1,11 +1,10 @@
 /**
- * Pure Telegram Bot API helpers for the telegram-bot connector: token and
- * chat-id validation, the method call wrapper, and the normalization that turns
- * raw Bot API updates/messages into a compact, stable shape.
+ * Pure Telegram Bot API helpers for the telegram-bot connector: token, chat-id
+ * and file-ref validation, the per-request API client, and the normalization
+ * that turns raw Bot API objects into a compact, stable shape.
  *
- * Nothing here holds state. The bot token is a per-request argument and is only
- * ever placed in the request URL path (the Bot API has no header form), never
- * in an error message or log line.
+ * Nothing here holds state. The bot token is only ever placed in the request
+ * URL path (the Bot API has no header form), never in an error message or log.
  */
 
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -18,6 +17,20 @@ export const MAX_TEXT_LEN = 4096;
 export const MAX_CAPTION_LEN = 1024;
 export const MAX_UPDATES_LIMIT = 100;
 
+/** Update kinds that carry a whole message. */
+export const MESSAGE_UPDATE_KINDS = [
+  "message",
+  "edited_message",
+  "channel_post",
+  "edited_channel_post",
+  "business_message",
+  "edited_business_message",
+] as const;
+export type MessageUpdateKind = (typeof MESSAGE_UPDATE_KINDS)[number];
+
+/** Update kinds a caller may ask `getUpdates` for (the ones normalizeUpdate understands). */
+export const ALLOWED_UPDATE_KINDS = [...MESSAGE_UPDATE_KINDS, "message_reaction", "callback_query"] as const;
+
 /**
  * `<bot id>:<secret>` as issued by @BotFather. The token is interpolated into
  * the URL path, so the charset check is also what stops a caller-supplied value
@@ -29,63 +42,73 @@ export function isValidBotToken(token: string | null | undefined): token is stri
   return typeof token === "string" && BOT_TOKEN_RE.test(token);
 }
 
-/** The numeric bot id is the public half of the token: safe to log and attribute by. */
-export function botIdFromToken(token: string): string {
-  return token.slice(0, token.indexOf(":"));
-}
-
 /** Integer chat id (negative for groups/channels) or a public `@username`. */
-const CHAT_ID_RE = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$/;
+export const CHAT_ID_RE = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$/;
 
-export function normalizeChatId(value: string | number): string | null {
-  const s = String(value).trim();
-  return CHAT_ID_RE.test(s) ? s : null;
+/** File sources a caller may hand to sendPhoto/sendDocument: an https URL or a Telegram file_id. */
+export function validateFileRef(value: string): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (/^https:\/\//i.test(v)) {
+    try {
+      const u = new URL(v);
+      // No embedded credentials: they would be forwarded to Telegram's fetcher.
+      if (u.username || u.password) return null;
+      return u.toString();
+    } catch {
+      return null;
+    }
+  }
+  return /^[A-Za-z0-9_-]{10,300}$/.test(v) ? v : null;
 }
 
-export function methodUrl(token: string, method: string, base: string = TELEGRAM_API_BASE): string {
-  return `${base.replace(/\/+$/, "")}/bot${token}/${method}`;
-}
+// --- client -----------------------------------------------------------------
 
 export type CallResult<T> = { ok: true; result: T } | { ok: false; status: number; error: string };
-
-/**
- * Call one Bot API method with a JSON body. Every failure is folded into a
- * `{ ok: false }` with a message that never contains the token: network errors
- * report only the error class (a fetch error can echo the URL), and Telegram's
- * own `description` never includes it.
- */
-export async function callTelegram<T>(
-  token: string,
+export type TelegramCall = <T>(
   method: string,
   params: Record<string, unknown>,
-  opts: { base?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {},
-): Promise<CallResult<T>> {
-  const doFetch = opts.fetchImpl ?? fetch;
-  let res: Response;
-  try {
-    res = await doFetch(methodUrl(token, method, opts.base), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(dropUndefined(params)),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-    });
-  } catch (err) {
-    const name = err instanceof Error ? err.constructor.name : "Error";
-    return { ok: false, status: 502, error: `could not reach Telegram: ${name}` };
-  }
+  timeoutMs?: number,
+) => Promise<CallResult<T>>;
 
-  let json: unknown;
-  try {
-    json = await res.json();
-  } catch {
-    return { ok: false, status: 502, error: `Telegram returned ${res.status} with a non-JSON body` };
-  }
-  if (isRecord(json) && json.ok === true) {
-    return { ok: true, result: json.result as T };
-  }
-  const description =
-    isRecord(json) && typeof json.description === "string" ? json.description : "unknown error";
-  return { ok: false, status: res.status, error: explainError(res.status, description) };
+/**
+ * Bind a token to a Bot API client. Every failure folds into `{ ok: false }`
+ * with a message that never contains the token: network errors report only the
+ * error class (a fetch error can echo the URL), and Telegram's own
+ * `description` never includes it.
+ */
+export function telegramClient(
+  token: string,
+  opts: { base?: string; fetchImpl?: typeof fetch } = {},
+): TelegramCall {
+  const base = (opts.base || TELEGRAM_API_BASE).replace(/\/+$/, "");
+  const doFetch = opts.fetchImpl ?? fetch;
+  return async <T>(method: string, params: Record<string, unknown>, timeoutMs = 30_000) => {
+    let res: Response;
+    try {
+      res = await doFetch(`${base}/bot${token}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.constructor.name : "Error";
+      return { ok: false, status: 502, error: `could not reach Telegram: ${name}` };
+    }
+
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      return { ok: false, status: 502, error: `Telegram returned ${res.status} with a non-JSON body` };
+    }
+    if (isRecord(json) && json.ok === true) {
+      return { ok: true, result: json.result as T };
+    }
+    const description = isRecord(json) ? (str(json.description) ?? "unknown error") : "unknown error";
+    return { ok: false, status: res.status, error: explainError(res.status, description) };
+  };
 }
 
 /** Turn the Bot API errors a user can act on into a next step. */
@@ -105,23 +128,42 @@ export function explainError(status: number, description: string): string {
   return base;
 }
 
-function dropUndefined(params: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(params)) if (v !== undefined) out[k] = v;
-  return out;
-}
+// --- normalization ----------------------------------------------------------
 
 export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// --- normalization ----------------------------------------------------------
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+/** Bot API unix-seconds timestamp to ISO8601. */
+export function isoDate(v: unknown): string | null {
+  const seconds = num(v);
+  return seconds === null ? null : new Date(seconds * 1000).toISOString();
+}
+
+/** "First Last" from a User or private Chat, or null when neither is set. */
+export function fullName(raw: Record<string, unknown>): string | null {
+  return [str(raw.first_name), str(raw.last_name)].filter(Boolean).join(" ") || null;
+}
 
 export interface NormalizedChat {
   id: number | null;
   type: string | null;
   title: string | null;
   username: string | null;
+}
+
+export interface NormalizedChatInfo extends NormalizedChat {
+  description: string | null;
+  member_count: number | null;
+  pinned_message: NormalizedMessage | null;
 }
 
 export interface NormalizedUser {
@@ -149,61 +191,53 @@ export interface NormalizedMessage {
   media: NormalizedMedia[];
 }
 
-export interface NormalizedUpdate {
-  update_id: number | null;
-  type: string;
-  message: NormalizedMessage | null;
-  reaction: { emoji: string[] } | null;
-  callback_data: string | null;
-}
-
-const MESSAGE_UPDATE_KINDS = [
-  "message",
-  "edited_message",
-  "channel_post",
-  "edited_channel_post",
-  "business_message",
-  "edited_business_message",
-] as const;
+/** One update, discriminated on `type`; kinds normalizeUpdate does not model arrive as `other`. */
+export type NormalizedUpdate = { update_id: number | null } & (
+  | { type: MessageUpdateKind; message: NormalizedMessage | null }
+  | {
+      type: "message_reaction";
+      chat: NormalizedChat | null;
+      from: NormalizedUser | null;
+      message_id: number | null;
+      date: string | null;
+      emoji: string[];
+    }
+  | { type: "callback_query"; from: NormalizedUser | null; data: string | null; message: NormalizedMessage | null }
+  | { type: "other"; kind: string }
+);
 
 // Media fields whose value is a single object carrying a file_id.
-const SINGLE_FILE_MEDIA = [
-  "document",
-  "audio",
-  "video",
-  "voice",
-  "video_note",
-  "animation",
-  "sticker",
-] as const;
-
-function num(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-
-function str(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
+const SINGLE_FILE_MEDIA = ["document", "audio", "video", "voice", "video_note", "animation", "sticker"] as const;
 
 export function normalizeChat(raw: unknown): NormalizedChat | null {
   if (!isRecord(raw)) return null;
-  const personal = [str(raw.first_name), str(raw.last_name)].filter(Boolean).join(" ");
   return {
     id: num(raw.id),
     type: str(raw.type),
-    title: str(raw.title) ?? (personal || null),
+    title: str(raw.title) ?? fullName(raw),
     username: str(raw.username),
+  };
+}
+
+/** A `getChat` ChatFullInfo plus its member count, on top of the basic chat shape. */
+export function normalizeChatInfo(raw: unknown, memberCount: number | null): NormalizedChatInfo | null {
+  const chat = normalizeChat(raw);
+  if (!chat || !isRecord(raw)) return null;
+  return {
+    ...chat,
+    description: str(raw.description) ?? str(raw.bio),
+    member_count: memberCount,
+    pinned_message: normalizeMessage(raw.pinned_message),
   };
 }
 
 export function normalizeUser(raw: unknown): NormalizedUser | null {
   if (!isRecord(raw)) return null;
-  const name = [str(raw.first_name), str(raw.last_name)].filter(Boolean).join(" ");
   return {
     id: num(raw.id),
     is_bot: typeof raw.is_bot === "boolean" ? raw.is_bot : null,
     username: str(raw.username),
-    name: name || null,
+    name: fullName(raw),
   };
 }
 
@@ -212,12 +246,7 @@ function mediaOf(raw: Record<string, unknown>): NormalizedMedia[] {
   // `photo` is an array of sizes; the last is the largest.
   if (Array.isArray(raw.photo) && raw.photo.length > 0) {
     const largest = raw.photo[raw.photo.length - 1];
-    media.push({
-      kind: "photo",
-      file_id: isRecord(largest) ? str(largest.file_id) : null,
-      file_name: null,
-      mime_type: null,
-    });
+    media.push({ kind: "photo", file_id: isRecord(largest) ? str(largest.file_id) : null, file_name: null, mime_type: null });
   }
   for (const kind of SINGLE_FILE_MEDIA) {
     const m = raw[kind];
@@ -230,15 +259,13 @@ function mediaOf(raw: Record<string, unknown>): NormalizedMedia[] {
 
 export function normalizeMessage(raw: unknown): NormalizedMessage | null {
   if (!isRecord(raw)) return null;
-  const date = num(raw.date);
-  const reply = isRecord(raw.reply_to_message) ? num(raw.reply_to_message.message_id) : null;
   return {
     message_id: num(raw.message_id),
-    date: date === null ? null : new Date(date * 1000).toISOString(),
+    date: isoDate(raw.date),
     chat: normalizeChat(raw.chat),
     from: normalizeUser(raw.from) ?? normalizeUser(raw.sender_chat),
     text: str(raw.text) ?? str(raw.caption),
-    reply_to_message_id: reply,
+    reply_to_message_id: isRecord(raw.reply_to_message) ? num(raw.reply_to_message.message_id) : null,
     message_thread_id: num(raw.message_thread_id),
     media: mediaOf(raw),
   };
@@ -247,10 +274,8 @@ export function normalizeMessage(raw: unknown): NormalizedMessage | null {
 export function normalizeUpdate(raw: unknown): NormalizedUpdate {
   const rec = isRecord(raw) ? raw : {};
   const update_id = num(rec.update_id);
-  for (const kind of MESSAGE_UPDATE_KINDS) {
-    if (isRecord(rec[kind])) {
-      return { update_id, type: kind, message: normalizeMessage(rec[kind]), reaction: null, callback_data: null };
-    }
+  for (const type of MESSAGE_UPDATE_KINDS) {
+    if (isRecord(rec[type])) return { update_id, type, message: normalizeMessage(rec[type]) };
   }
   if (isRecord(rec.message_reaction)) {
     const r = rec.message_reaction;
@@ -260,35 +285,26 @@ export function normalizeUpdate(raw: unknown): NormalizedUpdate {
     return {
       update_id,
       type: "message_reaction",
-      message: {
-        message_id: num(r.message_id),
-        date: num(r.date) === null ? null : new Date((r.date as number) * 1000).toISOString(),
-        chat: normalizeChat(r.chat),
-        from: normalizeUser(r.user) ?? normalizeUser(r.actor_chat),
-        text: null,
-        reply_to_message_id: null,
-        message_thread_id: null,
-        media: [],
-      },
-      reaction: { emoji },
-      callback_data: null,
+      chat: normalizeChat(r.chat),
+      from: normalizeUser(r.user) ?? normalizeUser(r.actor_chat),
+      message_id: num(r.message_id),
+      date: isoDate(r.date),
+      emoji,
     };
   }
   if (isRecord(rec.callback_query)) {
     const q = rec.callback_query;
-    const msg = normalizeMessage(q.message);
     return {
       update_id,
       type: "callback_query",
-      message: msg ? { ...msg, from: normalizeUser(q.from) } : null,
-      reaction: null,
-      callback_data: str(q.data),
+      from: normalizeUser(q.from),
+      data: str(q.data),
+      message: normalizeMessage(q.message),
     };
   }
-  // Any other update kind (poll, chat_member, ...): report its kind so the
-  // caller knows it exists and can advance the offset past it.
-  const kind = Object.keys(rec).find((k) => k !== "update_id") ?? "unknown";
-  return { update_id, type: kind, message: null, reaction: null, callback_data: null };
+  // Any other kind (poll, chat_member, ...): name it so the caller knows it
+  // exists and can advance the offset past it.
+  return { update_id, type: "other", kind: Object.keys(rec).find((k) => k !== "update_id") ?? "unknown" };
 }
 
 /** Offset that acknowledges every update in `updates` (Bot API: last id + 1). */
@@ -296,21 +312,4 @@ export function nextOffset(updates: NormalizedUpdate[]): number | null {
   let max: number | null = null;
   for (const u of updates) if (u.update_id !== null && (max === null || u.update_id > max)) max = u.update_id;
   return max === null ? null : max + 1;
-}
-
-/** File sources a caller may hand to sendPhoto/sendDocument: an https URL or a Telegram file_id. */
-export function validateFileRef(value: string): string | null {
-  const v = value.trim();
-  if (!v) return null;
-  if (/^https:\/\//i.test(v)) {
-    try {
-      const u = new URL(v);
-      // No embedded credentials: they would be forwarded to Telegram's fetcher.
-      if (u.username || u.password) return null;
-      return u.toString();
-    } catch {
-      return null;
-    }
-  }
-  return /^[A-Za-z0-9_-]{10,300}$/.test(v) ? v : null;
 }

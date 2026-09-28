@@ -29,6 +29,7 @@ const EXPECTED_TOOLS = [
   "telegram_send_message",
   "telegram_send_photo",
   "telegram_set_reaction",
+  "telegram_unpin_message",
 ];
 
 function mockTelegram(method: string, status: number, body: unknown, onBody?: (b: unknown) => void) {
@@ -95,8 +96,9 @@ describe("bot token gate on /mcp", () => {
     expect(body).not.toContain(TOKEN);
   });
 
-  it("405s a GET: the server is stateless", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/mcp`, { method: "GET", headers: HEADERS });
+  it("405s a GET, even without a token: the server is stateless", async () => {
+    const { "x-telegram-bot-token": _, ...rest } = HEADERS;
+    const res = await SELF.fetch(`${ORIGIN}/mcp`, { method: "GET", headers: rest });
     expect(res.status).toBe(405);
   });
 });
@@ -115,33 +117,6 @@ describe("MCP over the stateless transport", () => {
     const res = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const msg = (await res.json()) as { result: { tools: { name: string }[] } };
     expect(msg.result.tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
-  });
-
-  it("sends a message and normalizes the reply", async () => {
-    let sent: any;
-    mockTelegram(
-      "sendMessage",
-      200,
-      {
-        ok: true,
-        result: {
-          message_id: 42,
-          date: 1_700_000_000,
-          chat: { id: 555, type: "private", first_name: "Ada" },
-          from: { id: 123456789, is_bot: true, first_name: "B", username: "b_bot" },
-          text: "hi",
-        },
-      },
-      (b) => (sent = b),
-    );
-    const result = await callTool("telegram_send_message", { chat_id: 555, text: "hi", reply_to_message_id: 7 });
-    expect(result.isError).toBeUndefined();
-    expect(result.structuredContent.message).toMatchObject({ message_id: 42, text: "hi", chat: { id: 555 } });
-    expect(sent).toEqual({
-      chat_id: "555",
-      text: "hi",
-      reply_parameters: { message_id: 7, allow_sending_without_reply: true },
-    });
   });
 
   it("surfaces the webhook conflict on get_updates", async () => {
@@ -167,14 +142,112 @@ describe("MCP over the stateless transport", () => {
     expect(result.structuredContent).toMatchObject({ count: 2, next_offset: 102 });
   });
 
-  it("rejects a bad chat id before calling Telegram", async () => {
+  it("rejects a bad chat id in the schema, before calling Telegram", async () => {
     const result = await callTool("telegram_send_message", { chat_id: "general", text: "hi" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("chat_id");
+    expect(JSON.stringify(result.content)).toContain("chat_id");
   });
 
-  it("rejects a non-https photo before calling Telegram", async () => {
+  it("rejects a non-https photo in the schema, before calling Telegram", async () => {
     const result = await callTool("telegram_send_photo", { chat_id: 5, photo: "http://example.com/a.png" });
     expect(result.isError).toBe(true);
+  });
+
+  it("returns chat info with a null member count when that call fails", async () => {
+    mockTelegram("getChat", 200, { ok: true, result: { id: -100, type: "supergroup", title: "T", description: "d" } });
+    mockTelegram("getChatMemberCount", 400, { ok: false, error_code: 400, description: "Bad Request" });
+    const result = await callTool("telegram_get_chat", { chat_id: -100 });
+    expect(result.structuredContent.chat).toMatchObject({ id: -100, title: "T", description: "d", member_count: null });
+  });
+});
+
+// Every tool that maps to one Bot API method: call it, and assert both the exact
+// body sent to Telegram and that the tool reports success.
+const SENT = { message_id: 42, date: 1_700_000_000, chat: { id: 555, type: "private" }, text: "x" };
+const REPLY = {
+  message_id: 7,
+  allow_sending_without_reply: true,
+};
+const TOOL_CASES: { tool: string; args: Record<string, unknown>; method: string; body: unknown; result: unknown }[] = [
+  { tool: "telegram_get_me", args: {}, method: "getMe", body: {}, result: { id: 1, is_bot: true, username: "b_bot" } },
+  {
+    tool: "telegram_send_message",
+    args: { chat_id: 555, text: "hi", reply_to_message_id: 7, disable_link_preview: true },
+    method: "sendMessage",
+    body: { chat_id: "555", text: "hi", reply_parameters: REPLY, link_preview_options: { is_disabled: true } },
+    result: SENT,
+  },
+  {
+    tool: "telegram_send_photo",
+    args: { chat_id: "@my_channel", photo: "https://example.com/a.png", caption: "c" },
+    method: "sendPhoto",
+    body: { chat_id: "@my_channel", photo: "https://example.com/a.png", caption: "c" },
+    result: SENT,
+  },
+  {
+    tool: "telegram_send_document",
+    args: { chat_id: 555, document: "BQACAgQAAxkBAAIB", message_thread_id: 3 },
+    method: "sendDocument",
+    body: { chat_id: "555", document: "BQACAgQAAxkBAAIB", message_thread_id: 3 },
+    result: SENT,
+  },
+  {
+    tool: "telegram_forward_message",
+    args: { chat_id: 1, from_chat_id: -100, message_id: 9 },
+    method: "forwardMessage",
+    body: { chat_id: "1", from_chat_id: "-100", message_id: 9 },
+    result: SENT,
+  },
+  {
+    tool: "telegram_edit_message_text",
+    args: { chat_id: 555, message_id: 42, text: "new", parse_mode: "HTML" },
+    method: "editMessageText",
+    body: { chat_id: "555", message_id: 42, text: "new", parse_mode: "HTML" },
+    result: SENT,
+  },
+  {
+    tool: "telegram_delete_message",
+    args: { chat_id: 555, message_id: 42 },
+    method: "deleteMessage",
+    body: { chat_id: "555", message_id: 42 },
+    result: true,
+  },
+  {
+    tool: "telegram_set_reaction",
+    args: { chat_id: 555, message_id: 42, emoji: "👍" },
+    method: "setMessageReaction",
+    body: { chat_id: "555", message_id: 42, reaction: [{ type: "emoji", emoji: "👍" }] },
+    result: true,
+  },
+  {
+    tool: "telegram_set_reaction",
+    args: { chat_id: 555, message_id: 42 },
+    method: "setMessageReaction",
+    body: { chat_id: "555", message_id: 42, reaction: [] },
+    result: true,
+  },
+  {
+    tool: "telegram_pin_message",
+    args: { chat_id: 555, message_id: 42, disable_notification: true },
+    method: "pinChatMessage",
+    body: { chat_id: "555", message_id: 42, disable_notification: true },
+    result: true,
+  },
+  {
+    tool: "telegram_unpin_message",
+    args: { chat_id: 555, message_id: 42 },
+    method: "unpinChatMessage",
+    body: { chat_id: "555", message_id: 42 },
+    result: true,
+  },
+];
+
+describe("each tool sends the right Bot API call", () => {
+  it.each(TOOL_CASES)("$tool -> $method", async ({ tool, args, method, body, result }) => {
+    let sent: unknown;
+    mockTelegram(method, 200, { ok: true, result }, (b) => (sent = b));
+    const out = await callTool(tool, args);
+    expect(out.isError).toBeUndefined();
+    expect(sent).toEqual(body);
   });
 });

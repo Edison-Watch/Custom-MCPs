@@ -47,10 +47,14 @@ it is placed in), validated with `getMe` on `initialize` (a rejected token is a
 | `telegram_edit_message_text` | `editMessageText` | The bot's own messages. |
 | `telegram_delete_message` | `deleteMessage` | Own messages, or others' as a group admin (48h). |
 | `telegram_set_reaction` | `setMessageReaction` | One emoji, or omit to clear. |
-| `telegram_pin_message` | `pinChatMessage` / `unpinChatMessage` | `unpin: true` to unpin. |
+| `telegram_pin_message` | `pinChatMessage` | Needs pin rights in groups. |
+| `telegram_unpin_message` | `unpinChatMessage` | Same rights as pin. |
 
 `chat_id` is an integer id (negative for groups/channels) or a public
-`@username`. Messages come back normalized: `message_id`, ISO `date`, `chat`,
+`@username`; it is validated in the input schema, so a bad value never reaches
+Telegram. The text and caption caps (4096 / 1024) apply to the raw string; with
+`parse_mode` set Telegram counts after parsing the markup, so a message near the
+limit with heavy markup may need trimming. Messages come back normalized: `message_id`, ISO `date`, `chat`,
 `from`, `text` (or caption), `reply_to_message_id`, `message_thread_id`, and
 `media` (`kind`, `file_id`, `file_name`, `mime_type`).
 

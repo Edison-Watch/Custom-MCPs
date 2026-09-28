@@ -91,6 +91,12 @@
       "read_private_data": false,
       "read_untrusted_public_data": false,
       "acl": "PRIVATE"
+    },
+    "telegram_unpin_message": {
+      "write_operation": true,
+      "read_private_data": false,
+      "read_untrusted_public_data": false,
+      "acl": "PRIVATE"
     }
   }
 }

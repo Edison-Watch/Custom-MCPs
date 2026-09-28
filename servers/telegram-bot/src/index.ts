@@ -17,7 +17,8 @@
  * Auth: the bot token is the credential that authorizes the work (every call
  * spends the caller's own bot, never a first-party account). The fleet auth
  * contract (./auth) still gates `/mcp` in front of it, so a self-hosted deploy
- * can add `bearer`.
+ * can add `bearer`. A bad token is a 401 without an OAuth challenge, which
+ * SealGate reports as rejected credentials rather than starting OAuth.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -25,20 +26,22 @@ import { z } from "zod";
 
 import { checkAuth } from "./auth";
 import {
+  ALLOWED_UPDATE_KINDS,
   BOT_TOKEN_HEADER,
+  CHAT_ID_RE,
   MAX_CAPTION_LEN,
   MAX_TEXT_LEN,
   MAX_UPDATES_LIMIT,
-  TELEGRAM_API_BASE,
-  callTelegram,
   isRecord,
   isValidBotToken,
   nextOffset,
-  normalizeChatId,
+  normalizeChatInfo,
   normalizeMessage,
   normalizeUpdate,
   normalizeUser,
+  telegramClient,
   validateFileRef,
+  type TelegramCall,
 } from "./telegram";
 
 export interface Env {
@@ -54,75 +57,112 @@ export interface Env {
 
 const SERVICE = "telegram-bot";
 
-type ToolResult = {
-  isError?: true;
-  content: { type: "text"; text: string }[];
-  structuredContent?: Record<string, unknown>;
-};
-
-function textError(message: string): ToolResult {
-  return { isError: true, content: [{ type: "text", text: `Error: ${message}` }] };
-}
-
-function ok(summary: string, data: Record<string, unknown>): ToolResult {
-  return {
-    content: [{ type: "text", text: `${summary}\n${JSON.stringify(data, null, 2)}` }],
-    structuredContent: data,
-  };
-}
-
-// --- shared input fragments --------------------------------------------------
+// --- input schemas ------------------------------------------------------------
+// Validation and normalization live in the schemas: the SDK hands handlers the
+// parsed (transformed) value, and a failure never reaches Telegram.
 
 const chatId = z
-  .union([z.string(), z.number().int()])
+  .union([z.number().int(), z.string()])
+  .transform((v, ctx) => {
+    const id = String(v).trim();
+    if (CHAT_ID_RE.test(id)) return id;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "chat_id must be an integer id or a public '@username'" });
+    return z.NEVER;
+  })
   .describe("Chat id (integer, negative for groups/channels) or a public '@channelusername'.");
+
+const fileRef = (kind: string) =>
+  z
+    .string()
+    .max(2048)
+    .transform((v, ctx) => {
+      const ref = validateFileRef(v);
+      if (ref) return ref;
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${kind} must be an https:// URL without credentials, or a Telegram file_id` });
+      return z.NEVER;
+    })
+    .describe("An https:// URL (Telegram fetches it) or the file_id of a file the bot has seen.");
+
 const messageId = z.number().int().positive().describe("Message id within the chat.");
 const parseMode = z
   .enum(["MarkdownV2", "HTML"])
   .optional()
-  .describe("Telegram formatting mode for the text. Omit to send plain text.");
+  .describe("Telegram formatting mode. Omit for plain text. Length limits apply after Telegram parses the markup.");
+const text = z.string().min(1).max(MAX_TEXT_LEN).describe(`Message text (1-${MAX_TEXT_LEN} characters).`);
 const disableNotification = z.boolean().optional().describe("Deliver silently (no sound).");
-const replyTo = z
-  .number()
-  .int()
-  .positive()
-  .optional()
-  .describe("Reply to this message id in the same chat.");
-const threadId = z
-  .number()
-  .int()
-  .positive()
-  .optional()
-  .describe("Forum topic id, for supergroups with topics enabled.");
 
-function badChat(): ToolResult {
-  return textError("chat_id must be an integer id or a public '@username'");
+/** Fields shared by every tool that sends a new message into a chat. */
+const sendFields = {
+  chat_id: chatId,
+  reply_to_message_id: z.number().int().positive().optional().describe("Reply to this message id in the same chat."),
+  message_thread_id: z.number().int().positive().optional().describe("Forum topic id (supergroups with topics)."),
+  disable_notification: disableNotification,
+};
+const fileFields = {
+  ...sendFields,
+  caption: z.string().max(MAX_CAPTION_LEN).optional().describe(`Caption (max ${MAX_CAPTION_LEN}).`),
+  parse_mode: parseMode,
+};
+
+type SendArgs = {
+  chat_id: string;
+  reply_to_message_id?: number;
+  message_thread_id?: number;
+  disable_notification?: boolean;
+};
+
+/** Bot API params for `sendFields`; allow_sending_without_reply keeps a deleted target from failing the send. */
+function sendParams({ reply_to_message_id, ...rest }: SendArgs): Record<string, unknown> {
+  return reply_to_message_id === undefined
+    ? rest
+    : { ...rest, reply_parameters: { message_id: reply_to_message_id, allow_sending_without_reply: true } };
 }
 
-function replyParameters(id: number | undefined) {
-  // allow_sending_without_reply: a deleted target should not fail the send.
-  return id === undefined ? undefined : { message_id: id, allow_sending_without_reply: true };
+// --- results --------------------------------------------------------------------
+
+function textError(message: string) {
+  return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
 }
 
-/** Build one request's MCP server, closed over that request's bot token. */
-export function buildServer(token: string, env: Env): McpServer {
+function ok(summary: string, data: Record<string, unknown>) {
+  return {
+    content: [{ type: "text" as const, text: `${summary}\n${JSON.stringify(data, null, 2)}` }],
+    structuredContent: data,
+  };
+}
+
+type Render<T> = (result: T) => [summary: string, data: Record<string, unknown>];
+
+/** Call one Bot API method and turn the outcome into a tool result. */
+function runner(call: TelegramCall) {
+  return async <T>(method: string, params: Record<string, unknown>, render: Render<T>) => {
+    const res = await call<T>(method, params);
+    return res.ok ? ok(...render(res.result)) : textError(res.error);
+  };
+}
+
+const sentMessage =
+  (what: string): Render<unknown> =>
+  (raw) => {
+    const message = normalizeMessage(raw);
+    return [`Sent ${what} as message ${message?.message_id ?? "?"}`, { message }];
+  };
+
+// --- server ---------------------------------------------------------------------
+
+/** Build one request's MCP server over that request's Telegram client. */
+export function buildServer(call: TelegramCall): McpServer {
   const server = new McpServer({ name: SERVICE, version: "0.1.0" });
-  const base = env.TELEGRAM_API_BASE?.trim() || TELEGRAM_API_BASE;
-  const call = <T>(method: string, params: Record<string, unknown>) =>
-    callTelegram<T>(token, method, params, { base });
+  const run = runner(call);
 
   server.registerTool(
     "telegram_get_me",
-    {
-      description: "Return the bot's own identity (id, username, name). Use it to confirm which bot is connected.",
-      inputSchema: {},
-    },
-    async () => {
-      const res = await call<unknown>("getMe", {});
-      if (!res.ok) return textError(res.error);
-      const me = normalizeUser(res.result);
-      return ok(`Connected as @${me?.username ?? "unknown"}`, { bot: me });
-    },
+    { description: "Return the bot's own identity (id, username, name). Use it to confirm which bot is connected." },
+    () =>
+      run("getMe", {}, (raw) => {
+        const bot = normalizeUser(raw);
+        return [`Connected as @${bot?.username ?? "unknown"}`, { bot }];
+      }),
   );
 
   server.registerTool(
@@ -144,68 +184,41 @@ export function buildServer(token: string, env: Env): McpServer {
           .int()
           .min(1)
           .max(MAX_UPDATES_LIMIT)
-          .optional()
+          .default(50)
           .describe(`Max updates to return (1-${MAX_UPDATES_LIMIT}, default 50).`),
         allowed_updates: z
-          .array(
-            z.enum([
-              "message",
-              "edited_message",
-              "channel_post",
-              "edited_channel_post",
-              "message_reaction",
-              "callback_query",
-            ]),
-          )
-          .max(6)
+          .array(z.enum(ALLOWED_UPDATE_KINDS))
+          .max(ALLOWED_UPDATE_KINDS.length)
           .optional()
           .describe("Only return these update kinds. Omit for the bot's current setting."),
       },
     },
-    async (args: { offset?: number; limit?: number; allowed_updates?: string[] }) => {
-      const res = await call<unknown[]>("getUpdates", {
-        offset: args.offset,
-        limit: args.limit ?? 50,
-        // Short poll: a Worker request must not hang waiting for new messages.
-        timeout: 0,
-        allowed_updates: args.allowed_updates,
-      });
-      if (!res.ok) return textError(res.error);
-      const updates = Array.isArray(res.result) ? res.result.map(normalizeUpdate) : [];
-      return ok(`${updates.length} update(s)`, {
-        count: updates.length,
-        next_offset: nextOffset(updates),
-        updates,
-      });
-    },
+    // timeout 0 = short poll: a Worker request must not hang waiting for new messages.
+    (args) =>
+      run<unknown[]>("getUpdates", { ...args, timeout: 0 }, (raw) => {
+        const updates = Array.isArray(raw) ? raw.map(normalizeUpdate) : [];
+        return [
+          `${updates.length} update(s)`,
+          { count: updates.length, next_offset: nextOffset(updates), updates },
+        ];
+      }),
   );
 
   server.registerTool(
     "telegram_get_chat",
     {
       description:
-        "Look up a chat the bot can see: type, title, username, description, member count. Private chats " +
-        "are only visible after that user has messaged the bot.",
+        "Look up a chat the bot can see: type, title, username, description, member count, pinned message. " +
+        "Private chats are only visible after that user has messaged the bot.",
       inputSchema: { chat_id: chatId },
     },
-    async (args: { chat_id: string | number }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const chat = await call<Record<string, unknown>>("getChat", { chat_id: id });
+    async ({ chat_id }) => {
+      const [chat, count] = await Promise.all([
+        call<unknown>("getChat", { chat_id }),
+        call<number>("getChatMemberCount", { chat_id }),
+      ]);
       if (!chat.ok) return textError(chat.error);
-      const count = await call<number>("getChatMemberCount", { chat_id: id });
-      const c = isRecord(chat.result) ? chat.result : {};
-      return ok(`Chat ${id}`, {
-        chat: {
-          id: c.id ?? null,
-          type: c.type ?? null,
-          title: c.title ?? ([c.first_name, c.last_name].filter(Boolean).join(" ") || null),
-          username: c.username ?? null,
-          description: c.description ?? c.bio ?? null,
-          member_count: count.ok ? count.result : null,
-          pinned_message: normalizeMessage(c.pinned_message),
-        },
-      });
+      return ok(`Chat ${chat_id}`, { chat: normalizeChatInfo(chat.result, count.ok ? count.result : null) });
     },
   );
 
@@ -214,80 +227,38 @@ export function buildServer(token: string, env: Env): McpServer {
     {
       description: "Send a text message from the bot to a chat, optionally as a reply or into a forum topic.",
       inputSchema: {
-        chat_id: chatId,
-        text: z.string().min(1).max(MAX_TEXT_LEN).describe(`Message text (1-${MAX_TEXT_LEN} characters).`),
+        ...sendFields,
+        text,
         parse_mode: parseMode,
-        reply_to_message_id: replyTo,
-        message_thread_id: threadId,
-        disable_notification: disableNotification,
         disable_link_preview: z.boolean().optional().describe("Do not render a preview for links in the text."),
       },
     },
-    async (args: {
-      chat_id: string | number;
-      text: string;
-      parse_mode?: string;
-      reply_to_message_id?: number;
-      message_thread_id?: number;
-      disable_notification?: boolean;
-      disable_link_preview?: boolean;
-    }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const res = await call<unknown>("sendMessage", {
-        chat_id: id,
-        text: args.text,
-        parse_mode: args.parse_mode,
-        message_thread_id: args.message_thread_id,
-        disable_notification: args.disable_notification,
-        reply_parameters: replyParameters(args.reply_to_message_id),
-        link_preview_options: args.disable_link_preview ? { is_disabled: true } : undefined,
-      });
-      if (!res.ok) return textError(res.error);
-      const msg = normalizeMessage(res.result);
-      return ok(`Sent message ${msg?.message_id ?? "?"} to ${id}`, { message: msg });
-    },
+    ({ text, parse_mode, disable_link_preview, ...send }) =>
+      run(
+        "sendMessage",
+        {
+          ...sendParams(send),
+          text,
+          parse_mode,
+          link_preview_options: disable_link_preview ? { is_disabled: true } : undefined,
+        },
+        sentMessage("text"),
+      ),
   );
 
-  const sendFileTool = (tool: string, method: "sendPhoto" | "sendDocument", field: "photo" | "document") => {
-    server.registerTool(
-      tool,
-      {
-        description:
-          `Send a ${field} to a chat by https URL (Telegram fetches it) or by the file_id of a file the bot ` +
-          "has already seen (from telegram_get_updates).",
-        inputSchema: {
-          chat_id: chatId,
-          [field]: z.string().min(1).max(2048).describe("An https:// URL or a Telegram file_id."),
-          caption: z.string().max(MAX_CAPTION_LEN).optional().describe(`Caption (max ${MAX_CAPTION_LEN}).`),
-          parse_mode: parseMode,
-          reply_to_message_id: replyTo,
-          message_thread_id: threadId,
-          disable_notification: disableNotification,
-        },
-      },
-      async (args: Record<string, unknown>) => {
-        const id = normalizeChatId(args.chat_id as string | number);
-        if (!id) return badChat();
-        const ref = validateFileRef(String(args[field] ?? ""));
-        if (!ref) return textError(`${field} must be an https:// URL without credentials, or a Telegram file_id`);
-        const res = await call<unknown>(method, {
-          chat_id: id,
-          [field]: ref,
-          caption: args.caption,
-          parse_mode: args.parse_mode,
-          message_thread_id: args.message_thread_id,
-          disable_notification: args.disable_notification,
-          reply_parameters: replyParameters(args.reply_to_message_id as number | undefined),
-        });
-        if (!res.ok) return textError(res.error);
-        const msg = normalizeMessage(res.result);
-        return ok(`Sent ${field} as message ${msg?.message_id ?? "?"} to ${id}`, { message: msg });
-      },
-    );
-  };
-  sendFileTool("telegram_send_photo", "sendPhoto", "photo");
-  sendFileTool("telegram_send_document", "sendDocument", "document");
+  server.registerTool(
+    "telegram_send_photo",
+    { description: "Send a photo to a chat.", inputSchema: { ...fileFields, photo: fileRef("photo") } },
+    ({ photo, caption, parse_mode, ...send }) =>
+      run("sendPhoto", { ...sendParams(send), photo, caption, parse_mode }, sentMessage("photo")),
+  );
+
+  server.registerTool(
+    "telegram_send_document",
+    { description: "Send a file to a chat.", inputSchema: { ...fileFields, document: fileRef("document") } },
+    ({ document, caption, parse_mode, ...send }) =>
+      run("sendDocument", { ...sendParams(send), document, caption, parse_mode }, sentMessage("document")),
+  );
 
   server.registerTool(
     "telegram_forward_message",
@@ -300,50 +271,20 @@ export function buildServer(token: string, env: Env): McpServer {
         disable_notification: disableNotification,
       },
     },
-    async (args: {
-      chat_id: string | number;
-      from_chat_id: string | number;
-      message_id: number;
-      disable_notification?: boolean;
-    }) => {
-      const to = normalizeChatId(args.chat_id);
-      const from = normalizeChatId(args.from_chat_id);
-      if (!to || !from) return badChat();
-      const res = await call<unknown>("forwardMessage", {
-        chat_id: to,
-        from_chat_id: from,
-        message_id: args.message_id,
-        disable_notification: args.disable_notification,
-      });
-      if (!res.ok) return textError(res.error);
-      const msg = normalizeMessage(res.result);
-      return ok(`Forwarded as message ${msg?.message_id ?? "?"} in ${to}`, { message: msg });
-    },
+    (args) => run("forwardMessage", args, sentMessage("forward")),
   );
 
   server.registerTool(
     "telegram_edit_message_text",
     {
       description: "Replace the text of a message the bot sent earlier.",
-      inputSchema: {
-        chat_id: chatId,
-        message_id: messageId,
-        text: z.string().min(1).max(MAX_TEXT_LEN).describe(`New text (1-${MAX_TEXT_LEN} characters).`),
-        parse_mode: parseMode,
-      },
+      inputSchema: { chat_id: chatId, message_id: messageId, text, parse_mode: parseMode },
     },
-    async (args: { chat_id: string | number; message_id: number; text: string; parse_mode?: string }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const res = await call<unknown>("editMessageText", {
-        chat_id: id,
-        message_id: args.message_id,
-        text: args.text,
-        parse_mode: args.parse_mode,
-      });
-      if (!res.ok) return textError(res.error);
-      return ok(`Edited message ${args.message_id} in ${id}`, { message: normalizeMessage(res.result) });
-    },
+    (args) =>
+      run("editMessageText", args, (raw) => [
+        `Edited message ${args.message_id}`,
+        { message: normalizeMessage(raw) },
+      ]),
   );
 
   server.registerTool(
@@ -354,13 +295,7 @@ export function buildServer(token: string, env: Env): McpServer {
         "with delete rights (within 48 hours).",
       inputSchema: { chat_id: chatId, message_id: messageId },
     },
-    async (args: { chat_id: string | number; message_id: number }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const res = await call<boolean>("deleteMessage", { chat_id: id, message_id: args.message_id });
-      if (!res.ok) return textError(res.error);
-      return ok(`Deleted message ${args.message_id} in ${id}`, { deleted: true });
-    },
+    (args) => run("deleteMessage", args, () => [`Deleted message ${args.message_id}`, { deleted: true }]),
   );
 
   server.registerTool(
@@ -378,48 +313,35 @@ export function buildServer(token: string, env: Env): McpServer {
           .describe("One emoji from Telegram's allowed reaction set, e.g. '👍'. Omit to remove the reaction."),
       },
     },
-    async (args: { chat_id: string | number; message_id: number; emoji?: string }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const res = await call<boolean>("setMessageReaction", {
-        chat_id: id,
-        message_id: args.message_id,
-        reaction: args.emoji ? [{ type: "emoji", emoji: args.emoji }] : [],
-      });
-      if (!res.ok) return textError(res.error);
-      return ok(args.emoji ? `Reacted ${args.emoji}` : "Reaction cleared", { reacted: true });
-    },
+    ({ emoji, ...target }) =>
+      run("setMessageReaction", { ...target, reaction: emoji ? [{ type: "emoji", emoji }] : [] }, () => [
+        emoji ? `Reacted ${emoji}` : "Reaction cleared",
+        { reaction: emoji ?? null },
+      ]),
   );
 
   server.registerTool(
     "telegram_pin_message",
     {
-      description: "Pin a message in a chat, or unpin it with `unpin: true`. Needs pin rights in groups.",
-      inputSchema: {
-        chat_id: chatId,
-        message_id: messageId,
-        unpin: z.boolean().optional().describe("Unpin this message instead of pinning it."),
-        disable_notification: disableNotification,
-      },
+      description: "Pin a message in a chat. Needs pin rights in groups.",
+      inputSchema: { chat_id: chatId, message_id: messageId, disable_notification: disableNotification },
     },
-    async (args: { chat_id: string | number; message_id: number; unpin?: boolean; disable_notification?: boolean }) => {
-      const id = normalizeChatId(args.chat_id);
-      if (!id) return badChat();
-      const res = args.unpin
-        ? await call<boolean>("unpinChatMessage", { chat_id: id, message_id: args.message_id })
-        : await call<boolean>("pinChatMessage", {
-            chat_id: id,
-            message_id: args.message_id,
-            disable_notification: args.disable_notification,
-          });
-      if (!res.ok) return textError(res.error);
-      const verb = args.unpin ? "Unpinned" : "Pinned";
-      return ok(`${verb} message ${args.message_id} in ${id}`, { pinned: !args.unpin });
+    (args) => run("pinChatMessage", args, () => [`Pinned message ${args.message_id}`, { pinned: true }]),
+  );
+
+  server.registerTool(
+    "telegram_unpin_message",
+    {
+      description: "Unpin a pinned message in a chat. Needs pin rights in groups.",
+      inputSchema: { chat_id: chatId, message_id: messageId },
     },
+    (args) => run("unpinChatMessage", args, () => [`Unpinned message ${args.message_id}`, { pinned: false }]),
   );
 
   return server;
 }
+
+// --- HTTP -----------------------------------------------------------------------
 
 function jsonError(status: number, message: string, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ error: message }), {
@@ -429,11 +351,16 @@ function jsonError(status: number, message: string, extra: Record<string, string
 }
 
 function isInitialize(body: unknown): boolean {
-  const msgs = Array.isArray(body) ? body : [body];
-  return msgs.some((m) => isRecord(m) && m.method === "initialize");
+  return (Array.isArray(body) ? body : [body]).some((m) => isRecord(m) && m.method === "initialize");
 }
 
 async function handleMcp(request: Request, env: Env): Promise<Response> {
+  // Stateless transport: no session, so GET (server-initiated SSE) and DELETE
+  // (session teardown) have nothing to act on.
+  if (request.method !== "POST") {
+    return jsonError(405, "method not allowed: this server is stateless, POST JSON-RPC to /mcp", { allow: "POST" });
+  }
+
   const auth = await checkAuth(request, env);
   if (!auth.ok) {
     const extra: Record<string, string> = auth.status === 401 ? { "www-authenticate": `Bearer realm="${SERVICE}"` } : {};
@@ -444,12 +371,6 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   if (!token) return jsonError(401, `missing ${BOT_TOKEN_HEADER} header (a @BotFather bot token)`);
   if (!isValidBotToken(token)) return jsonError(401, `malformed ${BOT_TOKEN_HEADER}: expected '<bot id>:<secret>'`);
 
-  // Stateless transport: no session, so GET (server-initiated SSE) and DELETE
-  // (session teardown) have nothing to act on.
-  if (request.method !== "POST") {
-    return jsonError(405, "method not allowed: this server is stateless, POST JSON-RPC to /mcp", { allow: "POST" });
-  }
-
   let body: unknown;
   try {
     body = await request.json();
@@ -457,15 +378,16 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
     return jsonError(400, "request body must be JSON-RPC");
   }
 
+  const call = telegramClient(token, { base: env.TELEGRAM_API_BASE?.trim() });
+
   // Check the token once per connection, on initialize, so a wrong token fails
-  // at install time with a 401 instead of on the first tool call.
+  // at install time instead of on the first tool call.
   if (isInitialize(body)) {
-    const base = env.TELEGRAM_API_BASE?.trim() || TELEGRAM_API_BASE;
-    const me = await callTelegram<unknown>(token, "getMe", {}, { base, timeoutMs: 10_000 });
+    const me = await call("getMe", {}, 10_000);
     if (!me.ok) return jsonError(me.status === 401 ? 401 : 502, me.error);
   }
 
-  const server = buildServer(token, env);
+  const server = buildServer(call);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
