@@ -42,8 +42,8 @@ export function isValidBotToken(token: string | null | undefined): token is stri
   return typeof token === "string" && BOT_TOKEN_RE.test(token);
 }
 
-/** Integer chat id (negative for groups/channels) or a public `@username`. */
-export const CHAT_ID_RE = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$/;
+/** Integer chat id (negative for groups/channels) or a public `@username` (5-32 characters). */
+export const CHAT_ID_RE = /^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$/;
 
 /** File sources a caller may hand to sendPhoto/sendDocument: an https URL or a Telegram file_id. */
 export function validateFileRef(value: string): string | null {

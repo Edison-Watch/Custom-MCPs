@@ -39,8 +39,8 @@ describe("isValidBotToken", () => {
 
 describe("CHAT_ID_RE", () => {
   test("matches integer ids and public usernames only", () => {
-    for (const good of ["42", "-1001234567890", "@my_channel"]) expect(CHAT_ID_RE.test(good)).toBe(true);
-    for (const bad of ["general", "@ab", "1.5", "@1abc", ""]) expect(CHAT_ID_RE.test(bad)).toBe(false);
+    for (const good of ["42", "-1001234567890", "@my_channel", "@abcde"]) expect(CHAT_ID_RE.test(good)).toBe(true);
+    for (const bad of ["general", "@ab", "@abcd", "1.5", "@1abcd", ""]) expect(CHAT_ID_RE.test(bad)).toBe(false);
   });
 });
 

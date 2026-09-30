@@ -130,15 +130,17 @@ describe("MCP over the stateless transport", () => {
     expect(result.content[0].text).toContain("deleteWebhook");
   });
 
-  it("returns updates with the offset that acknowledges them", async () => {
+  it("short-polls for updates and returns the offset that acknowledges them", async () => {
+    let sent: unknown;
     mockTelegram("getUpdates", 200, {
       ok: true,
       result: [
         { update_id: 100, message: { message_id: 1, date: 1_700_000_000, chat: { id: 5, type: "private" }, text: "a" } },
         { update_id: 101, message: { message_id: 2, date: 1_700_000_001, chat: { id: 5, type: "private" }, text: "b" } },
       ],
-    });
+    }, (b) => (sent = b));
     const result = await callTool("telegram_get_updates", { limit: 10 });
+    expect(sent).toEqual({ limit: 10, timeout: 0 });
     expect(result.structuredContent).toMatchObject({ count: 2, next_offset: 102 });
   });
 
@@ -151,6 +153,8 @@ describe("MCP over the stateless transport", () => {
   it("rejects a non-https photo in the schema, before calling Telegram", async () => {
     const result = await callTool("telegram_send_photo", { chat_id: 5, photo: "http://example.com/a.png" });
     expect(result.isError).toBe(true);
+    // The schema's own message, not the 502 a blocked Telegram call would produce.
+    expect(JSON.stringify(result.content)).toContain("photo must be an https:// URL");
   });
 
   it("returns chat info with a null member count when that call fails", async () => {

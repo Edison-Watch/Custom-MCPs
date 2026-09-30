@@ -17,6 +17,14 @@ const CONFIG: EdisonJwtConfig = {
   audience: "reddit",
 };
 
+// Every JWKS fetch must go to the configured endpoint, so a regression that
+// ignores or hardcodes config.jwksUrl fails the fetch-counting tests below.
+function expectJwksUrl(input: unknown): void {
+  const url = input instanceof Request ? input.url : String(input);
+  expect(new URL(url).href).toBe(CONFIG.jwksUrl);
+}
+
+
 function b64url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
@@ -153,7 +161,8 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     __resetJwksCacheForTest();
     let fetches = 0;
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
+    globalThis.fetch = (async (input: unknown) => {
+      expectJwksUrl(input);
       fetches++;
       return new Response(JSON.stringify(jwks), {
         status: 200,
@@ -180,7 +189,8 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     let fetches = 0;
     const realFetch = globalThis.fetch;
     // A deliberately slow fetch so all requests overlap the same in-flight GET.
-    globalThis.fetch = (async () => {
+    globalThis.fetch = (async (input: unknown) => {
+      expectJwksUrl(input);
       fetches++;
       await new Promise((r) => setTimeout(r, 20));
       return new Response(JSON.stringify(jwks), {
@@ -201,11 +211,13 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
   test("a JWKS whose keys contain a null/non-object entry is rejected (503, not a 500)", async () => {
     __resetJwksCacheForTest();
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ keys: [null] }), {
+    globalThis.fetch = (async (input: unknown) => {
+      expectJwksUrl(input);
+      return new Response(JSON.stringify({ keys: [null] }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      })) as unknown as typeof fetch;
+      });
+    }) as unknown as typeof fetch;
     try {
       // A malformed JWKS must be treated as "no JWKS" (caller 503s), never cached
       // and dereferenced downstream into an uncaught 500.
@@ -220,7 +232,8 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     __resetJwksCacheForTest();
     let fetches = 0;
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
+    globalThis.fetch = (async (input: unknown) => {
+      expectJwksUrl(input);
       fetches++;
       if (fetches === 1) throw new Error("transient network blip");
       return new Response(JSON.stringify(jwks), {
