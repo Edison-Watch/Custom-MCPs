@@ -242,9 +242,24 @@
         "required": [
           "edison_hosted"
         ],
+        "dependentRequired": {
+          "headers": [
+            "template_fields"
+          ],
+          "template_fields": [
+            "headers"
+          ]
+        },
         "properties": {
           "edison_hosted": {
             "const": true
+          },
+          "headers": {
+            "propertyNames": {
+              "not": {
+                "pattern": "^[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"
+              }
+            }
           }
         }
       }

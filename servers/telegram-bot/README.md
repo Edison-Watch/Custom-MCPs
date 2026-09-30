@@ -7,7 +7,8 @@ look up chats, and send, edit, forward, react to, pin, and delete messages.
 - **Transport:** streamable HTTP at `/mcp`, JSON responses, no session id.
 - **Credential:** each user's own bot token from [@BotFather](https://t.me/BotFather),
   sent as the `X-Telegram-Bot-Token` header. SealGate stores it in its
-  zero-knowledge template values (catalog `auth: "token"`) and injects it on
+  zero-knowledge template values (catalog `headers` + `template_fields`, beside
+  the `edison-jwt` gate) and injects it on
   every call.
 - **Fleet auth:** `edison-jwt` in production, like the other hosted connectors.
   SealGate mints a per-user JWT for every call, so the public endpoint is not an

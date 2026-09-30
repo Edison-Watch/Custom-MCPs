@@ -5,7 +5,8 @@
  * up chats, and send, edit, forward, react to, pin and delete messages. Each
  * user brings their own bot from @BotFather; SealGate stores the token in its
  * zero-knowledge template values and injects it per request as the
- * `X-Telegram-Bot-Token` header (catalog `auth: "token"`).
+ * `X-Telegram-Bot-Token` header (catalog `headers` + `template_fields`, beside
+ * the `edison-jwt` gate).
  *
  * Transport: streamable HTTP at `/mcp`, **stateless**. Unlike the Durable
  * Object connectors, every request builds its own McpServer closed over that
