@@ -1,0 +1,5 @@
+# Keep bare `bun test` on the offline unit tier only. The integration tier
+# (test/integration/*.spec.ts) imports `cloudflare:test` and must run under
+# vitest + workerd via `bun run test:integration`, not the bun test runner.
+[test]
+root = "test/unit"

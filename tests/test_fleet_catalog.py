@@ -243,3 +243,86 @@ def test_schema_and_validator_allowed_keys_in_lockstep():
     schema = json.loads(_SCHEMA_PATH.read_text())
     schema_keys = set(schema["properties"])
     assert schema_keys == set(_AGG.ALLOWED_KEYS)
+
+
+_JWT_ENTRY: dict[str, Any] = dict(_BASE_ENTRY, auth="edison-jwt", edison_hosted=True)
+_BOT_FIELDS = {"env": {"BOT_TOKEN": {"description": "bot token"}}}
+
+
+def test_edison_jwt_without_user_headers_ok():
+    assert _AGG._jwt_user_headers_bad(dict(_JWT_ENTRY)) is False
+
+
+def test_edison_jwt_with_user_header_and_fields_ok():
+    entry = dict(
+        _JWT_ENTRY, headers={"X-Bot-Token": "{BOT_TOKEN}"}, template_fields=_BOT_FIELDS
+    )
+    assert _AGG._jwt_user_headers_bad(entry) is False
+
+
+def test_edison_jwt_header_without_fields_rejected():
+    entry = dict(_JWT_ENTRY, headers={"X-Bot-Token": "{BOT_TOKEN}"})
+    assert _AGG._jwt_user_headers_bad(entry) is True
+
+
+def test_edison_jwt_cannot_set_authorization_in_any_case():
+    for name in ("authorization", "Authorization", "AUTHORIZATION"):
+        entry = dict(
+            _JWT_ENTRY,
+            headers={name: "Bearer {BOT_TOKEN}"},
+            template_fields=_BOT_FIELDS,
+        )
+        assert _AGG._jwt_user_headers_bad(entry) is True, name
+
+
+def test_edison_jwt_fields_without_headers_rejected():
+    assert (
+        _AGG._jwt_user_headers_bad(dict(_JWT_ENTRY, template_fields=_BOT_FIELDS))
+        is True
+    )
+
+
+def test_edison_jwt_non_dict_headers_rejected():
+    entry = dict(_JWT_ENTRY, headers=["X-Bot-Token"], template_fields=_BOT_FIELDS)
+    assert _AGG._jwt_user_headers_bad(entry) is True
+
+
+def test_undeclared_header_placeholder_rejected():
+    entry = dict(
+        _JWT_ENTRY, headers={"X-Bot-Token": "{OTHER}"}, template_fields=_BOT_FIELDS
+    )
+    assert _AGG._undeclared_placeholders(entry) is True
+    ok = dict(
+        _JWT_ENTRY, headers={"X-Bot-Token": "{BOT_TOKEN}"}, template_fields=_BOT_FIELDS
+    )
+    assert _AGG._undeclared_placeholders(ok) is False
+
+
+def test_schema_mirrors_edison_jwt_user_header_rule():
+    schema = json.loads(_SCHEMA_PATH.read_text())
+    validator = jsonschema.validators.validator_for(schema)(schema)
+    base = dict(_JWT_ENTRY, tools_configurations={"t": dict(_VALID_TOOL_CFG)})
+    good = dict(
+        base, headers={"X-Bot-Token": "{BOT_TOKEN}"}, template_fields=_BOT_FIELDS
+    )
+    assert list(validator.iter_errors(good)) == []
+    for bad in (
+        dict(base, headers={"X-Bot-Token": "{BOT_TOKEN}"}),
+        dict(base, template_fields=_BOT_FIELDS),
+        dict(
+            base,
+            headers={"Authorization": "Bearer {BOT_TOKEN}"},
+            template_fields=_BOT_FIELDS,
+        ),
+    ):
+        assert list(validator.iter_errors(bad)) != [], bad
+
+
+def test_user_header_rule_ignores_token_mode():
+    entry = dict(
+        _BASE_ENTRY,
+        auth="token",
+        headers={"Authorization": "Bearer {X}"},
+        template_fields=_BOT_FIELDS,
+    )
+    assert _AGG._jwt_user_headers_bad(entry) is False
