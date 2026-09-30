@@ -12,7 +12,7 @@
     "chat"
   ],
   "url": "https://telegram.sealgate.ai/mcp",
-  "auth": "token",
+  "auth": "edison-jwt",
   "headers": {
     "X-Telegram-Bot-Token": "{TELEGRAM_BOT_TOKEN}"
   },

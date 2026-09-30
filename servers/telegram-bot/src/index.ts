@@ -14,11 +14,12 @@
  * which is fine for a JWT subject and not for a live bot credential. The Bot
  * API itself is stateless, so there is no per-bot session worth keeping.
  *
- * Auth: the bot token is the credential that authorizes the work (every call
- * spends the caller's own bot, never a first-party account). The fleet auth
- * contract (./auth) still gates `/mcp` in front of it, so a self-hosted deploy
- * can add `bearer`. A bad token is a 401 without an OAuth challenge, which
- * SealGate reports as rejected credentials rather than starting OAuth.
+ * Auth: two credentials. The fleet gate (./auth) runs first and is edison-jwt
+ * in production, like the other hosted connectors: SealGate mints a per-user
+ * JWT, so the public endpoint is no open relay and every call is attributable.
+ * The caller's own bot token then authorizes the Telegram work. A bad bot token
+ * is a 401 without an OAuth challenge, which SealGate reports as rejected
+ * credentials rather than starting OAuth.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";

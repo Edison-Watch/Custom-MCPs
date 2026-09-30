@@ -69,6 +69,9 @@ the build on any invalid entry.
   `aggregate.py` enforce that `auth: edison-jwt` implies `edison_hosted: true`.
   An entry flips to it once its server is deployed behind Edison's issuer URL;
   see `first_party_mcp_integration.md` for the cutover runbook.
+- An `edison-jwt` entry may also declare `headers` + `template_fields` for a
+  credential the user brings (e.g. `telegram-bot`'s `X-Telegram-Bot-Token`).
+  The JWT still owns `Authorization`, so a header by that name is rejected.
 
 ## Per-tool ACL defaults (`tools_configurations`)
 

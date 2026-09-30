@@ -9,9 +9,11 @@ look up chats, and send, edit, forward, react to, pin, and delete messages.
   sent as the `X-Telegram-Bot-Token` header. SealGate stores it in its
   zero-knowledge template values (catalog `auth: "token"`) and injects it on
   every call.
-- **Fleet auth:** `open` in production (the bot token is what authorizes the work,
-  and every call spends the caller's own bot). Self-hosters can set
-  `AUTH_MODE=bearer` + an `AUTH_TOKEN` secret to lock the endpoint down.
+- **Fleet auth:** `edison-jwt` in production, like the other hosted connectors.
+  SealGate mints a per-user JWT for every call, so the public endpoint is not an
+  open relay and usage is attributable. The bot token rides beside it; the JWT
+  owns `Authorization`, the token has its own header. Self-hosters can use
+  `bearer` or `open` instead.
 
 ```
  AI client ──► SealGate (policies, trifecta tracking, encrypted token)

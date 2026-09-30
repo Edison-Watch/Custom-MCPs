@@ -87,18 +87,18 @@
         "oauth",
         "edison-jwt"
       ],
-      "description": "edison-watch mount auth mode. 'token' resolves {PLACEHOLDER}s from template_fields.env; 'oauth' is 401-discovered; 'none' is open; 'edison-jwt' means Edison mints a per-user JWT and injects it (first-party servers only; requires edison_hosted, no user token). The fleet server's bearer mode maps onto 'token'."
+      "description": "edison-watch mount auth mode. 'token' resolves {PLACEHOLDER}s from template_fields.env; 'oauth' is 401-discovered; 'none' is open; 'edison-jwt' means Edison mints a per-user JWT and injects it as Authorization (first-party servers only; requires edison_hosted). An edison-jwt entry may add its own user credential header via headers + template_fields (e.g. a bring-your-own bot token), never Authorization. The fleet server's bearer mode maps onto 'token'."
     },
     "headers": {
       "type": "object",
-      "description": "Required when auth == 'token'. Values may contain {PLACEHOLDER} tokens resolved from template_fields.env.",
+      "description": "Required when auth == 'token'; optional for 'edison-jwt' (a user credential beside the JWT, never Authorization). Values may contain {PLACEHOLDER} tokens resolved from template_fields.env.",
       "additionalProperties": {
         "type": "string"
       }
     },
     "template_fields": {
       "type": "object",
-      "description": "Required when auth == 'token'. Install-time fields the user supplies.",
+      "description": "Required when auth == 'token', and when an 'edison-jwt' entry declares headers. Install-time fields the user supplies.",
       "properties": {
         "env": {
           "type": "object",

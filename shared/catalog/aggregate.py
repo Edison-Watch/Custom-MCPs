@@ -118,6 +118,21 @@ def _headers_bad(entry: dict[str, Any]) -> bool:
     return any(not isinstance(v, str) for v in headers.values())
 
 
+def _jwt_user_headers_bad(entry: dict[str, Any]) -> bool:
+    """An edison-jwt entry may also carry a user credential header (e.g. a
+    bring-your-own bot token), but never ``Authorization``: the gateway-minted
+    JWT owns it and would be overwritten. Headers and their template_fields
+    travel together, since a placeholder with no field can never resolve."""
+    if entry.get("auth") != "edison-jwt":
+        return False
+    headers = entry.get("headers")
+    if headers is None:
+        return "template_fields" in entry
+    if not isinstance(headers, dict) or "template_fields" not in entry:
+        return True
+    return any(str(name).lower() == "authorization" for name in headers)
+
+
 def _template_fields_bad(entry: dict[str, Any]) -> bool:
     """schema: when present, an object whose optional `env` maps names to
     objects carrying a required string `description` (+ optional `example`)."""
@@ -327,6 +342,11 @@ def _field_problems(entry: dict[str, Any], server_dir: Path) -> list[tuple[bool,
         (
             entry["auth"] == "edison-jwt" and not entry.get("edison_hosted"),
             "auth 'edison-jwt' requires 'edison_hosted': true",
+        ),
+        (
+            _jwt_user_headers_bad(entry),
+            "auth 'edison-jwt' user headers need matching 'template_fields' and must "
+            "not set 'Authorization' (the gateway-minted JWT owns it)",
         ),
         (
             hosted is not None and not isinstance(hosted, bool),

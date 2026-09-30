@@ -8,6 +8,7 @@ const HEADERS = {
   "content-type": "application/json",
   accept: "application/json, text/event-stream",
   "x-telegram-bot-token": TOKEN,
+  authorization: "Bearer test-token",
 };
 
 const INIT = {
@@ -71,6 +72,20 @@ describe("routing", () => {
 
   it("unknown path is 404", async () => {
     expect((await SELF.fetch(`${ORIGIN}/nope`)).status).toBe(404);
+  });
+});
+
+describe("fleet auth gate on /mcp", () => {
+  it("401s without the gateway credential, even with a valid bot token", async () => {
+    const { authorization: _, ...rest } = HEADERS;
+    const res = await rpc(INIT, rest);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain("Bearer");
+  });
+
+  it("401s a wrong gateway credential", async () => {
+    const res = await rpc(INIT, { ...HEADERS, authorization: "Bearer nope" });
+    expect(res.status).toBe(401);
   });
 });
 
