@@ -34,6 +34,28 @@ Edison-hosted marketplace connector wrapping public web-scraping Actors.
 
 At least one of `search` or a valid `start_urls` entry is required.
 
+## Alternative Actor (`linkedin_scrape`)
+
+The default Actor stays `harvestapi~linkedin-post-search`. Set
+`APIFY_ACTOR_ID=johnvc~linkedin-post-search-api` to run the optional
+[`johnvc/linkedin-post-search-api`](https://apify.com/johnvc/linkedin-post-search-api)
+adapter (clear the env var to roll back). The adapter maps Edison inputs onto
+that Actor's schema and normalizes rows back to the HarvestAPI-style keys
+callers already read (`id`, `content`, `linkedinUrl`, `author.*`,
+`postedAt.date`, `engagement.likes` / `comments`). Known differences:
+
+- Keyword search only. `start_urls` is rejected under this adapter.
+- `sort` has no equivalent and is ignored.
+- `posted_within` `1h` widens to `day`; `3months` / `6months` become a UTC
+  `startDate` 90 / 180 days ago.
+- Exact phrases only (quotes and boolean operators are refused).
+- Coverage is public posts found through search-engine indexing. New posts
+  show up hours after publishing, not minutes.
+- `engagement.shares` is null (the Actor does not return share counts).
+- Error rows (`resultType: "error"`) are returned in a separate `errors` list.
+
+No LinkedIn cookies or account, same as the default Actor.
+
 ## `linkedin_profile_search` input (people)
 
 | field | type | notes |

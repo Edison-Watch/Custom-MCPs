@@ -30,10 +30,13 @@ import {
   type LinkedinCompanyArgs,
 } from "./company";
 import {
+  buildActorInputForActor,
+  normalizeOutputForActor,
+} from "./adapters";
+import {
   APIFY_BASE,
   DEFAULT_ACTOR_ID,
   RUN_TIMEOUT_S,
-  buildActorInput,
   hasTarget,
   runSyncUrl,
   validateDatasetItems,
@@ -172,7 +175,11 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
           count: z.number().describe("Number of items returned."),
           items: z
             .array(z.record(z.string(), z.any()))
-            .describe("Raw dataset items (posts) from the Apify Actor run."),
+            .describe("Dataset items (posts) from the Apify Actor run, normalized for the configured Actor."),
+          errors: z
+            .array(z.record(z.string(), z.any()))
+            .optional()
+            .describe("Error rows from Actors that emit resultType=error (empty for HarvestAPI)."),
         },
       },
       async (args: LinkedinScrapeArgs) => {
@@ -182,12 +189,23 @@ export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>>
           return textError("provide either 'search' or at least one valid LinkedIn URL in 'start_urls'");
         }
         const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildActorInput(args));
+        let actorInput: Record<string, unknown>;
+        try {
+          actorInput = buildActorInputForActor(args, actorId);
+        } catch (err) {
+          return textError(err instanceof Error ? err.message : String(err));
+        }
+        const run = await runActor(this.env, actorId, actorInput);
         if (!run.ok) return textError(run.message);
 
+        const { items, errors } = normalizeOutputForActor(run.items, actorId);
         return {
-          content: [{ type: "text" as const, text: `LinkedIn scrape returned ${run.items.length} item(s)` }],
-          structuredContent: { count: run.items.length, items: run.items },
+          content: [{ type: "text" as const, text: `LinkedIn scrape returned ${items.length} item(s)` }],
+          structuredContent: {
+            count: items.length,
+            items,
+            ...(errors.length > 0 ? { errors } : {}),
+          },
         };
       },
     );
