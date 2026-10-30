@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.12.15-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -7,6 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     DEV_ENV=prod \
     PORT=8080
 
+# ca-certificates: listed explicitly so each build pulls the post-eMudhra trust store
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \

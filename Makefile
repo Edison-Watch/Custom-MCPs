@@ -293,6 +293,12 @@ file_len_check: check_uv ## Check source files (.py/.ts/.tsx) don't exceed max l
 	@uv run python scripts/check_file_length.py
 	@echo "$(GREEN)✅File length check completed.$(RESET)"
 
+.PHONY: lint_immutable_refs
+lint_immutable_refs: ## Fail if a Dockerfile or GitHub Actions file uses a mutable image tag or action ref
+	@echo "$(YELLOW)🔍Checking for mutable image/action references...$(RESET)"
+	@python3 scripts/check_immutable_refs.py
+	@echo "$(GREEN)✅All non-exempt references are pinned$(RESET)"
+
 blind_except_check: check_uv ## Check every `# noqa: BLE001` has a justification comment
 	@echo "$(YELLOW)🔍Checking blind-except justifications...$(RESET)"
 	@uv run python scripts/check_blind_except_justification.py
@@ -311,7 +317,7 @@ new-connector: check_uv ## Scaffold servers/<id>/ for a new HTTP fleet connector
 new-stdio-connector: check_uv ## Scaffold servers/<id>/ for a new stdio (local-process) connector (id=<id>)
 	@uv run scripts/new_connector.py "$(id)" --stdio
 
-ci: ruff vulture import_lint ty docs_lint check_deps file_len_check blind_except_check catalog_check ## Run all CI checks (ruff, vulture, import_lint, ty, docs_lint, check_deps, file_len_check, blind_except_check, catalog_check)
+ci: ruff vulture import_lint ty docs_lint check_deps file_len_check blind_except_check catalog_check lint_immutable_refs ## Run all CI checks (ruff, vulture, import_lint, ty, docs_lint, check_deps, file_len_check, blind_except_check, catalog_check, lint_immutable_refs)
 	@echo "$(GREEN)✅CI checks completed.$(RESET)"
 
 .PHONY: sync-agent-config
