@@ -111,6 +111,11 @@ describe("bot token gate on /mcp", () => {
     expect(body).not.toContain(TOKEN);
   });
 
+  it("413s an oversized body without calling Telegram", async () => {
+    const res = await rpc({ ...INIT, params: { pad: "x".repeat(2 * 1024 * 1024) } });
+    expect(res.status).toBe(413);
+  });
+
   it("405s a GET, even without a token: the server is stateless", async () => {
     const { "x-telegram-bot-token": _, ...rest } = HEADERS;
     const res = await SELF.fetch(`${ORIGIN}/mcp`, { method: "GET", headers: rest });

@@ -23,6 +23,7 @@
  * credentials rather than starting OAuth.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 
@@ -58,6 +59,8 @@ export interface Env {
 }
 
 const SERVICE = "telegram-bot";
+// Bound on an /mcp POST body; tool inputs are short text and URLs.
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 // --- input schemas ------------------------------------------------------------
 // Validation and normalization live in the schemas: the SDK hands handlers the
@@ -373,9 +376,14 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   if (!token) return jsonError(401, `missing ${BOT_TOKEN_HEADER} header (a @BotFather bot token)`);
   if (!isValidBotToken(token)) return jsonError(401, `malformed ${BOT_TOKEN_HEADER}: expected '<bot id>:<secret>'`);
 
+  // Bound the body before parsing (CVE-2026-111768): the SDK's own
+  // maxRequestBodySize is skipped when we hand it parsedBody.
+  const raw = await readRequestBody(request, MAX_MCP_BODY_BYTES);
+  if (raw.tooLarge) return jsonError(413, requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES));
+
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(raw.text);
   } catch {
     return jsonError(400, "request body must be JSON-RPC");
   }
@@ -393,6 +401,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
+    maxRequestBodySize: MAX_MCP_BODY_BYTES,
   });
   await server.connect(transport);
   try {
