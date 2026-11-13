@@ -11,6 +11,7 @@
  * Auth: pluggable (see ./auth); v1 ships `bearer`.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
@@ -23,6 +24,11 @@ import {
   isDeleteAuthorized,
   validateImage,
 } from "./images";
+
+// Bound on an /mcp POST body (CVE-2026-111768). agents' McpAgent.serve only checks a
+// declared Content-Length, so the body is read here, bounded, before it reaches it.
+// Fits a base64 image up to agents' own 4 MiB Content-Length cap.
+const MAX_MCP_BODY_BYTES = 4 * 1024 * 1024;
 
 export interface Env {
   IMAGE_BUCKET: R2Bucket;
@@ -250,6 +256,13 @@ export default {
       // authenticated subject so upload can stamp ownership and delete can
       // enforce it.
       (ctx as ExecutionContext & { props?: Props }).props = { baseUrl: url.origin, subject: auth.subject };
+      if (request.method === "POST") {
+        const body = await readRequestBody(request, MAX_MCP_BODY_BYTES);
+        if (body.tooLarge) return new Response(requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES), { status: 413 });
+        const headers = new Headers(request.headers);
+        headers.delete("content-length");
+        request = new Request(request, { headers, body: body.text });
+      }
       return ImageHostMCP.serve("/mcp").fetch(request, env, ctx);
     }
 

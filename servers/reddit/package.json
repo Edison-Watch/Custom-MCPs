@@ -12,7 +12,7 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "agents": "^0.0.109",
     "zod": "^3.24.2"
   },

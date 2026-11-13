@@ -16,6 +16,7 @@
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
@@ -38,6 +39,10 @@ import {
   validateDatasetItems,
   type RedditScrapeArgs,
 } from "./reddit";
+
+// Bound on an /mcp POST body (CVE-2026-111768). agents' McpAgent.serve only checks a
+// declared Content-Length, so the body is read here, bounded, before it reaches it.
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
@@ -406,6 +411,13 @@ export default {
         const headers: Record<string, string> = { "content-type": "application/json" };
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="reddit"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
+      }
+      if (request.method === "POST") {
+        const body = await readRequestBody(request, MAX_MCP_BODY_BYTES);
+        if (body.tooLarge) return new Response(requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES), { status: 413 });
+        const headers = new Headers(request.headers);
+        headers.delete("content-length");
+        request = new Request(request, { headers, body: body.text });
       }
       return RedditMCP.serve("/mcp").fetch(request, env, ctx);
     }

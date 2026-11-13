@@ -113,6 +113,15 @@ describe("auth gate on /mcp", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it("413s an oversized body before it reaches the MCP agent", async () => {
+    const res = await SELF.fetch(`${ORIGIN}/mcp`, {
+      method: "POST",
+      headers: MCP_HEADERS,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { pad: "x".repeat(2 * 1024 * 1024) } }),
+    });
+    expect(res.status).toBe(413);
+  });
 });
 
 describe("reddit_scrape tool", () => {
