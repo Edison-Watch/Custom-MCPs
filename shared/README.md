@@ -1,11 +1,12 @@
 # `shared/` - cross-fleet contracts
 
 Code and schemas shared across every server in [`../servers/`](../servers),
-regardless of runtime (TypeScript on Workers or Python/FastMCP). Three pieces:
+regardless of runtime (TypeScript on Workers or Python/FastMCP). Four pieces:
 
 | Dir | Purpose | Status |
 |-----|---------|--------|
 | [`auth/`](./auth) | Pluggable auth: `open` \| `bearer` \| `edison-jwt` (JWT verify via Edison JWKS). TS + Python ports. | contract defined; `bearer` lives in `servers/image-host/src/auth.ts` today |
+| [`apify/`](./apify) | Structured logging of failed Apify calls for the Apify-backed scrapers. | live |
 | [`catalog/`](./catalog) | How a server advertises itself to the Edison marketplace (entry schema + generator). | placeholder |
 | [`ui/`](./ui) | React MCP-UI component library consumed by both runtimes. | placeholder |
 

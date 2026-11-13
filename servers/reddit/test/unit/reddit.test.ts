@@ -10,7 +10,9 @@ import {
   parseRunStart,
   parseRunStatus,
   runStatusUrl,
-  runSyncUrl,
+  runOutcome,
+  stillRunningMessage,
+  SYNC_WAIT_S,
   runsUrl,
   SUCCEEDED,
   TERMINAL_FAILURE,
@@ -155,14 +157,6 @@ describe("buildActorInput (fatihtahta, the default Actor)", () => {
     expect(buildActorInput({ search: "rust", sort: "rising" }, FATIHTAHTA).sort).toBe("hot");
     // A supported value passes straight through.
     expect(buildActorInput({ search: "rust", sort: "new" }, FATIHTAHTA).sort).toBe("new");
-  });
-});
-
-describe("runSyncUrl", () => {
-  test("builds the run-sync-get-dataset-items endpoint", () => {
-    expect(runSyncUrl("trudax~reddit-scraper-lite")).toBe(
-      "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items",
-    );
   });
 });
 
@@ -342,9 +336,6 @@ describe("async endpoint builders", () => {
     );
     expect(runStatusUrl("RUN123", base)).toBe("https://api.apify.com/v2/actor-runs/RUN123");
     expect(datasetItemsUrl("DS123", base)).toBe("https://api.apify.com/v2/datasets/DS123/items");
-    expect(runSyncUrl("trudax~reddit-scraper-lite", base)).toBe(
-      "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items",
-    );
   });
 });
 
@@ -409,5 +400,36 @@ describe("fetch SUCCEEDED path composes into normalized items", () => {
     expect(items[0].score).toBe(1500);
     expect(items[0].num_comments).toBe(42);
     expect(items[0].raw).toBe(FULL_POST);
+  });
+});
+
+describe("runOutcome", () => {
+  test("SUCCEEDED means the items are ready", () => {
+    expect(runOutcome("SUCCEEDED")).toBe("succeeded");
+  });
+
+  test("terminal failures end without items", () => {
+    for (const status of ["FAILED", "TIMED-OUT", "ABORTED"]) {
+      expect(runOutcome(status)).toBe("failed");
+    }
+  });
+
+  test("anything else is still running", () => {
+    for (const status of ["READY", "RUNNING", "TIMING-OUT", "ABORTING"]) {
+      expect(runOutcome(status)).toBe("running");
+    }
+  });
+});
+
+describe("stillRunningMessage", () => {
+  test("hands the caller the run id and the tool to collect it with", () => {
+    const message = stillRunningMessage("RUN123");
+    expect(message).toContain('run_id "RUN123"');
+    expect(message).toContain("reddit_scrape_fetch");
+    expect(message).toContain(`${SYNC_WAIT_S}s`);
+  });
+
+  test("stays under the 60s MCP client cutoff with room for the dataset fetch", () => {
+    expect(SYNC_WAIT_S).toBeLessThanOrEqual(50);
   });
 });

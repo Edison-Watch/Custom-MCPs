@@ -38,12 +38,13 @@ export const APIFY_BASE = "https://api.apify.com/v2";
 export const DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast";
 
 /**
- * Cap the synchronous Apify run. Lower than the Python service's 300s: a Worker
- * subrequest has a tighter wall-clock budget than a long-lived Python process,
- * and small `max_items` queries return well within this. Bump `max_items` down,
- * not this up, for heavier scrapes.
+ * How long `reddit_scrape` waits for its run to finish before handing the run id
+ * back. Apify's `waitForFinish` allows up to 60s, but the MCP clients in front of
+ * this server commonly cut a tool call off at 60s, and the dataset fetch plus
+ * gateway hop still have to fit after the wait. A run that outlasts this is not
+ * lost: the caller gets its run id and collects it with `reddit_scrape_fetch`.
  */
-export const RUN_TIMEOUT_S = 120;
+export const SYNC_WAIT_S = 45;
 
 export type RedditSort = "relevance" | "hot" | "top" | "new" | "rising" | "comments";
 export type RedditTime = "all" | "hour" | "day" | "week" | "month" | "year";
@@ -85,20 +86,20 @@ function normalizeBase(base: string): string {
   return base.replace(/\/+$/, "");
 }
 
-/** The synchronous run-and-fetch-dataset endpoint for an Actor. */
-export function runSyncUrl(actorId: string, base: string = APIFY_BASE): string {
-  return `${normalizeBase(base)}/acts/${actorId}/run-sync-get-dataset-items`;
-}
-
-// --- Async run + poll -------------------------------------------------------
+// --- Runs ------------------------------------------------------------------
 //
-// runSyncUrl blocks one subrequest on the whole run, which the innermost MCP
-// client can cut off long before a slow keyword search finishes. The endpoints
-// and parsers below decouple start from poll: `reddit_scrape_start` POSTs to
-// runsUrl for a run id, `reddit_scrape_fetch` GETs runStatusUrl and, once the
-// run has SUCCEEDED, datasetItemsUrl. Mirrors services/reddit_svc.py.
+// Every tool starts or reads a run through these endpoints instead of the
+// blocking `run-sync-get-dataset-items` call, which the innermost MCP client can
+// cut off long before a slow keyword search finishes (and which loses the paid
+// run when it does). `reddit_scrape` POSTs to runsUrl with a bounded
+// `waitForFinish`, `reddit_scrape_start` POSTs without waiting, and
+// `reddit_scrape_fetch` GETs runStatusUrl and, once SUCCEEDED, datasetItemsUrl.
+// Mirrors services/reddit_svc.py.
 
-/** Non-blocking run-enqueue endpoint: POST returns a run without waiting on it. */
+/**
+ * Run-enqueue endpoint: POST starts a run and returns it at once, or after up to
+ * `waitForFinish` seconds (max 60) when that query param is set.
+ */
 export function runsUrl(actorId: string, base: string = APIFY_BASE): string {
   return `${normalizeBase(base)}/acts/${actorId}/runs`;
 }
@@ -124,6 +125,27 @@ export function datasetItemsUrl(datasetId: string, base: string = APIFY_BASE): s
  */
 export const SUCCEEDED = "SUCCEEDED";
 export const TERMINAL_FAILURE: ReadonlySet<string> = new Set(["FAILED", "TIMED-OUT", "ABORTED"]);
+
+/** What a run's status means for a caller: items are ready, it ended without any, or poll again. */
+export type RunOutcome = "succeeded" | "failed" | "running";
+
+export function runOutcome(status: string): RunOutcome {
+  if (status === SUCCEEDED) return "succeeded";
+  return TERMINAL_FAILURE.has(status) ? "failed" : "running";
+}
+
+/**
+ * The error `reddit_scrape` returns when its run outlasts SYNC_WAIT_S. Names the
+ * run id and the tool to collect it with, so the caller can finish the job
+ * instead of re-running (and re-paying for) the same scrape.
+ */
+export function stillRunningMessage(runId: string, waitedS: number = SYNC_WAIT_S): string {
+  return (
+    `the Reddit scrape is still running after ${waitedS}s (keyword searches can take minutes). ` +
+    `It was not cancelled: call reddit_scrape_fetch with run_id "${runId}" to collect the results, ` +
+    "and use reddit_scrape_start for slow searches next time."
+  );
+}
 
 export type RunStartResult =
   | { ok: true; run_id: string; dataset_id: string; status: string }

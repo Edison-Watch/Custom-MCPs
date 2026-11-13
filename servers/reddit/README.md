@@ -123,7 +123,12 @@ server's catalog id, `reddit`.
 
 ## Runtime note
 
-The synchronous Apify run is capped at `RUN_TIMEOUT_S` (120s, lower than the
-Python service's 300s to fit a Worker subrequest's budget). Small `max_items`
-queries return well within it; scale `max_items` down rather than the timeout up
-for heavier scrapes.
+`reddit_scrape` starts an Apify run and waits up to `SYNC_WAIT_S` (45s) for it,
+inside the 60s that MCP clients commonly allow a tool call. A run that takes
+longer is not cancelled: the tool returns an error carrying its `run_id`, which
+the caller collects with `reddit_scrape_fetch`. Slow keyword searches should use
+`reddit_scrape_start` from the outset.
+
+Every failed Apify call is logged once at error level as an `apify_call_failed`
+event (see [`shared/apify`](../../shared/apify)), so an Apify outage shows up in
+Workers Logs and not only in the callers' `isError` results.
