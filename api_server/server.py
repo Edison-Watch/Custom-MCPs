@@ -31,7 +31,7 @@ from api_server.routes import (
 )
 from api_server.routes.google import webhooks as google_webhooks
 from api_server.routes.payments import checkout, metering, subscription, webhooks
-from api_server.runner import runner_lifespan
+from api_server.runner import idempotency_sweep_lifespan, runner_lifespan
 from common import global_config
 from mcp_server.server import lifespan as mcp_lifespan
 from mcp_server.server import mount_on as mount_mcp_server
@@ -95,8 +95,12 @@ def session_cookie_policy() -> SessionCookiePolicy:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Compose the MCPServer session manager with the periodic webhook runner."""
-    async with mcp_lifespan(app), runner_lifespan(app):
+    """Compose the MCPServer session manager with the periodic background loops."""
+    async with (
+        mcp_lifespan(app),
+        runner_lifespan(app),
+        idempotency_sweep_lifespan(app),
+    ):
         yield
 
 

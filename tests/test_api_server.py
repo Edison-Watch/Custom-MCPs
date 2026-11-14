@@ -286,8 +286,11 @@ class ServiceRouteIdempotencyBase(TestTemplate):
         self._patchers = [
             patch("api_server.idempotency.use_db_session", _ctx),
             patch("api_server.billing.limits.use_db_session", _ctx),
-            # Disable opportunistic idempotency-key cleanup so it can't race.
-            patch("api_server.idempotency.random.random", return_value=1.0),
+            # Real Fernet for the cached response bodies at rest.
+            patch(
+                "api_server.idempotency.require_encryption",
+                return_value=FernetEncryption(Fernet.generate_key().decode()),
+            ),
             *self._extra_patchers(),
         ]
         for p in self._patchers:

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +19,7 @@ from api_server.idempotency import (
     cleanup_expired_idempotency_keys,
     execute_idempotent,
 )
+from common.token_encryption import FernetEncryption
 from db.base import Base
 from db.models.idempotency_keys import IdempotencyRecord
 from services import ServiceEntry, discover_services, get_registry, service
@@ -61,6 +63,9 @@ EXPECTED_MUTATING_SERVICES = frozenset(
         "webhook_rotate_secret",
     }
 )
+
+
+_ENC = FernetEncryption(Fernet.generate_key().decode())
 
 
 def _make_engine():
@@ -147,7 +152,9 @@ class TestIdempotencyModel(TestTemplate):
         assert pk == {"user_id", "route", "idempotency_key"}
 
 
-class TestExecuteIdempotent(TestTemplate):
+class _IdempotentDB(TestTemplate):
+    """In-memory DB + real Fernet backend shared by the execute_idempotent tests."""
+
     def setup_method(self):
         self.engine = _make_engine()
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
@@ -162,8 +169,10 @@ class TestExecuteIdempotent(TestTemplate):
 
         self._patcher = patch("api_server.idempotency.use_db_session", _ctx)
         self._patcher.start()
-        # Disable opportunistic cleanup so it can't interfere with assertions.
-        self._rand = patch("api_server.idempotency.random.random", return_value=1.0)
+        # Real Fernet so the at-rest envelope round-trips as in production.
+        self._rand = patch(
+            "api_server.idempotency.require_encryption", return_value=_ENC
+        )
         self._rand.start()
 
     def teardown_method(self):
@@ -183,6 +192,8 @@ class TestExecuteIdempotent(TestTemplate):
             compute=_compute,
         )
 
+
+class TestExecuteIdempotent(_IdempotentDB):
     def test_first_call_executes(self):
         counter = {"n": 0}
         result = self._run("k1", {"a": 1}, counter)
@@ -346,7 +357,9 @@ class TestIdempotentRouteOverHTTP(TestTemplate):
 
         self._patcher = patch("api_server.idempotency.use_db_session", _ctx)
         self._patcher.start()
-        self._rand = patch("api_server.idempotency.random.random", return_value=1.0)
+        self._rand = patch(
+            "api_server.idempotency.require_encryption", return_value=_ENC
+        )
         self._rand.start()
 
         app = FastAPI()

@@ -14,14 +14,27 @@ table:
    rejected (422); a still-running request returns 409.
 
 Only the API transport uses this; CLI and MCP are unaffected.
+
+Cached response bodies are encrypted at rest. Mutating services can return
+one-time secrets (``webhook_subscribe`` / ``webhook_rotate_secret`` hand back
+the HMAC signing secret exactly once) and PII (``gmail_compose`` returns the
+full draft body), so the row stores a Fernet envelope - the same backend and
+key (``GOOGLE_TOKEN_ENC_KEY``) used for refresh tokens and webhook secrets -
+and replays decrypt it, so a retry still returns the complete response.
+
+Legacy rows written before encryption (a bare JSON body, no envelope) are
+replayed as-is rather than treated as a miss: a miss would re-execute an
+irreversible side effect, and the plaintext is already on disk regardless.
+They age out within ``_RETENTION`` via the scheduled sweep
+(``api_server.runner.idempotency_sweep_lifespan``).
 """
 
 import hashlib
 import json
-import random
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from cryptography.fernet import InvalidToken
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from loguru import logger as log
@@ -29,6 +42,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 
+from common.token_encryption import TokenEncryption, require_encryption
 from db.engine import use_db_session
 from db.models.idempotency_keys import IdempotencyRecord
 
@@ -36,8 +50,9 @@ from db.models.idempotency_keys import IdempotencyRecord
 _KEY_MAX_LEN = 255
 # Match Stripe's 24h idempotency window; retries beyond this re-execute.
 _RETENTION = timedelta(days=1)
-# Probability of running an opportunistic TTL sweep after a successful claim.
-_CLEANUP_PROBABILITY = 0.01
+# Envelope key marking an encrypted ``response_body``. Its presence is how a
+# replay tells an encrypted row from a legacy plaintext one.
+_ENC_FIELD = "enc_v1"
 
 
 def _canonical_hash(payload: dict) -> str:
@@ -59,6 +74,33 @@ def _require_key(request: Request) -> str:
             detail=f"Idempotency-Key must not exceed {_KEY_MAX_LEN} characters",
         )
     return key
+
+
+def _seal(enc: TokenEncryption, body: dict) -> dict:
+    """Encrypt a response body into the JSON envelope stored on the row."""
+    blob = json.dumps(body, separators=(",", ":"))
+    return {_ENC_FIELD: enc.encrypt(blob).decode("utf-8"), "key_id": enc.key_id}
+
+
+def _unseal(stored: dict | None) -> dict | None:
+    """Decrypt a stored envelope; pass legacy plaintext bodies through.
+
+    A body that can no longer be decrypted (the key was rotated) is reported
+    as a 409 rather than a miss: re-running the side effect is never safe.
+    """
+    if not isinstance(stored, dict) or _ENC_FIELD not in stored:
+        if stored is not None:
+            log.warning("Replaying a legacy plaintext idempotency response")
+        return stored
+    try:
+        plaintext = require_encryption().decrypt(stored[_ENC_FIELD].encode("utf-8"))
+    except InvalidToken:
+        log.error("Cached idempotency response could not be decrypted")
+        raise HTTPException(
+            status_code=409,
+            detail="The cached response for this Idempotency-Key is unavailable",
+        ) from None
+    return json.loads(plaintext)
 
 
 def _handle_existing(
@@ -84,7 +126,7 @@ def _handle_existing(
             detail="A request with this Idempotency-Key is still in progress",
         )
     return JSONResponse(
-        content=existing.response_body,
+        content=_unseal(existing.response_body),
         status_code=existing.status_code or 200,
     )
 
@@ -102,28 +144,11 @@ def _release(session, user_id: str, route: str, key: str) -> None:
     session.commit()
 
 
-def _maybe_cleanup() -> None:
-    """Best-effort opportunistic TTL sweep, gated to a fraction of requests.
-
-    Interim mechanism: the template ships no scheduler, so retention is enforced
-    by piggy-backing a rare sweep onto request traffic. Prefer calling
-    ``cleanup_expired_idempotency_keys`` from a scheduled job (cron / background
-    task) when one exists and drop this request-path gate.
-    """
-    if random.random() >= _CLEANUP_PROBABILITY:
-        return
-    try:
-        cleanup_expired_idempotency_keys()
-    except Exception as exc:  # noqa: BLE001
-        # Opportunistic maintenance must never fail a request that already
-        # succeeded; a transient DB error here is non-fatal.
-        log.warning("Idempotency key cleanup failed: {}", exc)
-
-
 def cleanup_expired_idempotency_keys() -> int:
     """Delete idempotency rows older than the retention window.
 
-    Returns the number of rows removed. Safe to schedule periodically.
+    Returns the number of rows removed. Scheduled at startup and periodically
+    by ``api_server.runner.idempotency_sweep_lifespan``.
     """
     cutoff = datetime.now(UTC) - _RETENTION
     with use_db_session() as session:
@@ -154,6 +179,9 @@ def execute_idempotent(
     """
     key = _require_key(request)
     request_hash = _canonical_hash(request_payload)
+    # Resolve the encryption backend before claiming, so a missing prod key
+    # fails the request before the side effect runs rather than after it.
+    enc = require_encryption()
 
     with use_db_session() as session:
         # Claim the key by inserting an in-flight row. A duplicate means the
@@ -213,11 +241,10 @@ def execute_idempotent(
             )
             .values(
                 status_code=200,
-                response_body=body,
+                response_body=_seal(enc, body),
                 completed_at=datetime.now(UTC),
             )
         )
         session.commit()
 
-    _maybe_cleanup()
     return result
