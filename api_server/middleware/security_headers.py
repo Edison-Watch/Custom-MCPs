@@ -142,8 +142,11 @@ class SecurityHeadersMiddleware:
         the docs bundle silently gets ``script-src 'none'`` and renders blank.
         """
         path = scope.get("path", "")
-        root = scope.get("root_path", "")
-        if root and path.startswith(root):
+        # Match Starlette's routing: the prefix only counts on a segment
+        # boundary, and a trailing slash (``root_path="/"``) is not part of it,
+        # so ``/docs`` under root ``/`` stays ``/docs`` rather than ``docs``.
+        root = scope.get("root_path", "").rstrip("/")
+        if root and (path == root or path.startswith(root + "/")):
             path = path[len(root) :] or "/"
         return DOCS_CSP if path in self.docs_paths else DEFAULT_CSP
 

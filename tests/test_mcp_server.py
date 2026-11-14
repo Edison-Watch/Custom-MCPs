@@ -1,13 +1,14 @@
 """Tests for MCP server tool registration."""
 
 import asyncio
+import tomllib
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import InputRequiredResult
 from pydantic import BaseModel
 
-from mcp_server.server import _register_app_resource, mcp
+from mcp_server.server import _register_app_resource, _server_version, mcp
 from services import get_registry
 from tests.test_template import TestTemplate
 
@@ -15,6 +16,13 @@ from tests.test_template import TestTemplate
 class TestMCPServer(TestTemplate):
     def test_server_imports(self):
         assert mcp is not None
+
+    def test_server_version_reads_this_projects_distribution(self):
+        # serverInfo.version must come from this package, not fall back to
+        # 0.0.0 because the lookup names some other distribution.
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        project = tomllib.loads(pyproject.read_text())["project"]
+        assert _server_version() == project["version"]
 
     def test_all_services_registered_as_tools(self):
         # Importing mcp_server.server (at module top) triggers service module

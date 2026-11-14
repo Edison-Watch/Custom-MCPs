@@ -17,7 +17,13 @@ class DoctorInput(BaseModel):
 
 
 class DoctorFixInput(BaseModel):
-    """Input for ``doctor_fix`` - no options: it always attempts fixes."""
+    """Input for ``doctor_fix`` - no options: it always attempts fixes.
+
+    ``extra="forbid"`` so a payload like ``{"fix": false}`` is rejected with a
+    422 instead of being silently ignored while the mutating fixers run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class DoctorStreamInput(DoctorInput):

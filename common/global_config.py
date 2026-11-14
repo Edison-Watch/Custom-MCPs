@@ -459,8 +459,9 @@ class Config(BaseSettings):
 # ensures a secret mistakenly placed in a YAML file (e.g. a hand-edited
 # .global_config.yaml) can never leak through config_show / config_get either.
 # Non-secret env fields (DEV_ENV, FRONTEND_URL, WORKOS_CLIENT_ID, ...) are
-# intentionally omitted. Matched by exact key name, so lowercase nested config
-# keys are unaffected.
+# intentionally omitted. Matched by full key name, case-insensitively (see
+# _redact_secret_keys): substrings never match, but a lowercase spelling of a
+# secret name such as ``openai_api_key`` is dropped at any depth.
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset(
     {
         "OPENAI_API_KEY",

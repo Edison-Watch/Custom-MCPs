@@ -5,7 +5,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from src.cli.state import is_quiet, is_verbose
+from src.cli.state import is_dry_run, is_quiet, is_verbose
 from src.utils.cli_help import examples_epilog
 from src.utils.output import render
 
@@ -25,6 +25,11 @@ def main(
     ] = False,
 ) -> None:
     """Run health checks on your project environment."""
+    if fix and is_dry_run():
+        # The fixers mutate the environment (uv sync, .env, prek install).
+        typer.echo("[DRY RUN] Would apply doctor fixes")
+        return
+
     # Lazy by design: this module is imported on every CLI startup; keep
     # model/service imports out of it so `--help` stays fast.
     from models.doctor import DoctorFixInput, DoctorInput  # noqa: PLC0415

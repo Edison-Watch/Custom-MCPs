@@ -204,6 +204,24 @@ class TestSecurityHeaders(TestTemplate):
         )
         assert "cdn.jsdelivr.net" in captured["content-security-policy"]
 
+    def test_root_path_is_stripped_only_on_a_segment_boundary(self):
+        async def inner(scope, receive, send):
+            pass
+
+        mw = SecurityHeadersMiddleware(inner, docs_paths=frozenset({"/docs"}))
+
+        def is_docs(path: str, root: str) -> bool:
+            policy = mw._csp_for({"path": path, "root_path": root})
+            return "cdn.jsdelivr.net" in policy
+
+        # A bare "/" (or trailing-slash) root must not eat the leading slash.
+        assert is_docs("/docs", "/")
+        assert is_docs("/api/docs", "/api/")
+        # A root that is only a string prefix of the first segment is not
+        # stripped: "/apidocs" under root "/api" is not the docs page.
+        assert not is_docs("/apidocs", "/api")
+        assert is_docs("/api/docs", "/api")
+
     def test_a_route_may_override_a_security_header(self):
         """setdefault semantics, asserted against a route that actually sets one.
 

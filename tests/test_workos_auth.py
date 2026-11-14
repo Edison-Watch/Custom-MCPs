@@ -8,6 +8,7 @@ import jwt as pyjwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from api_server.auth.workos_auth import verify_workos_token
+from common.global_config import Config
 from tests.test_template import TestTemplate
 
 
@@ -42,6 +43,8 @@ class TestWorkOSAuth(TestTemplate):
         mock_config.is_dev = True
         token = json.dumps({"sub": "attacker", "email": "e@v.il"})
         assert verify_workos_token(token) is None
+        # The mock above only exercises the gate; pin the real default too.
+        assert Config.model_fields["ALLOW_TEST_TOKENS"].default is False
 
     @patch("api_server.auth.workos_auth.global_config")
     def test_test_mode_bypass_rejected_in_prod(self, mock_config):

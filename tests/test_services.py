@@ -1,9 +1,10 @@
 """Tests for service layer - pure business logic, no transport."""
 
 import pytest
+from pydantic import ValidationError
 
 from models.config import ConfigGetInput, ConfigShowInput
-from models.doctor import DoctorInput
+from models.doctor import DoctorFixInput, DoctorInput
 from models.greet import GreetInput
 from services.config_svc import config_get, config_show
 from services.doctor_svc import doctor
@@ -35,7 +36,9 @@ class TestConfigService(TestTemplate):
     def test_config_get(self):
         result = config_get(ConfigGetInput(key="llm_config.cache_enabled"))
         assert result.key == "llm_config.cache_enabled"
-        assert result.value is False
+        # Only the type: the value depends on local YAML overlays
+        # (e.g. a gitignored .global_config.yaml written by config_set).
+        assert isinstance(result.value, bool)
 
     def test_config_get_nonexistent(self):
         with pytest.raises(KeyError):
@@ -111,3 +114,11 @@ class TestDoctorService(TestTemplate):
         names = [c.name for c in result.checks]
         assert "Python version" in names
         assert "uv installed" in names
+
+    def test_doctor_inputs_reject_unknown_fields(self):
+        # {"fix": false} must not be silently dropped while doctor_fix's
+        # mutating fixers run, nor turn checks-only doctor into a fix.
+        with pytest.raises(ValidationError):
+            DoctorFixInput.model_validate({"fix": False})
+        with pytest.raises(ValidationError):
+            DoctorInput.model_validate({"fix": True})

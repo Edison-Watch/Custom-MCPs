@@ -336,10 +336,11 @@ def iter_doctor(input: DoctorStreamInput) -> Iterator[CheckResultModel]:
     ``uv sync --dry-run``), so a unary caller blocks until every check is done.
     This generator lets a transport surface each result the moment it lands.
 
-    In ``--fix`` mode it yields the initial pass first, then applies the fixers
+    With ``fix`` set it yields the initial pass first, then applies the fixers
     and yields the re-checked results, so a consumer sees the full progression.
-    The pure ``doctor`` service is intentionally left unchanged and stays the
-    shared entry point for CLI/MCP/API; only the SSE route uses this generator.
+    The registered services stay the shared CLI/MCP/API entry points: read-only
+    ``doctor`` for checks and the mutating ``doctor_fix`` for fixes. Only the
+    SSE route uses this generator.
     """
     results: list[CheckResultModel] = []
     for check_fn in _ALL_CHECKS:

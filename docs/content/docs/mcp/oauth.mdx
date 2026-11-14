@@ -87,5 +87,9 @@ npx -y @mcpjam/cli@latest oauth conformance \
   --conformance-checks
 ```
 
+The `--protocol-version 2025-11-25` flag is intentional: it runs the suite
+against the handshake-era baseline, which the same `/mcp` mount still serves
+alongside 2026-07-28. Bump it once the suite targets 2026-07-28.
+
 Protocol and apps conformance run in CI against the API-key path (see
 `make mcp_conformance`).

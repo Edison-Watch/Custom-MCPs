@@ -128,7 +128,8 @@ def ensure_daily_limit(user_id: str) -> LimitStatus:
             # against the in-session `sub`, whose SQLite-loaded reset_at is
             # tz-naive - comparing it to the aware `day_start` raises
             # TypeError and 500s EVERY authenticated call after midnight UTC.
-            # `sub` is refreshed after each commit, so no sync is needed.
+            # No sync is needed: every path out of here either returns/raises
+            # without reading `sub` again, or refreshes `sub` before using it.
             # Zero-quota tiers: reset the clock without claiming a slot
             if daily_limit == 0:
                 session.execute(

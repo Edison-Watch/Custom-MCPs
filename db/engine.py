@@ -8,7 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from common import global_config
@@ -31,11 +31,14 @@ def _connect_args(uri: str) -> dict[str, object]:
     itself a connect.
 
     Only libpq-backed URIs get it; SQLite (used by the test suite) has no such
-    option and would reject the kwarg.
+    option and would reject the kwarg. A ``connect_timeout`` set explicitly in
+    the URI's query string wins: ``connect_args`` would otherwise override it.
     """
-    if uri.startswith(("postgresql", "postgres:")):
-        return {"connect_args": {"connect_timeout": CONNECT_TIMEOUT_SECONDS}}
-    return {}
+    if not uri.startswith(("postgresql", "postgres:")):
+        return {}
+    if "connect_timeout" in make_url(uri).query:
+        return {}
+    return {"connect_args": {"connect_timeout": CONNECT_TIMEOUT_SECONDS}}
 
 
 def _init_engine() -> Engine:

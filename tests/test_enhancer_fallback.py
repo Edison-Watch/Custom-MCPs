@@ -56,29 +56,37 @@ class TestEnhancerCrashFallback(TestTemplate):
         svc_name = f"__crash_test_{fallback_mode}"
         calls = {"count": 0}
 
-        @service(
-            name=svc_name,
-            description="test",
-            input_model=_CrashIn,
-            output_model=_CrashOut,
-            mutating=mutating,
-        )
-        def _svc(input: _CrashIn) -> _CrashOut:
-            calls["count"] += 1
-            if calls["count"] == fail_on_call:
-                raise ValueError(f"service failed on call {fail_on_call}")
-            return _CrashOut(value=input.x * 100)
-
-        enhance(svc_name, fallback=fallback_mode)(enhancer_fn)
-
-        entry = next(e for e in get_registry() if e.name == svc_name)
-        test_mcp = MCPServer("test_crash")
-        make_tool(test_mcp, entry)
-        tool_fn = test_mcp._tool_manager._tools[svc_name].fn
-
         def cleanup():
             _registry[:] = [e for e in _registry if e.name != svc_name]
             _enhancers.pop(svc_name, None)
+
+        # Registration is global: if any step below fails, undo it before
+        # re-raising so a half-registered service cannot leak into the next
+        # test (which would then fail as a duplicate registration).
+        try:
+
+            @service(
+                name=svc_name,
+                description="test",
+                input_model=_CrashIn,
+                output_model=_CrashOut,
+                mutating=mutating,
+            )
+            def _svc(input: _CrashIn) -> _CrashOut:
+                calls["count"] += 1
+                if calls["count"] == fail_on_call:
+                    raise ValueError(f"service failed on call {fail_on_call}")
+                return _CrashOut(value=input.x * 100)
+
+            enhance(svc_name, fallback=fallback_mode)(enhancer_fn)
+
+            entry = next(e for e in get_registry() if e.name == svc_name)
+            test_mcp = MCPServer("test_crash")
+            make_tool(test_mcp, entry)
+            tool_fn = test_mcp._tool_manager._tools[svc_name].fn
+        except BaseException:
+            cleanup()
+            raise
 
         return tool_fn, calls, cleanup
 

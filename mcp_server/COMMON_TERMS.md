@@ -119,7 +119,8 @@ identity. Replaces the handshake for up-front capability lookup.
 
 Then the negotiated version rides the `MCP-Protocol-Version` header. The SDK
 routes by that header: handshake versions go to the legacy transport (which
-`server.mcp_stateless_http` configures), anything else to the 2026-07-28
+the `stateless_http=` argument to `streamable_http_app()` in
+`mcp_server/server.py:mount_on` configures), anything else to the 2026-07-28
 entry. **Capabilities** are feature flags either way - don't call methods
 whose capability wasn't advertised (`-32021` MissingRequiredClientCapability).
 

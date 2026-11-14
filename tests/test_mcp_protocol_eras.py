@@ -93,7 +93,10 @@ class _ModernMcpClient:
         return msg["result"]
 
     def request_error(self, method: str, params: dict | None = None) -> dict:
-        _resp, msg = self.post(method, params)
+        resp, msg = self.post(method, params)
+        # A JSON-RPC error still rides a 200: a transport failure must not
+        # satisfy the error-path check.
+        assert resp.status_code == 200, f"{method}: {resp.status_code} {resp.text}"
         assert "error" in msg, f"{method} unexpectedly succeeded: {msg}"
         return msg["error"]
 
@@ -173,7 +176,9 @@ class TestMCPProtocolEras(TestTemplate):
         gets an isError result whose text is the first-party recovery script -
         not the SDK's sanitized ``Error executing tool <name>``."""
         with _google_configured(), _wire_client("u-era-form") as (client, key):
-            modern = _ModernMcpClient(client, key, capabilities={})
+            modern = _ModernMcpClient(
+                client, key, capabilities={"elicitation": {"form": {}}}
+            )
             result = modern.request(
                 "tools/call", {"name": "gmail_list_inbox", "arguments": {}}
             )

@@ -34,7 +34,7 @@ swap in the production base URL to call the deployed API.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/greet \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "shout": true}'
 ```
@@ -60,7 +60,7 @@ curl http://localhost:8000/health
 per-component readiness:
 
 ```bash
-curl http://localhost:8000/health/detail -H "Authorization: Bearer sk_live_..."
+curl http://localhost:8000/health/detail -H "X-API-KEY: sk_live_..."
 ```
 
 ```json

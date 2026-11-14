@@ -34,8 +34,13 @@ def model_facing_message(exc: BaseException | None) -> str | None:
     if exc is None:
         return None
     if isinstance(exc, HTTPException):
-        # The daily quota (429) and paywall refusals are HTTP-shaped.
-        return str(exc.detail)
+        # The daily quota (429) and paywall refusals are HTTP-shaped. Billing
+        # raises them with a dict detail ({"code", "message", ...}); hand the
+        # model the human-readable message, not the dict's Python repr.
+        detail = exc.detail
+        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+            return detail["message"]
+        return str(detail)
     if isinstance(exc, _MODEL_FACING_BUILTINS):
         return str(exc)
     module = type(exc).__module__

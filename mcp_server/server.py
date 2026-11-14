@@ -50,7 +50,7 @@ _MCP_INSTRUCTIONS = (
 def _server_version() -> str:
     """Package version for ``serverInfo`` (per-result ``_meta`` on 2026-07-28)."""
     try:
-        return _pkg_version("mcp-template")
+        return _pkg_version("custom-mcps")
     except PackageNotFoundError:
         return "0.0.0"
 

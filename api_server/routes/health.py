@@ -230,11 +230,12 @@ def health_check():
     Runs **no dependency probes**.  Liveness and readiness are different
     questions and this endpoint answers only the first, for three reasons:
 
-    - ``db/engine.py`` builds the engine with ``pool_pre_ping=True`` and no
-      connect timeout, so a database host that stops answering SYN blocks the
-      probe on OS TCP retries (~130s on Linux).  The Dockerfile healthcheck is
-      ``--timeout=5s --retries=3``, so probing here would turn a slow
-      dependency into a container restart loop.
+    - A database probe is only as fast as the database.  ``db/engine.py``
+      bounds a *new* PostgreSQL connect at ``CONNECT_TIMEOUT_SECONDS`` (5s),
+      which alone already equals the Dockerfile healthcheck's ``--timeout=5s``
+      (``--retries=3``), and nothing bounds a query on an already-pooled
+      connection.  Probing here would turn a slow dependency into a container
+      restart loop.
     - This is a sync ``def``, so it runs on the anyio threadpool.  A probe that
       blocks lets unauthenticated callers park every thread in that pool and
       stall every other sync route in the app.  ``db/engine.py`` now bounds the
@@ -260,10 +261,12 @@ def health_detail(_user: AuthenticatedUser = Depends(get_authenticated_user)):
 
     This is a sync ``def`` and it does probe, so the threadpool argument in
     ``health_check`` applies here too - authentication changes who can pull the
-    lever, not that it exists.  What bounds it is ``db/engine.py``'s
-    ``CONNECT_TIMEOUT_SECONDS``: the Redis client already carries its own
-    socket timeouts and the Stripe probe makes no network call, so with the
-    database connect bounded, no probe here can hold a worker indefinitely.
+    lever, not that it exists.  The Redis client carries its own socket
+    timeouts and the Stripe probe makes no network call; ``db/engine.py``'s
+    ``CONNECT_TIMEOUT_SECONDS`` bounds opening a new database connection. It
+    does *not* bound the pre-ping or ``SELECT 1`` on an already-pooled
+    connection whose peer has gone silent - that wait is capped only by the
+    OS TCP timeouts - so a worker can still be held for a long time there.
     """
     components = _collect_components()
     return {

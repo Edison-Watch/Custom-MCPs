@@ -39,6 +39,21 @@ class TestModelFacingMessage(TestTemplate):
             == "quota"
         )
 
+    def test_quota_dict_detail_yields_its_message(self):
+        # The real billing refusal shape (api_server/billing/limits.py).
+        exc = HTTPException(
+            status_code=429,
+            detail={
+                "code": "quota_exceeded",
+                "message": "Daily request limit (10) exceeded for free tier.",
+                "quota_reset_at": "2026-11-15T00:00:00+00:00",
+            },
+        )
+        assert (
+            model_facing_message(exc)
+            == "Daily request limit (10) exceeded for free tier."
+        )
+
     def test_apify_errors_keep_their_text(self):
         # reddit_* tools fail with ApifyError whose text tells the model what
         # went wrong upstream (unconfigured key, timeout, bad response shape).
