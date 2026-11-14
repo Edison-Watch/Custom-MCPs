@@ -42,12 +42,23 @@ try:
 except PackageNotFoundError:
     _APP_VERSION = "0.1.0"
 
-# Advertise the public host in the OpenAPI `servers` block when configured, so
-# the published spec is self-describing (codegen, Swagger "Try it out", and the
-# landing-page API reference all target the real deployment, not a relative path).
-_openapi_servers = (
-    [{"url": global_config.API_PUBLIC_URL}] if global_config.API_PUBLIC_URL else None
-)
+
+def openapi_servers(public_url: str | None) -> list[dict[str, str]] | None:
+    """The OpenAPI ``servers`` block.
+
+    The public host comes first when configured, so the published spec is
+    self-describing (codegen and the landing-page API reference target the real
+    deployment). A relative ``/`` entry follows so Swagger "Try it out" can stay
+    same-origin when the docs are opened on another host (a preview deploy,
+    localhost): the docs CSP allows ``connect-src 'self'`` only, and is
+    deliberately not widened to the public host. Unset -> FastAPI's default.
+    """
+    if not public_url:
+        return None
+    return [{"url": public_url}, {"url": "/", "description": "this host"}]
+
+
+_openapi_servers = openapi_servers(global_config.API_PUBLIC_URL)
 
 # Document the versioning + deprecation contract in the spec itself so codegen
 # and agents discover it without reading prose docs. Endpoints are URL-versioned

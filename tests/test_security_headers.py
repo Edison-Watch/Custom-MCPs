@@ -23,8 +23,13 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
 from api_server.auth.api_key_auth import create_api_key
-from api_server.middleware.security_headers import SecurityHeadersMiddleware
-from api_server.server import SessionCookiePolicy, app, session_cookie_policy
+from api_server.middleware.security_headers import DOCS_CSP, SecurityHeadersMiddleware
+from api_server.server import (
+    SessionCookiePolicy,
+    app,
+    openapi_servers,
+    session_cookie_policy,
+)
 from common import global_config
 from db import engine as db_engine
 from db.base import Base
@@ -308,3 +313,20 @@ class TestSessionCookieFlags(TestTemplate):
         # Under the test config DEV_ENV is `dev`, so this mirrors the gate
         # rather than asserting True - the prod behaviour is pinned above.
         assert kwargs["https_only"] == session_cookie_policy()["https_only"]
+
+
+class TestOpenAPIServers(TestTemplate):
+    """Swagger "Try it out" must be able to stay same-origin under the docs CSP."""
+
+    def test_public_url_then_same_origin_entry(self):
+        servers = openapi_servers("https://api.example.com")
+        assert servers == [
+            {"url": "https://api.example.com"},
+            {"url": "/", "description": "this host"},
+        ]
+        # The docs CSP is not widened to reach the public host.
+        assert "api.example.com" not in DOCS_CSP
+
+    def test_unset_public_url_keeps_fastapi_default(self):
+        assert openapi_servers(None) is None
+        assert openapi_servers("") is None
