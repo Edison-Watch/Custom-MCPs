@@ -17,6 +17,17 @@ class ServiceEntry:
     mutating: bool = False
 
 
+class InvalidArgument(ValueError):  # noqa: N818 - reads as a verdict, like ValueError
+    """A service rejected the caller's arguments; the text is for the caller.
+
+    Subclasses ``ValueError`` so CLI and API handling is unchanged, but - unlike
+    a bare ``ValueError``, which any third-party library may raise with
+    internals in its text (a full URL, a payload ``input_value=``) - its
+    first-party origin is what lets the MCP layer show the message to the model.
+    Raise this, not ``ValueError``, for a model-correctable argument problem.
+    """
+
+
 class ConnectRequiredError(Exception):
     """A service call requires the user to first complete an external connect flow.
 

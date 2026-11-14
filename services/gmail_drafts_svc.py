@@ -39,7 +39,7 @@ from models.gmail import (
 from models.gmail import (
     GmailDraftSummary as _DraftSummary,
 )
-from services import service
+from services import InvalidArgument, service
 from services.curation_ledger import mark_state_best_effort
 from services.gmail_draft_helpers import (
     _draft_resource_to_model,
@@ -392,7 +392,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
     account owner did NOT send, so a bare reply reaches the other party rather
     than the owner's own address. If ``to`` is omitted and the thread has no
     other participant to derive one from (every message is the owner's), raises
-    ``ValueError`` rather than creating a blank-``To`` draft - pass ``to``
+    ``InvalidArgument`` rather than creating a blank-``To`` draft - pass ``to``
     explicitly for such threads. Prefixes the subject with ``Re:`` unless the
     originating subject already starts with ``Re:``. Propagates the parent's
     ``Message-ID`` as ``In-Reply-To`` and appends to ``References`` so non-Gmail
@@ -408,7 +408,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
     )
     messages = thread.get("messages") or []
     if not messages:
-        raise ValueError(f"Thread {input.thread_id!r} has no messages to reply to")
+        raise InvalidArgument(f"Thread {input.thread_id!r} has no messages to reply to")
     last_msg = messages[-1]
     headers = _headers_to_dict((last_msg.get("payload") or {}).get("headers"))
     # Caller-supplied recipients win; only compute the default (and pay the
@@ -421,7 +421,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
             # Every message is from the owner and the thread names no other
             # participant, so there is nobody to reply to. Fail clearly instead
             # of creating a draft with a blank (malformed) To header.
-            raise ValueError(
+            raise InvalidArgument(
                 f"Cannot determine a reply recipient for thread "
                 f"{input.thread_id!r}: every message is from you and the thread "
                 "has no other participants. Pass 'to' explicitly."

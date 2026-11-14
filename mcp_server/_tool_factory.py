@@ -18,9 +18,10 @@ from typing import Any
 
 from loguru import logger as log
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from mcp_server.enhancers import EnhancerEntry, get_enhancer
 from mcp_server.enhancers.base import EnhancedTool, build_app_meta
@@ -43,9 +44,21 @@ def _check_scopes() -> None:
     from api_server.auth.scopes import SERVICES_EXECUTE, check_scopes  # noqa: PLC0415
 
     if not check_scopes([SERVICES_EXECUTE], user.scopes):
-        raise PermissionError(
-            "Insufficient permissions: 'services:execute' scope required."
-        )
+        # ToolError (not PermissionError): a deliberate refusal the model reads.
+        raise ToolError("Insufficient permissions: 'services:execute' scope required.")
+
+
+def _build_input(input_model: type, kwargs: dict[str, Any]) -> Any:
+    """Validate tool arguments into the service's input model.
+
+    A failure here is the caller's mistake to read and correct, so it is a
+    ``ToolError``. Validation failures raised later, inside a service (e.g. an
+    upstream payload's ``model_validate``), stay sanitized.
+    """
+    try:
+        return input_model(**kwargs)
+    except ValidationError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def _check_quota() -> None:
@@ -104,7 +117,7 @@ def _make_headless_tool(mcp: MCPServer, entry: ServiceEntry) -> None:
                 kwargs["user_id"] = user.user_id
             elif not kwargs.get("user_id"):
                 kwargs.setdefault("user_id", "")
-        input_obj = input_model(**kwargs)
+        input_obj = _build_input(input_model, kwargs)
         _check_quota()
         try:
             return func(input_obj)
@@ -139,7 +152,7 @@ def _make_enhanced_tool(
                 kwargs["user_id"] = user.user_id
             elif not kwargs.get("user_id"):
                 kwargs.setdefault("user_id", "")
-        input_obj = input_model(**kwargs)
+        input_obj = _build_input(input_model, kwargs)
         _check_quota()
         tool = EnhancedTool(ctx=ctx, input=input_obj, service_fn=func)
         try:

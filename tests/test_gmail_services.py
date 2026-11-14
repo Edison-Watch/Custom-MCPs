@@ -17,6 +17,7 @@ from email import message_from_bytes
 from unittest.mock import MagicMock, patch
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -2301,7 +2302,9 @@ class TestAppToolAttachmentCoercion(TestTemplate):
         assert isinstance(out[1], AttachmentInput)
 
     def test_empty_attachment_dict_raises(self):
-        with pytest.raises(ValueError, match="data_base64"):
+        # ToolError so the composer iframe reads the reason; a bare ValueError
+        # would be sanitized by the MCP layer.
+        with pytest.raises(ToolError, match="data_base64"):
             _coerce_attachments([{}])
 
     def test_unset_passes_through_to_preserve(self):
