@@ -1,7 +1,6 @@
 import os
 import re
 import warnings
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -38,11 +37,6 @@ from .config_models import (
 root_dir = Path(__file__).parent.parent
 
 OPENAI_O_SERIES_PATTERN = r"o(\d+)(-mini)?"
-
-# Merged YAML view (env-free), captured once when the Config singleton is built
-# (see Config.settings_customise_sources). Consumed by Config.to_yaml_dict() as
-# the secret-free config view for the config_show / config_get services.
-_yaml_config_cache: dict[str, Any] = {}
 
 
 # Custom YAML settings source
@@ -369,11 +363,6 @@ class Config(BaseSettings):
         4. Init settings (passed to constructor)
         """
         yaml_source = YamlSettingsSource(settings_cls)
-        # Capture the merged YAML data once, here, where it is already computed
-        # to populate the model - so to_yaml_dict() reuses it instead of
-        # re-reading disk on every call and diverging from this singleton.
-        global _yaml_config_cache  # noqa: PLW0603
-        _yaml_config_cache = yaml_source.yaml_data
         return (
             env_settings,
             dotenv_settings,
@@ -386,33 +375,39 @@ class Config(BaseSettings):
 
         Includes environment-sourced fields (secrets). Internal use only - do
         NOT expose the result to any transport. Anything user-facing must use
-        :meth:`to_yaml_dict`.
+        :meth:`to_public_dict`.
         """
         return self.model_dump()
 
-    def to_yaml_dict(self) -> dict[str, Any]:
-        """Return only the YAML-sourced configuration, never ``.env`` secrets.
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the *effective* config with every secret removed.
 
-        The merged YAML layer (``global_config.yaml`` + split configs + the
-        production overlay + ``.global_config.yaml``), captured once when this
-        singleton was built. Every secret (API keys, ``BACKEND_DB_URI``,
-        ``GOOGLE_TOKEN_ENC_KEY``, ``SESSION_SECRET_KEY``, ...) loads from the
-        environment via a *different* settings source, so secrets are absent
-        here by construction - this can never disclose one, even if a new secret
-        field is added later. This is the safe view for the ``config_show`` /
-        ``config_get`` services, reachable over the authenticated HTTP transport.
+        This is the view behind the ``config_show`` / ``config_get`` services
+        (reachable over the authenticated HTTP transport and MCP), so it shows
+        what the process is actually running with: YAML layers, pydantic
+        defaults and env-var overrides (``DEV_ENV=prod`` reads ``"prod"``).
 
-        As defense in depth, any key that collides with a declared secret field
-        name is redacted, so a secret hand-placed in a YAML file cannot leak here
-        even though env secrets never reach this layer to begin with.
+        Two layers keep secrets out, and the first one fails closed:
 
-        Note: this is the YAML *layer*, not the effective config. Pydantic
-        defaults for fields absent from every YAML file, and non-secret env-var
-        overrides (e.g. ``LLM_CONFIG__CACHE_ENABLED``), are intentionally not
-        reflected. Callers needing effective runtime values must not use this.
-        A fresh copy is returned so callers cannot mutate the cached view.
+        1. Top-level UPPERCASE fields are the env-sourced settings. Only those
+           named in :data:`PUBLIC_ENV_FIELDS` are kept; any other uppercase
+           field - including one added later without classifying it - is
+           omitted. Lowercase fields are the nested YAML-backed models and are
+           kept.
+        2. Any key, at any depth, matching :data:`_SECRET_FIELD_NAMES` is
+           dropped (case-insensitively), so a secret hand-placed under a nested
+           YAML key cannot leak either.
+
+        Every uppercase field must appear in exactly one of the two lists;
+        ``tests/test_config_public_view.py`` enforces it.
         """
-        return _redact_secret_keys(deepcopy(_yaml_config_cache))
+        dumped = self.model_dump(mode="json")
+        public = {
+            name: value
+            for name, value in dumped.items()
+            if not name.isupper() or name in PUBLIC_ENV_FIELDS
+        }
+        return _redact_secret_keys(public)
 
     def _identify_provider(self, model_name: str) -> str:
         """Identify the LLM provider from a model name string."""
@@ -451,15 +446,43 @@ class Config(BaseSettings):
         raise ValueError(f"No API key configured for model: {model_identifier}")
 
 
+# Env-sourced (UPPERCASE) Config fields that are safe to show through
+# config_show / config_get: identifiers, public URLs, OAuth client ids, flags
+# and tuning knobs. This is an allowlist - an uppercase field missing from it is
+# omitted from the public view, so a new secret cannot leak by default.
+PUBLIC_ENV_FIELDS: frozenset[str] = frozenset(
+    {
+        "DEV_ENV",
+        "APIFY_ACTOR_ID",
+        "X402_WALLET_ADDRESS",  # a public receiving address
+        "WORKOS_CLIENT_ID",
+        "WORKOS_AUTHKIT_DOMAIN",
+        "MCP_PUBLIC_URL",
+        "API_PUBLIC_URL",
+        "ALLOW_TEST_TOKENS",
+        "STRIPE_ALLOW_LIVE_KEY_IN_DEV",
+        "FRONTEND_URL",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_REDIRECT_URI",
+        # Pub/Sub topic + OIDC audience/service-account the push receiver
+        # checks: identifiers, not credentials (the JWT is Google-signed).
+        "GMAIL_PUBSUB_TOPIC",
+        "GMAIL_PUSH_AUDIENCE",
+        "GMAIL_PUSH_SA_EMAIL",
+        "WEBHOOK_RUNNER_MODE",
+        "WEBHOOK_RUNNER_INTERVAL_S",
+        "WEBHOOK_MAX_ATTEMPTS",
+    }
+)
+
 # The credential-bearing (env-sourced) fields on Config, enumerated explicitly
 # rather than by keyword heuristic (which both over-matched non-secret flags
 # like STRIPE_ALLOW_LIVE_KEY_IN_DEV and missed names like REDIS_URL). Used to
-# defensively drop any key that collides with one of these names from the YAML
-# view: env secrets never appear in the YAML layer by construction, but this
-# ensures a secret mistakenly placed in a YAML file (e.g. a hand-edited
-# .global_config.yaml) can never leak through config_show / config_get either.
-# Non-secret env fields (DEV_ENV, FRONTEND_URL, WORKOS_CLIENT_ID, ...) are
-# intentionally omitted. Matched by full key name, case-insensitively (see
+# drop any key that collides with one of these names, at any depth, from the
+# public view - the second layer behind PUBLIC_ENV_FIELDS, so a secret
+# mistakenly placed under a nested YAML key (e.g. a hand-edited
+# .global_config.yaml) can never leak through config_show / config_get.
+# Non-secret env fields live in PUBLIC_ENV_FIELDS instead. Matched by full key name, case-insensitively (see
 # _redact_secret_keys): substrings never match, but a lowercase spelling of a
 # secret name such as ``openai_api_key`` is dropped at any depth.
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset(
@@ -469,6 +492,7 @@ _SECRET_FIELD_NAMES: frozenset[str] = frozenset(
         "GROQ_API_KEY",
         "PERPLEXITY_API_KEY",
         "GEMINI_API_KEY",
+        "APIFY_API_KEY",
         "X402_PRIVATE_KEY",
         "BACKEND_DB_URI",
         "REDIS_URL",

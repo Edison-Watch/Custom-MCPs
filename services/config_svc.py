@@ -41,33 +41,31 @@ def _coerce_value(value: str) -> bool | int | float | str | None:
 @service(
     name="config_show",
     description=(
-        "Show the project's YAML-layer configuration (secrets and env-var "
-        "overrides excluded)"
+        "Show the project's effective configuration (YAML, defaults and env "
+        "overrides; secrets excluded)"
     ),
     input_model=ConfigShowInput,
     output_model=ConfigShowResult,
 )
 def config_show(input: ConfigShowInput) -> ConfigShowResult:
-    # YAML-only view: never expose environment-sourced secrets (API keys,
-    # BACKEND_DB_URI, GOOGLE_TOKEN_ENC_KEY, SESSION_SECRET_KEY, ...). This
-    # service is reachable over the authenticated HTTP transport.
-    return ConfigShowResult(config=global_config.to_yaml_dict())
+    # Effective config minus secrets (see Config.to_public_dict): env fields
+    # appear only if allowlisted in PUBLIC_ENV_FIELDS. Same view on every
+    # transport, including the authenticated HTTP one.
+    return ConfigShowResult(config=global_config.to_public_dict())
 
 
 @service(
     name="config_get",
     description=(
-        "Get a YAML-layer config value by dot-separated key (secrets and env-var "
-        "overrides excluded; keys set only via env or code defaults are absent)"
+        "Get an effective config value by dot-separated key (secrets excluded)"
     ),
     input_model=ConfigGetInput,
     output_model=ConfigGetResult,
 )
 def config_get(input: ConfigGetInput) -> ConfigGetResult:
-    # Walk the YAML-only view so environment-sourced secrets are unreachable:
-    # config_get("OPENAI_API_KEY") / config_get("BACKEND_DB_URI") now raise
-    # KeyError instead of returning the secret.
-    obj: Any = global_config.to_yaml_dict()
+    # Walk the public view so secrets are unreachable: config_get(
+    # "OPENAI_API_KEY") / config_get("BACKEND_DB_URI") raise KeyError.
+    obj: Any = global_config.to_public_dict()
     for part in input.key.split("."):
         if isinstance(obj, dict) and part in obj:
             obj = obj[part]
