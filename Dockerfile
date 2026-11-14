@@ -11,7 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && pip install --no-cache-dir "uv==0.13.4"
+ && pip install --no-cache-dir "uv==0.13.5"
 
 WORKDIR /app
 
