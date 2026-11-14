@@ -40,7 +40,7 @@ from models.gmail import (
     GmailStatusResult,
     InlineImageUpload,
 )
-from services import ConnectRequiredError, service
+from services import ConnectRequiredError, InvalidArgument, service
 
 # ---------------------------------------------------------------------------
 # Domain errors
@@ -474,7 +474,7 @@ def _build_raw_message(
     for img in inline_images or []:
         maintype, subtype = _split_mime(img.mime_type)
         body_host.add_related(
-            _decode_b64url(img.data_base64),
+            _decode_part(img.data_base64, f"inline image {img.content_id!r}"),
             maintype=maintype,
             subtype=subtype,
             cid=f"<{img.content_id}>",
@@ -482,7 +482,7 @@ def _build_raw_message(
     for att in attachments or []:
         maintype, subtype = _split_mime(att.mime_type)
         msg.add_attachment(
-            _decode_b64url(att.data_base64),
+            _decode_part(att.data_base64, f"attachment {att.filename!r}"),
             maintype=maintype,
             subtype=subtype,
             filename=att.filename,
@@ -494,6 +494,14 @@ def _build_raw_message(
 def _decode_b64url(data: str) -> bytes:
     """Decode base64url, re-padding per RFC 4648 §5."""
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def _decode_part(data: str, what: str) -> bytes:
+    """Decode a caller-supplied base64url part, as a model-correctable error."""
+    try:
+        return _decode_b64url(data)
+    except (binascii.Error, ValueError) as exc:
+        raise InvalidArgument(f"{what}: data_base64 is not valid base64url") from exc
 
 
 def _b64url_to_std(data: str) -> str:

@@ -402,10 +402,15 @@ class Config(BaseSettings):
         ``tests/test_config_public_view.py`` enforces it.
         """
         dumped = self.model_dump(mode="json")
+        # Only *declared* fields: with ``extra="allow"`` and
+        # ``case_sensitive=False``, any undeclared ``.env`` key (e.g.
+        # ``LANGFUSE_SECRET_KEY``) becomes a lowercase extra, which would
+        # otherwise pass as a "nested model" and leak.
+        declared = type(self).model_fields
         public = {
             name: value
             for name, value in dumped.items()
-            if not name.isupper() or name in PUBLIC_ENV_FIELDS
+            if name in declared and (not name.isupper() or name in PUBLIC_ENV_FIELDS)
         }
         return _redact_secret_keys(public)
 

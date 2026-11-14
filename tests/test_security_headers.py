@@ -339,8 +339,12 @@ class TestHSTS(TestTemplate):
         assert value == "max-age=63072000; includeSubDomains"
 
     def test_app_wires_the_config_flag(self):
-        resp = TestClient(app).get("/openapi.json")
-        assert resp.headers["strict-transport-security"] == "max-age=63072000"
+        entries = [m for m in app.user_middleware if m.cls is SecurityHeadersMiddleware]
+        assert len(entries) == 1, "expected exactly one SecurityHeadersMiddleware"
+        assert (
+            entries[0].kwargs["hsts_include_subdomains"]
+            == global_config.server.hsts_include_subdomains
+        )
 
 
 class TestOpenAPIServers(TestTemplate):

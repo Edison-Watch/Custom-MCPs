@@ -2589,3 +2589,17 @@ class TestInlineImageAlternativeStructure(TestTemplate):
         img = _parts_by_type(raw, "image/png")[0]
         assert img.get("Content-ID") == "<img1>"
         assert img.get_payload(decode=True) == b"PNGDATA"
+
+
+class TestBuildRawMessageBadBase64(TestTemplate):
+    def test_malformed_attachment_base64_is_a_correctable_error(self):
+        from models.gmail import AttachmentUpload  # noqa: PLC0415
+        from services import InvalidArgument  # noqa: PLC0415
+
+        bad = AttachmentUpload.model_construct(
+            filename="a.txt", mime_type="text/plain", data_base64="a"
+        )
+        with pytest.raises(InvalidArgument, match="attachment 'a.txt'"):
+            _build_raw_message(
+                to="b@example.com", subject="s", body="b", attachments=[bad]
+            )

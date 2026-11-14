@@ -81,11 +81,15 @@ class TestPublicView(TestTemplate):
         dumped = {
             "DEV_ENV": "dev",
             "OPENAI_API_KEY": "leaked",
-            "nested": {"SESSION_SECRET_KEY": "leaked", "openai_api_key": "x", "k": 1},
+            "llm_config": {
+                "SESSION_SECRET_KEY": "leaked",
+                "openai_api_key": "x",
+                "k": 1,
+            },
         }
         with patch.object(_CONFIG_CLS, "model_dump", return_value=dumped):
             shown = global_config.to_public_dict()
-        assert shown == {"DEV_ENV": "dev", "nested": {"k": 1}}
+        assert shown == {"DEV_ENV": "dev", "llm_config": {"k": 1}}
 
     def test_config_get_returns_effective_env_override(self, monkeypatch):
         # The YAML-only view used to answer "dev" here regardless of env.
@@ -103,3 +107,17 @@ class TestPublicView(TestTemplate):
             pytest.raises(KeyError),
         ):
             config_get(ConfigGetInput(key=secret))
+
+
+class TestUndeclaredExtras(TestTemplate):
+    def test_undeclared_env_extra_never_shown(self):
+        # extra="allow" + case_sensitive=False turns an undeclared .env key
+        # (e.g. LANGFUSE_SECRET_KEY) into a lowercase extra; it must not pass
+        # as a nested model.
+        cfg = global_config.model_copy(
+            update={"langfuse_secret_key": "sk-lf-leak", "made_up_token": "tok-leak"}
+        )
+        shown = cfg.to_public_dict()
+        assert "langfuse_secret_key" not in shown
+        assert "made_up_token" not in shown
+        assert "leak" not in str(shown)

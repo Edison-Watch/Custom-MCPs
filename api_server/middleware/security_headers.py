@@ -69,7 +69,7 @@ DOCS_CSP = "; ".join(
     )
 )
 
-# Two years is the HSTS preload floor. `includeSubDomains` is opt-in
+# Two years is the recommended HSTS max-age. `includeSubDomains` is opt-in
 # (`server.hsts_include_subdomains`): it pins *every* subdomain of the host's
 # domain to HTTPS for two years, which a template cannot know is safe - one
 # plain-http sibling (an internal tool, a legacy marketing host) would become
