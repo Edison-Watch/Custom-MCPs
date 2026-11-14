@@ -13,7 +13,6 @@ from models.doctor import (
     DoctorFixInput,
     DoctorInput,
     DoctorResult,
-    DoctorStreamInput,
 )
 from services import service
 
@@ -329,28 +328,17 @@ def doctor_fix(input: DoctorFixInput) -> DoctorResult:
     return _to_result(results)
 
 
-def iter_doctor(input: DoctorStreamInput) -> Iterator[CheckResultModel]:
+def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
     """Yield each ``CheckResultModel`` as it completes - streaming variant of ``doctor``.
 
     Several checks shell out (``_check_deps_synced`` waits up to 30s on
     ``uv sync --dry-run``), so a unary caller blocks until every check is done.
     This generator lets a transport surface each result the moment it lands.
 
-    With ``fix`` set it yields the initial pass first, then applies the fixers
-    and yields the re-checked results, so a consumer sees the full progression.
-    The registered services stay the shared CLI/MCP/API entry points: read-only
-    ``doctor`` for checks and the mutating ``doctor_fix`` for fixes. Only the
-    SSE route uses this generator.
+    Read-only, like ``doctor``: it never applies fixers. Fixing has side
+    effects (``uv sync``, ``.env`` scaffold, ``prek install``) and so goes only
+    through the mutating ``doctor_fix`` service, whose REST route enforces
+    Idempotency-Key. Only the SSE route uses this generator.
     """
-    results: list[CheckResultModel] = []
     for check_fn in _ALL_CHECKS:
-        result = check_fn()
-        results.append(result)
-        yield result
-
-    if not input.fix:
-        return
-
-    if _apply_fixers(results):
-        for check_fn in _ALL_CHECKS:
-            yield check_fn()
+        yield check_fn()

@@ -10,7 +10,9 @@ class DoctorInput(BaseModel):
 
     ``extra="forbid"`` so legacy REST payloads like ``{"fix": true}`` fail
     loudly with a 422 instead of silently running checks-only: the fixer path
-    moved to the separate ``doctor_fix`` service (``mutating=True``).
+    moved to the separate ``doctor_fix`` service (``mutating=True``). Also the
+    body of the read-only ``POST /api/v1/stream/doctor`` SSE route, so that
+    route rejects ``{"fix": true}`` the same way.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -24,12 +26,6 @@ class DoctorFixInput(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-
-
-class DoctorStreamInput(DoctorInput):
-    """Input for the SSE streaming variant, which may also apply fixers."""
-
-    fix: bool = False
 
 
 class CheckResultModel(BaseModel):

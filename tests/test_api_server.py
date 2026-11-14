@@ -174,9 +174,7 @@ class TestAPIServer(TestTemplate):
 
     def test_stream_doctor_emits_sse_events(self):
         """The SSE endpoint streams one `check` event per check, then `done`."""
-        with self.client.stream(
-            "POST", "/api/v1/stream/doctor", json={"fix": False}
-        ) as resp:
+        with self.client.stream("POST", "/api/v1/stream/doctor", json={}) as resp:
             assert resp.status_code == 200
             assert resp.headers["content-type"].startswith("text/event-stream")
             body = "".join(resp.iter_text())
@@ -198,6 +196,14 @@ class TestAPIServer(TestTemplate):
         done = json.loads(dones[0]["data"])
         assert isinstance(done["has_failures"], bool)
 
+    def test_stream_doctor_rejects_fix(self):
+        """The stream is read-only: fixers run only via the doctor_fix route."""
+        with patch("services.doctor_svc._apply_fixers") as fixers:
+            for payload in ({"fix": True}, {"fix": False}):
+                resp = self.client.post("/api/v1/stream/doctor", json=payload)
+                assert resp.status_code == 422, payload
+        fixers.assert_not_called()
+
     def test_stream_doctor_requires_execute_scope(self):
         """A read-only key may not open the doctor stream."""
         original = app.dependency_overrides.get(get_authenticated_user)
@@ -210,7 +216,7 @@ class TestAPIServer(TestTemplate):
                 )
             )
             client = TestClient(app)
-            resp = client.post("/api/v1/stream/doctor", json={"fix": False})
+            resp = client.post("/api/v1/stream/doctor", json={})
             assert resp.status_code == 403
         finally:
             if original is not None:

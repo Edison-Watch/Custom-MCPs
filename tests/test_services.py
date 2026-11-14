@@ -68,6 +68,17 @@ class TestDoctorService(TestTemplate):
         assert "Python version" in names
         assert "uv installed" in names
 
+    def test_iter_doctor_is_read_only(self):
+        # The SSE stream's generator yields one pass and never runs fixers.
+        from unittest.mock import patch  # noqa: PLC0415
+
+        from services import doctor_svc  # noqa: PLC0415
+
+        with patch.object(doctor_svc, "_apply_fixers") as fixers:
+            results = list(doctor_svc.iter_doctor(DoctorInput()))
+        fixers.assert_not_called()
+        assert len(results) == len(doctor_svc._ALL_CHECKS)
+
     def test_doctor_inputs_reject_unknown_fields(self):
         # {"fix": false} must not be silently dropped while doctor_fix's
         # mutating fixers run, nor turn checks-only doctor into a fix.
