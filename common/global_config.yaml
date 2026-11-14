@@ -111,6 +111,12 @@ server:
   port: 8080
   allowed_origins:
     - "http://localhost:3000"
+  # Strict-Transport-Security is always sent (max-age two years). Set true to
+  # also send `includeSubDomains`, which makes browsers refuse plain http on
+  # EVERY subdomain of this host's domain for two years. Only enable when you
+  # control the whole domain and every subdomain serves HTTPS (required for
+  # HSTS preload). Env override: SERVER__HSTS_INCLUDE_SUBDOMAINS=true.
+  hsts_include_subdomains: false
 
 ########################################################
 # Registry branding (pre-connect discovery)

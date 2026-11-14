@@ -41,7 +41,8 @@ _PROTOCOL_VERSION = "2025-03-26"
 # actually a hardening one rather than a placeholder.
 _EXPECTED = {
     "content-security-policy": lambda v: "default-src 'none'" in v,
-    "strict-transport-security": lambda v: "max-age=" in v and "includeSubDomains" in v,
+    # includeSubDomains is opt-in (server.hsts_include_subdomains, default off).
+    "strict-transport-security": lambda v: v.startswith("max-age=63072000"),
     "x-content-type-options": lambda v: v == "nosniff",
     "x-frame-options": lambda v: v == "DENY",
     "referrer-policy": lambda v: v == "no-referrer",
@@ -313,6 +314,33 @@ class TestSessionCookieFlags(TestTemplate):
         # Under the test config DEV_ENV is `dev`, so this mirrors the gate
         # rather than asserting True - the prod behaviour is pinned above.
         assert kwargs["https_only"] == session_cookie_policy()["https_only"]
+
+
+class TestHSTS(TestTemplate):
+    def _hsts(self, **kwargs) -> str:
+        async def ok(request: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok")
+
+        probe = Starlette(routes=[Route("/", ok)])
+        probe.add_middleware(
+            SecurityHeadersMiddleware,  # type: ignore[arg-type]
+            docs_paths=frozenset(),
+            **kwargs,
+        )
+        return TestClient(probe).get("/").headers["strict-transport-security"]
+
+    def test_include_subdomains_off_by_default(self):
+        assert self._hsts() == "max-age=63072000"
+        assert global_config.server.hsts_include_subdomains is False
+        assert "includesubdomains" not in self._hsts().lower()
+
+    def test_include_subdomains_opt_in(self):
+        value = self._hsts(hsts_include_subdomains=True)
+        assert value == "max-age=63072000; includeSubDomains"
+
+    def test_app_wires_the_config_flag(self):
+        resp = TestClient(app).get("/openapi.json")
+        assert resp.headers["strict-transport-security"] == "max-age=63072000"
 
 
 class TestOpenAPIServers(TestTemplate):

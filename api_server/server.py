@@ -173,6 +173,7 @@ app.add_middleware(
         )
         if path
     ),
+    hsts_include_subdomains=global_config.server.hsts_include_subdomains,
 )
 
 # --- Exception handlers ---------------------------------------------------

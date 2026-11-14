@@ -69,9 +69,18 @@ DOCS_CSP = "; ".join(
     )
 )
 
-# Two years is the HSTS preload floor; `includeSubDomains` is safe here because
-# the deployment terminates TLS for the whole apex it is served from.
-_HSTS = "max-age=63072000; includeSubDomains"
+# Two years is the HSTS preload floor. `includeSubDomains` is opt-in
+# (`server.hsts_include_subdomains`): it pins *every* subdomain of the host's
+# domain to HTTPS for two years, which a template cannot know is safe - one
+# plain-http sibling (an internal tool, a legacy marketing host) would become
+# unreachable for every visitor who ever hit this API.
+_HSTS = "max-age=63072000"
+
+
+def hsts_value(*, include_subdomains: bool) -> str:
+    """The ``Strict-Transport-Security`` value for this deployment."""
+    return f"{_HSTS}; includeSubDomains" if include_subdomains else _HSTS
+
 
 # Features this server has no use for. Denying them outright means an injected
 # document (or a compromised CDN bundle on /docs) cannot reach the camera,
@@ -100,7 +109,6 @@ _PERMISSIONS_POLICY = ", ".join(
 )
 
 STATIC_SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
-    ("strict-transport-security", _HSTS),
     ("x-content-type-options", "nosniff"),
     # Redundant with `frame-ancestors 'none'` for modern browsers, and required
     # by the older ones (and by every DAST scanner) that don't read CSP.
@@ -126,11 +134,27 @@ class SecurityHeadersMiddleware:
     an unmatched path under ``/docs/`` - which falls through to the MCP mount's
     404 handler - is not handed the looser policy on the strength of its URL
     shape alone.
+
+    ``hsts_include_subdomains`` adds ``includeSubDomains`` to HSTS; off by
+    default (see :func:`hsts_value`).
     """
 
-    def __init__(self, app: ASGIApp, docs_paths: frozenset[str]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        docs_paths: frozenset[str],
+        *,
+        hsts_include_subdomains: bool = False,
+    ) -> None:
         self.app = app
         self.docs_paths = docs_paths
+        self.headers: tuple[tuple[str, str], ...] = (
+            (
+                "strict-transport-security",
+                hsts_value(include_subdomains=hsts_include_subdomains),
+            ),
+            *STATIC_SECURITY_HEADERS,
+        )
 
     def _csp_for(self, scope: Scope) -> str:
         """Pick the policy for this request's path.
@@ -160,7 +184,7 @@ class SecurityHeadersMiddleware:
         async def send_with_security_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                for name, value in STATIC_SECURITY_HEADERS:
+                for name, value in self.headers:
                     headers.setdefault(name, value)
                 headers.setdefault("content-security-policy", policy)
             await send(message)
