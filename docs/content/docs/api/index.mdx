@@ -45,10 +45,22 @@ curl -X POST http://localhost:8000/api/v1/services/greet \
 
 ## Health Check
 
-No authentication required.
+`GET /health` is a public liveness probe. It runs no dependency checks and
+discloses no build identity:
 
 ```bash
 curl http://localhost:8000/health
+```
+
+```json
+{ "status": "ok" }
+```
+
+`GET /health/detail` requires authentication and returns the build identity and
+per-component readiness:
+
+```bash
+curl http://localhost:8000/health/detail -H "Authorization: Bearer sk_live_..."
 ```
 
 ```json

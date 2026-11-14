@@ -20,14 +20,37 @@ def _generate_rsa_keypair():
 class TestWorkOSAuth(TestTemplate):
     @patch("api_server.auth.workos_auth.global_config")
     def test_test_mode_bypass(self, mock_config):
-        """JSON test-mode token should be accepted in local dev."""
+        """JSON test-mode token is accepted only with the explicit opt-in + dev."""
         mock_config.WORKOS_CLIENT_ID = "client_test123"
-        mock_config.DEV_ENV = "dev"
+        mock_config.ALLOW_TEST_TOKENS = True
+        mock_config.is_dev = True
         token = json.dumps({"sub": "user-abc", "email": "a@b.com"})
         user = verify_workos_token(token)
         assert user is not None
         assert user.user_id == "user-abc"
         assert user.email == "a@b.com"
+
+    @patch("api_server.auth.workos_auth.global_config")
+    def test_test_mode_bypass_off_by_default_even_in_dev(self, mock_config):
+        """Without ALLOW_TEST_TOKENS the unsigned token is rejected, even in dev.
+
+        Guards the fail-open fix: DEV_ENV defaults to "dev", so the bypass must
+        not fire on the environment gate alone - it needs the explicit opt-in.
+        """
+        mock_config.WORKOS_CLIENT_ID = "client_test123"
+        mock_config.ALLOW_TEST_TOKENS = False
+        mock_config.is_dev = True
+        token = json.dumps({"sub": "attacker", "email": "e@v.il"})
+        assert verify_workos_token(token) is None
+
+    @patch("api_server.auth.workos_auth.global_config")
+    def test_test_mode_bypass_rejected_in_prod(self, mock_config):
+        """Even with the opt-in flag set, a non-dev environment rejects it."""
+        mock_config.WORKOS_CLIENT_ID = "client_test123"
+        mock_config.ALLOW_TEST_TOKENS = True
+        mock_config.is_dev = False
+        token = json.dumps({"sub": "attacker", "email": "e@v.il"})
+        assert verify_workos_token(token) is None
 
     @patch("api_server.auth.workos_auth.global_config")
     def test_no_client_id_returns_none(self, mock_config):
