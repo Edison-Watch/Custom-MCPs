@@ -122,6 +122,7 @@ _EXCLUDED_DEFAULT_MCP_SERVICES = frozenset(
         "config_set",
         "config_show",
         "doctor",
+        "doctor_fix",
         "greet",
     }
 )

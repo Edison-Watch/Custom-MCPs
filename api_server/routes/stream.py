@@ -21,13 +21,13 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from api_server.auth import AuthenticatedUser
 from api_server.auth.scopes import SERVICES_EXECUTE, require_scopes
 from api_server.billing.limits import ensure_daily_limit
-from models.doctor import DoctorInput, DoctorStreamDone
+from models.doctor import DoctorStreamDone, DoctorStreamInput
 from services.doctor_svc import iter_doctor
 
 router = APIRouter(prefix="/api/v1/stream", tags=["streaming"])
 
 
-def _doctor_events(body: DoctorInput) -> Iterator[ServerSentEvent]:
+def _doctor_events(body: DoctorStreamInput) -> Iterator[ServerSentEvent]:
     """Yield a ``check`` event per completed check, then a terminal ``done`` event.
 
     ``--fix`` mode re-yields every check after running fixers; tracking the
@@ -48,7 +48,7 @@ def _doctor_events(body: DoctorInput) -> Iterator[ServerSentEvent]:
 
 @router.post("/doctor", summary="Stream project health checks as they complete")
 def stream_doctor(
-    body: DoctorInput,
+    body: DoctorStreamInput,
     user: AuthenticatedUser = Depends(require_scopes(SERVICES_EXECUTE)),
 ) -> EventSourceResponse:
     """Run the doctor checks, emitting each result over SSE as it finishes.

@@ -234,16 +234,27 @@ class TestAPIServer(TestTemplate):
                 app.dependency_overrides.pop(get_authenticated_user, None)
 
 
-class TestInboxSaveCurationIdempotency(TestTemplate):
-    """The auto-generated route for inbox_save_curation (mutating=True) actually
-    enforces Idempotency-Key end-to-end: missing key -> 422, replay -> cached
-    body with no double-write, same key + different payload -> 422.
+class ServiceRouteIdempotencyBase(TestTemplate):
+    """Shared harness proving a ``mutating=True`` service's auto-generated
+    route enforces Idempotency-Key end-to-end against the real route factory +
+    ``execute_idempotent`` (not a synthetic stand-in route).
 
-    This exercises the real route factory + execute_idempotent + the ledger
-    write path, not a synthetic stand-in route.
+    Subclasses set ``ROUTE`` and implement:
+
+    - ``_payload()`` / ``_conflicting_payload()`` - request bodies (the second
+      must hash differently for the conflict test);
+    - ``_mutation_count()`` - how many times the underlying side effect has
+      actually happened (DB rows written, Gmail API calls made, ...), so the
+      generic tests can assert 0 mutations without a key and exactly 1 across
+      an execute + replay pair;
+    - ``_extra_setup()`` / ``_extra_patchers()`` / ``_extra_teardown()`` -
+      service-specific mocks and overrides.
+
+    The base provides the fresh in-memory DB, auth override, idempotency +
+    billing session patches, and the missing-key / replay / conflict triad.
     """
 
-    ROUTE = "/api/v1/services/inbox_save_curation"
+    ROUTE: str
 
     def setup_method(self):
         self.engine = create_engine(
@@ -262,6 +273,86 @@ class TestInboxSaveCurationIdempotency(TestTemplate):
             finally:
                 session.close()
 
+        app.dependency_overrides[get_authenticated_user] = _override_auth
+        self._extra_setup()
+
+        self._patchers = [
+            patch("api_server.idempotency.use_db_session", _ctx),
+            patch("api_server.billing.limits.use_db_session", _ctx),
+            # Disable opportunistic idempotency-key cleanup so it can't race.
+            patch("api_server.idempotency.random.random", return_value=1.0),
+            *self._extra_patchers(),
+        ]
+        for p in self._patchers:
+            p.start()
+        self.client = TestClient(app)
+
+    def teardown_method(self):
+        for p in self._patchers:
+            p.stop()
+        self._extra_teardown()
+        app.dependency_overrides.clear()
+
+    # -- subclass hooks ----------------------------------------------------
+
+    def _extra_setup(self) -> None:
+        """Runs after the engine/auth override exist, before patchers start."""
+
+    def _extra_patchers(self) -> list:
+        return []
+
+    def _extra_teardown(self) -> None:
+        """Runs after patchers stop, before dependency overrides clear."""
+
+    def _payload(self) -> dict:
+        raise NotImplementedError
+
+    def _conflicting_payload(self) -> dict:
+        raise NotImplementedError
+
+    def _mutation_count(self) -> int:
+        raise NotImplementedError
+
+    def _assert_first_response(self, resp) -> None:
+        """Optional service-specific assertions on the first 200 response."""
+
+    # -- generic Idempotency-Key triad -------------------------------------
+
+    def test_missing_idempotency_key_422(self):
+        """Without a key the route refuses - and the side effect never runs."""
+        resp = self.client.post(self.ROUTE, json=self._payload())
+        assert resp.status_code == 422
+        assert "Idempotency-Key" in resp.json()["error"]["message"]
+        assert self._mutation_count() == 0
+
+    def test_replay_same_key_does_not_remutate(self):
+        headers = {"Idempotency-Key": "k-replay"}
+        first = self.client.post(self.ROUTE, json=self._payload(), headers=headers)
+        assert first.status_code == 200, first.text
+        self._assert_first_response(first)
+        assert self._mutation_count() == 1
+        # Retry with the same key: cached body replayed, no second side effect.
+        second = self.client.post(self.ROUTE, json=self._payload(), headers=headers)
+        assert second.status_code == 200
+        assert second.json() == first.json()
+        assert self._mutation_count() == 1
+
+    def test_same_key_different_payload_conflicts(self):
+        headers = {"Idempotency-Key": "k-conflict"}
+        first = self.client.post(self.ROUTE, json=self._payload(), headers=headers)
+        assert first.status_code == 200, first.text
+        conflict = self.client.post(
+            self.ROUTE, json=self._conflicting_payload(), headers=headers
+        )
+        assert conflict.status_code == 422
+
+
+class TestInboxSaveCurationIdempotency(ServiceRouteIdempotencyBase):
+    """inbox_save_curation: the mutation is a curation-ledger row write."""
+
+    ROUTE = "/api/v1/services/inbox_save_curation"
+
+    def _extra_setup(self):
         def _db_dep():
             session = self.SessionLocal()
             try:
@@ -269,7 +360,6 @@ class TestInboxSaveCurationIdempotency(TestTemplate):
             finally:
                 session.close()
 
-        app.dependency_overrides[get_authenticated_user] = _override_auth
         app.dependency_overrides[get_db_session] = _db_dep
 
         # Route every db.engine.use_db_session caller (idempotency claim/replay,
@@ -282,11 +372,8 @@ class TestInboxSaveCurationIdempotency(TestTemplate):
         db_engine._engine = self.engine
         db_engine._SessionLocal = self.SessionLocal
 
-        self._patchers = [
-            patch("api_server.idempotency.use_db_session", _ctx),
-            patch("api_server.billing.limits.use_db_session", _ctx),
-            # Disable opportunistic idempotency-key cleanup so it can't race.
-            patch("api_server.idempotency.random.random", return_value=1.0),
+    def _extra_patchers(self):
+        return [
             # inbox_save_curation reads each thread's current historyId to stamp
             # the row; mock the Gmail client + batch fetch (no network).
             patch("services.inbox_curation_svc._get_gmail_client"),
@@ -301,18 +388,12 @@ class TestInboxSaveCurationIdempotency(TestTemplate):
                 return_value=FernetEncryption(Fernet.generate_key().decode()),
             ),
         ]
-        for p in self._patchers:
-            p.start()
-        self.client = TestClient(app)
 
-    def teardown_method(self):
-        for p in self._patchers:
-            p.stop()
+    def _extra_teardown(self):
         db_engine._engine = self._orig_engine
         db_engine._SessionLocal = self._orig_session_local
-        app.dependency_overrides.clear()
 
-    def _payload(self, importance: float = 0.9) -> dict:
+    def _judgments(self, importance: float) -> dict:
         return {
             "judgments": [
                 {
@@ -324,35 +405,70 @@ class TestInboxSaveCurationIdempotency(TestTemplate):
             ]
         }
 
-    def _ledger_rows(self, thread_id: str = "t1") -> int:
+    def _payload(self) -> dict:
+        return self._judgments(0.9)
+
+    def _conflicting_payload(self) -> dict:
+        return self._judgments(0.1)
+
+    def _mutation_count(self) -> int:
         with self.SessionLocal() as s:
             return (
-                s.query(ThreadCuration)
-                .filter(ThreadCuration.thread_id == thread_id)
-                .count()
+                s.query(ThreadCuration).filter(ThreadCuration.thread_id == "t1").count()
             )
 
-    def test_missing_idempotency_key_422(self):
-        resp = self.client.post(self.ROUTE, json=self._payload())
-        assert resp.status_code == 422
-        assert "Idempotency-Key" in resp.json()["error"]["message"]
+    def _assert_first_response(self, resp):
+        assert resp.json()["saved"] == 1
 
-    def test_replay_same_key_does_not_double_write(self):
-        headers = {"Idempotency-Key": "k1"}
-        first = self.client.post(self.ROUTE, json=self._payload(), headers=headers)
-        assert first.status_code == 200, first.text
-        assert first.json()["saved"] == 1
-        # Replay: same key + same payload -> cached body, no second write.
-        second = self.client.post(self.ROUTE, json=self._payload(), headers=headers)
-        assert second.status_code == 200
-        assert second.json() == first.json()
-        assert self._ledger_rows("t1") == 1
 
-    def test_same_key_different_payload_conflicts(self):
-        headers = {"Idempotency-Key": "k2"}
-        first = self.client.post(self.ROUTE, json=self._payload(0.9), headers=headers)
-        assert first.status_code == 200, first.text
-        conflict = self.client.post(
-            self.ROUTE, json=self._payload(0.1), headers=headers
-        )
-        assert conflict.status_code == 422
+class TestGmailComposeIdempotency(ServiceRouteIdempotencyBase):
+    """gmail_compose: the mutation is Gmail ``drafts().create()`` - a retried
+    request with the same key must replay instead of creating a second draft
+    (the P0 duplicate-draft bug).
+    """
+
+    ROUTE = "/api/v1/services/gmail_compose"
+
+    def _extra_setup(self):
+        # Mocked Gmail client: drafts().create() is the mutation under test.
+        self.mock_svc = MagicMock()
+        self.mock_svc.users().drafts().create().execute.return_value = {"id": "d-new"}
+        # compose re-fetches the saved draft at format=full after create.
+        self.mock_svc.users().drafts().get().execute.return_value = {
+            "id": "d-new",
+            "message": {
+                "id": "m-new",
+                "threadId": "t-new",
+                "payload": {
+                    "mimeType": "text/plain",
+                    "headers": [
+                        {"name": "To", "value": "alice@example.com"},
+                        {"name": "Subject", "value": "Subj"},
+                    ],
+                    "body": {"data": "Qm9keSE"},  # "Body!"
+                },
+            },
+        }
+        # Reset call counts accrued while configuring return values above.
+        self._create_execute = self.mock_svc.users().drafts().create().execute
+        self._create_execute.reset_mock()
+
+    def _extra_patchers(self):
+        return [
+            patch(
+                "services.gmail_drafts_svc._get_gmail_client",
+                return_value=self.mock_svc,
+            ),
+        ]
+
+    def _payload(self) -> dict:
+        return {"to": "alice@example.com", "subject": "Subj", "body": "Body!"}
+
+    def _conflicting_payload(self) -> dict:
+        return {**self._payload(), "subject": "Other"}
+
+    def _mutation_count(self) -> int:
+        return self._create_execute.call_count
+
+    def _assert_first_response(self, resp):
+        assert resp.json()["draft_id"] == "d-new"

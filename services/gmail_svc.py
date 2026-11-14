@@ -280,6 +280,7 @@ def gmail_status(input: GmailStatusInput) -> GmailStatusResult:
     description="Revoke and remove the user's linked Gmail account",
     input_model=GmailDisconnectInput,
     output_model=GmailDisconnectResult,
+    mutating=True,
 )
 def gmail_disconnect(input: GmailDisconnectInput) -> GmailDisconnectResult:
     """Revoke the stored refresh token with Google + mark the row revoked.

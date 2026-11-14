@@ -8,7 +8,13 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from models.doctor import CheckResultModel, DoctorInput, DoctorResult
+from models.doctor import (
+    CheckResultModel,
+    DoctorFixInput,
+    DoctorInput,
+    DoctorResult,
+    DoctorStreamInput,
+)
 from services import service
 
 _ROOT_DIR = Path(__file__).parent.parent
@@ -275,6 +281,24 @@ _FIXERS: dict[str, Callable[[], bool]] = {
 }
 
 
+def _run_checks() -> list[CheckResultModel]:
+    return [check_fn() for check_fn in _ALL_CHECKS]
+
+
+def _apply_fixers(results: list[CheckResultModel]) -> bool:
+    """Run every applicable fixer; return True if any of them succeeded."""
+    fixed_any = False
+    for r in results:
+        if r.status != "pass" and r.fixable and r.name in _FIXERS and _FIXERS[r.name]():
+            fixed_any = True
+    return fixed_any
+
+
+def _to_result(results: list[CheckResultModel]) -> DoctorResult:
+    has_failures = any(r.status == "fail" for r in results)
+    return DoctorResult(checks=results, has_failures=has_failures)
+
+
 @service(
     name="doctor",
     description="Run health checks on the project environment",
@@ -282,26 +306,30 @@ _FIXERS: dict[str, Callable[[], bool]] = {
     output_model=DoctorResult,
 )
 def doctor(input: DoctorInput) -> DoctorResult:
-    results = [check_fn() for check_fn in _ALL_CHECKS]
-
-    if input.fix:
-        fixed_any = False
-        for r in results:
-            if (
-                r.status != "pass"
-                and r.fixable
-                and r.name in _FIXERS
-                and _FIXERS[r.name]()
-            ):
-                fixed_any = True
-        if fixed_any:
-            results = [check_fn() for check_fn in _ALL_CHECKS]
-
-    has_failures = any(r.status == "fail" for r in results)
-    return DoctorResult(checks=results, has_failures=has_failures)
+    """Pure read: run every check and report. Fixing lives in ``doctor_fix``."""
+    return _to_result(_run_checks())
 
 
-def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
+@service(
+    name="doctor_fix",
+    description="Run health checks and attempt to auto-fix fixable issues",
+    input_model=DoctorFixInput,
+    output_model=DoctorResult,
+    mutating=True,
+)
+def doctor_fix(input: DoctorFixInput) -> DoctorResult:
+    """Mutating variant: check, apply fixers (uv sync, .env scaffold, prek
+    install), then re-check. Split from ``doctor`` so the plain health check
+    stays a pure read (no Idempotency-Key needed) while the fixer path gets
+    REST idempotency enforcement.
+    """
+    results = _run_checks()
+    if _apply_fixers(results):
+        results = _run_checks()
+    return _to_result(results)
+
+
+def iter_doctor(input: DoctorStreamInput) -> Iterator[CheckResultModel]:
     """Yield each ``CheckResultModel`` as it completes - streaming variant of ``doctor``.
 
     Several checks shell out (``_check_deps_synced`` waits up to 30s on
@@ -322,10 +350,6 @@ def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
     if not input.fix:
         return
 
-    fixed_any = False
-    for r in results:
-        if r.status != "pass" and r.fixable and r.name in _FIXERS and _FIXERS[r.name]():
-            fixed_any = True
-    if fixed_any:
+    if _apply_fixers(results):
         for check_fn in _ALL_CHECKS:
             yield check_fn()

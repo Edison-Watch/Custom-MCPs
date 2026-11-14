@@ -2,10 +2,27 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DoctorInput(BaseModel):
+    """Input for the pure ``doctor`` service (checks only, no side effects).
+
+    ``extra="forbid"`` so legacy REST payloads like ``{"fix": true}`` fail
+    loudly with a 422 instead of silently running checks-only: the fixer path
+    moved to the separate ``doctor_fix`` service (``mutating=True``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DoctorFixInput(BaseModel):
+    """Input for ``doctor_fix`` - no options: it always attempts fixes."""
+
+
+class DoctorStreamInput(DoctorInput):
+    """Input for the SSE streaming variant, which may also apply fixers."""
+
     fix: bool = False
 
 

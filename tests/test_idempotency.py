@@ -20,8 +20,47 @@ from api_server.idempotency import (
 )
 from db.base import Base
 from db.models.idempotency_keys import IdempotencyRecord
-from services import ServiceEntry, service
+from services import ServiceEntry, discover_services, get_registry, service
 from tests.test_template import TestTemplate
+
+# Every registered service that mutates state (create/charge/send/delete/
+# modify) and therefore gets Idempotency-Key enforcement on its REST route.
+# Deliberately a literal: adding a state-changing service without mutating=True
+# (or flagging a pure read) must fail here as an explicit diff to this set.
+EXPECTED_MUTATING_SERVICES = frozenset(
+    {
+        # config
+        "config_set",
+        # doctor (fixer path only; plain `doctor` stays a pure read)
+        "doctor_fix",
+        # gmail account + watch
+        "gmail_disconnect",
+        "gmail_watch_start",
+        "gmail_watch_stop",
+        # gmail drafts + attachments
+        "gmail_compose",
+        "gmail_update_draft",
+        "gmail_discard_draft",
+        "gmail_send",
+        "gmail_reply_to_thread",
+        "gmail_add_attachment",
+        "gmail_remove_attachment",
+        # gmail thread label writes (+ curation ledger)
+        "gmail_mark_thread_read",
+        "gmail_archive_thread",
+        "gmail_mark_thread_done",
+        "gmail_unmark_thread_done",
+        # inbox curation ledger
+        "inbox_save_curation",
+        # reddit: both paths start a paid Apify run
+        "reddit_scrape",
+        "reddit_scrape_start",
+        # webhooks
+        "webhook_subscribe",
+        "webhook_unsubscribe",
+        "webhook_rotate_secret",
+    }
+)
 
 
 def _make_engine():
@@ -85,6 +124,20 @@ class TestServiceDecorator(TestTemplate):
             # Keep the global registry clean so other tests/transports that
             # iterate it aren't affected by this throwaway service.
             del services_pkg._registry[before:]
+
+    def test_mutating_flags_pinned(self):
+        """Pin the exact set of mutating=True services (the durable audit).
+
+        Scoped to entries defined under the real ``services`` package so
+        throwaway services registered by other tests can't perturb the set.
+        """
+        discover_services()
+        mutating = {
+            e.name
+            for e in get_registry()
+            if e.mutating and e.func.__module__.startswith("services.")
+        }
+        assert mutating == EXPECTED_MUTATING_SERVICES
 
 
 class TestIdempotencyModel(TestTemplate):

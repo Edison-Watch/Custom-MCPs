@@ -166,6 +166,7 @@ def _validate_webhook_url(url: str) -> None:
     description="Register an HTTPS endpoint to receive signed webhook events",
     input_model=WebhookSubscribeInput,
     output_model=WebhookSubscribeResult,
+    mutating=True,
 )
 def webhook_subscribe(input: WebhookSubscribeInput) -> WebhookSubscribeResult:
     """Create a subscription and return its one-time signing secret."""
@@ -231,6 +232,7 @@ def webhook_list(input: WebhookListInput) -> WebhookListResult:
     description="Deactivate a webhook subscription so it stops receiving events",
     input_model=WebhookUnsubscribeInput,
     output_model=WebhookUnsubscribeResult,
+    mutating=True,
 )
 def webhook_unsubscribe(
     input: WebhookUnsubscribeInput,
@@ -256,6 +258,7 @@ def webhook_unsubscribe(
     description="Issue a new signing secret for a subscription (invalidates the old one)",
     input_model=WebhookRotateSecretInput,
     output_model=WebhookRotateSecretResult,
+    mutating=True,
 )
 def webhook_rotate_secret(
     input: WebhookRotateSecretInput,

@@ -138,6 +138,9 @@ def _build_actor_input(inp: RedditScrapeInput, actor_id: str) -> dict:
     ),
     input_model=RedditScrapeInput,
     output_model=RedditScrapeResult,
+    # Runs a paid Apify Actor (same as reddit_scrape_start, just blocking): a
+    # REST retry must replay the first run's items, not start and bill a second.
+    mutating=True,
 )
 def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
     token = _require_token()

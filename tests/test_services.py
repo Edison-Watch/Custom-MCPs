@@ -43,7 +43,7 @@ class TestConfigService(TestTemplate):
 
 class TestDoctorService(TestTemplate):
     def test_doctor_runs(self):
-        result = doctor(DoctorInput(fix=False))
+        result = doctor(DoctorInput())
         assert len(result.checks) > 0
         assert isinstance(result.has_failures, bool)
 

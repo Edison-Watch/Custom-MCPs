@@ -77,6 +77,7 @@ def config_get(input: ConfigGetInput) -> ConfigGetResult:
     description="Set a configuration override",
     input_model=ConfigSetInput,
     output_model=ConfigSetResult,
+    mutating=True,
 )
 def config_set(input: ConfigSetInput) -> ConfigSetResult:
     override_path = _ROOT_DIR / ".global_config.yaml"

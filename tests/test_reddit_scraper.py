@@ -288,9 +288,10 @@ class TestRedditScrape(TestTemplate):
         discover_services()
         names = {e.name for e in get_registry()}
         assert {"reddit_scrape", "reddit_scrape_start", "reddit_scrape_fetch"} <= names
-        # read-only scrape: not a mutating service
+        # The blocking scrape also runs (and bills) an Apify Actor, so like
+        # reddit_scrape_start it is mutating: REST retries need an Idempotency-Key.
         entry = next(e for e in get_registry() if e.name == "reddit_scrape")
-        assert entry.mutating is False
+        assert entry.mutating is True
         assert reddit_svc  # module imported
 
     def test_scrape_start_is_mutating(self):

@@ -267,6 +267,7 @@ def gmail_update_draft(input: GmailUpdateDraftInput) -> GmailDraft:
     ),
     input_model=GmailComposeInput,
     output_model=GmailDraft,
+    mutating=True,
 )
 def gmail_compose(input: GmailComposeInput) -> GmailDraft:
     svc = _get_gmail_client(input.user_id)
@@ -310,6 +311,7 @@ def gmail_send(input: GmailSendInput) -> GmailSendResult:
     description="Delete a Gmail draft by id",
     input_model=GmailDiscardDraftInput,
     output_model=GmailDiscardDraftResult,
+    mutating=True,
 )
 def gmail_discard_draft(input: GmailDiscardDraftInput) -> GmailDiscardDraftResult:
     """Delete a draft. Gmail's ``drafts().delete`` returns no body on success."""

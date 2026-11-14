@@ -108,20 +108,26 @@ curl -X POST http://localhost:8000/api/v1/services/config_set \
 
 ## doctor
 
-Run project health checks. Optionally auto-fix issues.
+Run project health checks (read-only). The body takes no fields; unknown
+fields such as `fix` are rejected with `422`.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/doctor \
   -H "Authorization: Bearer sk_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"fix": false}'
+  -d '{}'
 ```
 
-**Request body:**
+To also auto-fix fixable issues, call `doctor_fix` instead. It has side
+effects, so it requires an `Idempotency-Key` header:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `fix` | boolean | `false` | Auto-fix fixable issues |
+```bash
+curl -X POST http://localhost:8000/api/v1/services/doctor_fix \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
 
 **Response:**
 
