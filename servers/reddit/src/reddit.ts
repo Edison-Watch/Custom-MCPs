@@ -46,6 +46,17 @@ export const DEFAULT_ACTOR_ID = "fatihtahta~reddit-scraper-search-fast";
  */
 export const SYNC_WAIT_S = 45;
 
+/**
+ * End-to-end budget for one `reddit_scrape` call: the start-and-wait plus the
+ * dataset fetch must both finish inside it, so the response beats a 60s client
+ * cutoff. When too little is left to fetch the items, or the fetch fails, the
+ * run id goes back to the caller instead of the results being lost.
+ */
+export const SYNC_BUDGET_S = 55;
+
+/** Least time worth spending on a dataset fetch; below this, hand the run id back. */
+export const MIN_FETCH_S = 5;
+
 export type RedditSort = "relevance" | "hot" | "top" | "new" | "rising" | "comments";
 export type RedditTime = "all" | "hour" | "day" | "week" | "month" | "year";
 
@@ -144,6 +155,17 @@ export function stillRunningMessage(runId: string, waitedS: number = SYNC_WAIT_S
     `the Reddit scrape is still running after ${waitedS}s (keyword searches can take minutes). ` +
     `It was not cancelled: call reddit_scrape_fetch with run_id "${runId}" to collect the results, ` +
     "and use reddit_scrape_start for slow searches next time."
+  );
+}
+
+/**
+ * The error `reddit_scrape` returns when its run finished but the items could
+ * not be fetched within SYNC_BUDGET_S. The run's results are still on Apify.
+ */
+export function fetchLaterMessage(runId: string): string {
+  return (
+    `the Reddit scrape finished but its results could not be returned in time. ` +
+    `Call reddit_scrape_fetch with run_id "${runId}" to collect them.`
   );
 }
 

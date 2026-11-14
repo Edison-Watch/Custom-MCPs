@@ -1,9 +1,9 @@
 # `reddit` - Edison first-party MCP server
 
 Search and scrape Reddit posts, comments, communities, and users. Three tools:
-`reddit_scrape` (fast, synchronous) plus the `reddit_scrape_start` /
-`reddit_scrape_fetch` pair for slow queries that would outlast a synchronous
-call. Give any of them a search term (optionally scoped to a subreddit) or a
+`reddit_scrape` (fast, waits up to 45s for its run) plus the
+`reddit_scrape_start` / `reddit_scrape_fetch` pair for slow queries that would
+outlast a single call. Give any of them a search term (optionally scoped to a subreddit) or a
 list of Reddit URLs, and they return the matched items in a stable, normalized
 shape.
 
@@ -12,9 +12,9 @@ shape.
 - **Backing:** the [`fatihtahta/reddit-scraper-search-fast`](https://apify.com/fatihtahta/reddit-scraper-search-fast)
   Apify Actor by default (chosen for cost: in production it ran ~2.5x cheaper per
   run than `trudax/reddit-scraper-lite` and, unlike lite, never timed out on
-  keyword searches). `reddit_scrape` uses the synchronous
-  `run-sync-get-dataset-items` endpoint (one blocking call); the async pair
-  enqueues a run and polls it. The Worker holds a single first-party Apify token
+  keyword searches). `reddit_scrape` starts a run with a bounded
+  `waitForFinish` and fetches its items, handing the run id back if it is still
+  going; the async pair enqueues a run and polls it. The Worker holds a single first-party Apify token
   (`APIFY_TOKEN`, a secret) - callers never supply Apify credentials. The Actor
   is swappable via `APIFY_ACTOR_ID` (e.g. back to `trudax/reddit-scraper-lite`,
   a supported fallback); each supported Actor has an adapter that maps its own
@@ -80,9 +80,10 @@ Either way they flow through the same normalized schema.
 
 ## Async run + poll (`reddit_scrape_start` / `reddit_scrape_fetch`)
 
-The synchronous `reddit_scrape` blocks one call on the whole run, which the
-innermost MCP client can cut off before a slow keyword search finishes. The
-async pair decouples start from poll:
+`reddit_scrape` gives up waiting after 45s (the whole call stays inside 55s, so
+it beats a 60s client cutoff) and returns its `run_id`, which a slow keyword
+search can easily outlast. The async pair decouples start from poll from the
+outset:
 
 - **`reddit_scrape_start`** takes the same input as `reddit_scrape`, enqueues a
   non-blocking Apify run, and returns immediately with
@@ -124,9 +125,11 @@ server's catalog id, `reddit`.
 ## Runtime note
 
 `reddit_scrape` starts an Apify run and waits up to `SYNC_WAIT_S` (45s) for it,
-inside the 60s that MCP clients commonly allow a tool call. A run that takes
-longer is not cancelled: the tool returns an error carrying its `run_id`, which
-the caller collects with `reddit_scrape_fetch`. Slow keyword searches should use
+and the whole call, dataset fetch included, stays inside `SYNC_BUDGET_S` (55s),
+under the 60s that MCP clients commonly allow a tool call. A run that takes
+longer is not cancelled, and neither is one whose items cannot be fetched in
+the time left: the tool returns an error carrying its `run_id`, which the caller
+collects with `reddit_scrape_fetch`. Slow keyword searches should use
 `reddit_scrape_start` from the outset.
 
 Every failed Apify call is logged once at error level as an `apify_call_failed`

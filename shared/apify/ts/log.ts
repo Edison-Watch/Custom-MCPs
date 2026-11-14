@@ -9,9 +9,10 @@
  * Workers Logs indexes its fields and it can be grouped by
  * `$metadata.service` + `apify_error_type`.
  *
- * Never put the Apify token or a request body in a field: the event carries
- * only the actor id, the failing stage, the HTTP status and the error message
- * the caller already receives.
+ * Never put the Apify token or a response body in a field: the event carries
+ * only the actor id, the failing stage, the HTTP status, Apify's error type and
+ * an error message. For stage "http" the caller-facing message embeds part of
+ * the response body, so the event's message is rebuilt from the status alone.
  */
 
 /** Where a call failed: reaching Apify, its HTTP status, its JSON, the dataset, or the run itself. */
@@ -23,7 +24,10 @@ export interface ApifyFailure {
   /** Apify Actor id (tilde form) the call ran. */
   actor: string;
   stage: ApifyStage;
-  /** The error message returned to the MCP caller. */
+  /**
+   * The error message returned to the MCP caller. Logged as-is for every stage
+   * except "http", whose message can carry the response body.
+   */
   message: string;
   /** HTTP status Apify answered with, for stage "http". */
   status?: number;
@@ -56,6 +60,14 @@ export function apifyErrorType(body: string | undefined): string | undefined {
   return typeof type === "string" && type.length > 0 ? type : undefined;
 }
 
+/** The message to log: never the response body an "http" caller message carries. */
+function logMessage(failure: ApifyFailure): string {
+  if (failure.stage === "http") {
+    return failure.status === undefined ? "Apify returned an error" : `Apify returned ${failure.status}`;
+  }
+  return failure.message.slice(0, MAX_MESSAGE_CHARS);
+}
+
 /** Build the log event for a failure (pure, so it is unit-testable). */
 export function apifyFailureEvent(failure: ApifyFailure): Record<string, unknown> {
   const event: Record<string, unknown> = {
@@ -63,7 +75,7 @@ export function apifyFailureEvent(failure: ApifyFailure): Record<string, unknown
     service: failure.service,
     actor: failure.actor,
     stage: failure.stage,
-    message: failure.message.slice(0, MAX_MESSAGE_CHARS),
+    message: logMessage(failure),
   };
   if (failure.status !== undefined) event.status = failure.status;
   const type = apifyErrorType(failure.body);

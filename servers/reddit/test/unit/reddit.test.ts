@@ -12,6 +12,9 @@ import {
   runStatusUrl,
   runOutcome,
   stillRunningMessage,
+  fetchLaterMessage,
+  MIN_FETCH_S,
+  SYNC_BUDGET_S,
   SYNC_WAIT_S,
   runsUrl,
   SUCCEEDED,
@@ -429,7 +432,18 @@ describe("stillRunningMessage", () => {
     expect(message).toContain(`${SYNC_WAIT_S}s`);
   });
 
-  test("stays under the 60s MCP client cutoff with room for the dataset fetch", () => {
-    expect(SYNC_WAIT_S).toBeLessThanOrEqual(50);
+  test("the whole sync call fits a 60s MCP client cutoff, with room for the dataset fetch", () => {
+    expect(SYNC_BUDGET_S).toBeLessThan(60);
+    expect(SYNC_WAIT_S + MIN_FETCH_S).toBeLessThanOrEqual(SYNC_BUDGET_S);
+    // Apify caps waitForFinish at 60s.
+    expect(SYNC_WAIT_S).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("fetchLaterMessage", () => {
+  test("hands the caller the run id and the tool to collect it with", () => {
+    const message = fetchLaterMessage("RUN9");
+    expect(message).toContain('run_id "RUN9"');
+    expect(message).toContain("reddit_scrape_fetch");
   });
 });

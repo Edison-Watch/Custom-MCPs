@@ -27,7 +27,9 @@ import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
   DEFAULT_ACTOR_ID,
+  MIN_FETCH_S,
   SUCCEEDED,
+  SYNC_BUDGET_S,
   SYNC_WAIT_S,
   datasetItemsUrl,
   hasTarget,
@@ -36,6 +38,7 @@ import {
   parseRunStatus,
   runOutcome,
   runStatusUrl,
+  fetchLaterMessage,
   runsUrl,
   stillRunningMessage,
   validateDatasetItems,
@@ -204,12 +207,18 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
   }
 
   /** Fetch a finished run's dataset and normalize it onto the stable item shape. */
-  private async fetchItems(token: string, actorId: string, datasetId: string, runId: string): Promise<ItemsResult> {
+  private async fetchItems(
+    token: string,
+    actorId: string,
+    datasetId: string,
+    runId: string,
+    timeoutMs: number = 60_000,
+  ): Promise<ItemsResult> {
     const url = new URL(datasetItemsUrl(datasetId, this.apifyBase()));
     url.searchParams.set("format", "json");
     url.searchParams.set("clean", "true");
-    // The run has finished, so this is fast.
-    const res = await this.callApify(token, actorId, url.toString(), { method: "GET", timeoutMs: 60_000, runId });
+    // The run has finished, so this is normally fast.
+    const res = await this.callApify(token, actorId, url.toString(), { method: "GET", timeoutMs, runId });
     if (!res.ok) return res;
 
     const parsed = validateDatasetItems(res.json);
@@ -254,6 +263,8 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         }
 
         const actorId = this.actorId();
+        // The whole call, start-and-wait plus dataset fetch, fits in SYNC_BUDGET_S.
+        const deadline = Date.now() + SYNC_BUDGET_S * 1000;
         // Start the run and let Apify hold the response until it finishes, up to
         // SYNC_WAIT_S. Unlike run-sync-get-dataset-items, a slow run is not lost
         // when the wait runs out: its id goes back to the caller.
@@ -262,7 +273,7 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const res = await this.callApify(token, actorId, url.toString(), {
           method: "POST",
           body: buildActorInput(args, actorId),
-          timeoutMs: (SYNC_WAIT_S + 15) * 1000,
+          timeoutMs: SYNC_BUDGET_S * 1000,
         });
         if (!res.ok) return textError(res.message);
 
@@ -271,7 +282,7 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
 
         const outcome = runOutcome(run.status);
         if (outcome === "running") {
-          console.warn({ event: "reddit_scrape_handed_off", run_id: run.run_id, waited_s: SYNC_WAIT_S });
+          console.warn({ event: "reddit_scrape_handed_off", run_id: run.run_id, reason: "still_running" });
           return textError(stillRunningMessage(run.run_id));
         }
         if (outcome === "failed") {
@@ -286,8 +297,15 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           );
         }
 
-        const items = await this.fetchItems(token, actorId, run.dataset_id, run.run_id);
-        if (!items.ok) return textError(items.message);
+        // The run succeeded, so its results exist on Apify: if they cannot be
+        // fetched within the budget, hand the run id back rather than lose them.
+        const remainingMs = deadline - Date.now();
+        if (remainingMs < MIN_FETCH_S * 1000) {
+          console.warn({ event: "reddit_scrape_handed_off", run_id: run.run_id, reason: "budget" });
+          return textError(fetchLaterMessage(run.run_id));
+        }
+        const items = await this.fetchItems(token, actorId, run.dataset_id, run.run_id, remainingMs);
+        if (!items.ok) return textError(`${items.message}. ${fetchLaterMessage(run.run_id)}`);
         return {
           content: [
             { type: "text" as const, text: `Reddit scrape returned ${items.items.length} item(s)` },
@@ -402,6 +420,12 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
             outcome === "failed"
               ? `Run ${runId} ended without items: ${status.status}`
               : `Run ${runId} status: ${status.status} - poll again`;
+          // A terminal failure is an Apify failure even though the status GET
+          // itself succeeded. Each poll of the same failed run logs again; the
+          // run_id field lets a query count distinct runs.
+          if (outcome === "failed") {
+            logApifyFailure({ service: SERVICE, actor: actorId, stage: "run", runId, message: text });
+          }
           return {
             content: [{ type: "text" as const, text }],
             structuredContent: { status: status.status, count: 0, items: [] },

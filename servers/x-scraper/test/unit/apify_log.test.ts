@@ -41,20 +41,24 @@ describe("apifyFailureEvent", () => {
       stage: "http",
       status: 401,
       apify_error_type: "user-or-token-not-found",
-      message: `Apify returned 401: ${REVOKED_TOKEN_BODY}`,
+      message: "Apify returned 401",
     });
   });
 
-  test("never copies the raw body into the event", () => {
+  test("never logs the response body, even when the caller-facing message embeds it", () => {
+    const body = JSON.stringify({ error: { type: "invalid-input", message: "secret-looking upstream detail" } });
     const event = apifyFailureEvent({
       service: "x",
       actor: "a~b",
       stage: "http",
-      status: 500,
-      body: "secret-looking upstream body",
-      message: "Apify returned 500",
+      status: 400,
+      body,
+      // What the servers actually pass: the caller message carries the body.
+      message: `Apify returned 400: ${body.slice(0, 500)}`,
     });
-    expect(JSON.stringify(event)).not.toContain("secret-looking upstream body");
+    expect(JSON.stringify(event)).not.toContain("secret-looking upstream detail");
+    expect(event.message).toBe("Apify returned 400");
+    expect(event.apify_error_type).toBe("invalid-input");
   });
 
   test("leaves out fields that do not apply and keeps the run id", () => {
