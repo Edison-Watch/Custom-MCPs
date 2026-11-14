@@ -60,8 +60,10 @@ def service(
     Set ``mutating=True`` for services with side effects (create/charge/send)
     so the HTTP transport enforces ``Idempotency-Key`` and replays the stored
     response on retries. Leave it ``False`` (the default) for pure/read-only
-    services. The flag only affects the API transport; CLI and MCP are
-    unchanged.
+    services. On MCP, the flag also gates the enhancer crash-fallback
+    (``mcp_server/_tool_factory.py``): a mutating service is never silently
+    re-executed - the fallback reuses the already-completed ``tool.call()``
+    result or propagates the enhancer error. CLI behavior is unchanged.
     """
 
     def decorator(func):

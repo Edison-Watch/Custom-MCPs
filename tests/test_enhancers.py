@@ -176,94 +176,11 @@ class TestEnhancerRegistry(TestTemplate):
         assert get_enhancer("__definitely_not_a_real_service__") is None
 
 
-class TestEnhancerCrashFallback(TestTemplate):
-    """Verify @enhance(fallback=...) handling when the enhancer raises."""
+class TestEnhancedToolContextInjection(TestTemplate):
+    """Enhanced tools receive Context without exposing it in the input schema.
 
-    def _register_test_service_and_get_tool_fn(self, fallback_mode, enhancer_fn):
-        """Register a throwaway service + enhancer, register the tool, return the wrapped fn."""
-
-        class _CrashIn(BaseModel):
-            x: int = 0
-
-        class _CrashOut(BaseModel):
-            value: int
-
-        svc_name = f"__crash_test_{fallback_mode}"
-
-        @service(
-            name=svc_name,
-            description="test",
-            input_model=_CrashIn,
-            output_model=_CrashOut,
-        )
-        def _svc(input: _CrashIn) -> _CrashOut:
-            return _CrashOut(value=input.x * 100)
-
-        enhance(svc_name, fallback=fallback_mode)(enhancer_fn)
-
-        entry = next(e for e in get_registry() if e.name == svc_name)
-        test_mcp = FastMCP("test_crash")
-        make_tool(test_mcp, entry)
-        tool_fn = test_mcp._tool_manager._tools[svc_name].fn
-
-        def cleanup():
-            _registry[:] = [e for e in _registry if e.name != svc_name]
-            _enhancers.pop(svc_name, None)
-
-        return tool_fn, cleanup
-
-    def test_crash_with_headless_fallback_returns_pure_service_result(self):
-        async def crashing_enhancer(tool):
-            raise RuntimeError("simulated enhancer failure")
-
-        tool_fn, cleanup = self._register_test_service_and_get_tool_fn(
-            "headless", crashing_enhancer
-        )
-        try:
-            ctx = _make_mock_ctx()
-            result = asyncio.run(tool_fn(ctx=ctx, x=7))
-            # Result is a CallToolResult with the pure service's output
-            assert result.structuredContent == {"value": 700}
-        finally:
-            cleanup()
-
-    def test_crash_with_error_fallback_propagates(self):
-        async def crashing_enhancer(tool):
-            raise RuntimeError("boom")
-
-        tool_fn, cleanup = self._register_test_service_and_get_tool_fn(
-            "error", crashing_enhancer
-        )
-        try:
-            ctx = _make_mock_ctx()
-            with pytest.raises(RuntimeError, match="boom"):
-                asyncio.run(tool_fn(ctx=ctx, x=1))
-        finally:
-            cleanup()
-
-    def test_partial_output_discarded_on_crash(self):
-        """If the enhancer attaches content/app meta and *then* crashes, the
-        fallback CallToolResult must not ship that partial output."""
-
-        async def crashing_after_partial(tool):
-            tool.send_text("DO NOT SHIP THIS")
-            tool.send_app("ui://should-be-discarded")
-            raise RuntimeError("crash after partial")
-
-        tool_fn, cleanup = self._register_test_service_and_get_tool_fn(
-            "headless", crashing_after_partial
-        )
-        try:
-            ctx = _make_mock_ctx()
-            result = asyncio.run(tool_fn(ctx=ctx, x=3))
-            assert result.structuredContent == {"value": 300}
-            # Only the auto-generated text block; no DO NOT SHIP THIS.
-            assert all(
-                "DO NOT SHIP" not in c.text for c in result.content if c.type == "text"
-            )
-            assert result.meta is None
-        finally:
-            cleanup()
+    Crash-fallback behavior lives in `tests/test_enhancer_fallback.py`.
+    """
 
     def test_context_is_injected_and_not_published_in_schema(self):
         class _CtxIn(BaseModel):

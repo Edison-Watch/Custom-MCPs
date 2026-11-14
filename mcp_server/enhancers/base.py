@@ -52,12 +52,23 @@ class EnhancedTool[TInput: BaseModel, TOutput: BaseModel]:
         self._service_fn = service_fn
         self.extra_content: list[TextContent | ImageContent | AudioContent] = []
         self.app_resource_uri: str | None = None
+        # Result of the most recent *completed* `call()`, or None if the last
+        # `call()` raised (or never ran). Lets the fallback path in
+        # `mcp_server._tool_factory` reuse the result instead of re-executing
+        # the service (which would duplicate side effects for mutating
+        # services) when the enhancer crashes after `call()` completed.
+        self.call_result: TOutput | None = None
 
     def call(self, override_input: TInput | None = None) -> TOutput:
         """Invoke the pure service. Pass `override_input` instead of mutating `tool.input`."""
-        return self._service_fn(
+        # Reset first: a stale stash from an earlier call must not mask a
+        # failure of *this* invocation as success in the crash-fallback path.
+        self.call_result = None
+        result = self._service_fn(
             override_input if override_input is not None else self.input
         )
+        self.call_result = result
+        return result
 
     @property
     def can_elicit(self) -> bool:

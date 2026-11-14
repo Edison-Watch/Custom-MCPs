@@ -165,6 +165,7 @@ exclude = [
     "tests/test_health_enhanced.py",
     "tests/test_billing.py",
     "tests/test_idempotency.py",
+    "tests/test_enhancer_fallback.py",
     "tests/test_scopes.py",
     "utils/llm/",
     "common/",

@@ -82,7 +82,7 @@ Layering (top calls down, never the reverse):
 5. (HTTP, optional) Route in `api_server/routes/`.
 6. Tests inheriting `TestTemplate`.
 
-`mutating=True` services get REST `Idempotency-Key` enforcement on their auto-generated API route: the key is required, claimed in the `idempotency_keys` table, and the response replayed on retries (same key + different payload → 422). API-only; CLI/MCP unaffected. Logic in `api_server/idempotency.py:execute_idempotent`.
+`mutating=True` services get REST `Idempotency-Key` enforcement on their auto-generated API route: the key is required, claimed in the `idempotency_keys` table, and the response replayed on retries (same key + different payload → 422). Logic in `api_server/idempotency.py:execute_idempotent`. CLI unaffected. On MCP, `mutating` also gates the enhancer crash-fallback (`mcp_server/_tool_factory.py`): a mutating service is never silently re-executed - the fallback reuses the already-completed `tool.call()` result or propagates the enhancer error.
 
 ## Code Style
 

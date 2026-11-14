@@ -138,18 +138,12 @@ def _make_enhanced_tool(
             # would only raise it again. MCP-only affordance: upgrade to the
             # SEP-1036 URL-elicitation error (-32042) when possible.
             reraise_with_elicitation(ctx.session, exc)
-        except Exception:  # noqa: BLE001
+        except Exception as enhancer_exc:  # noqa: BLE001
             # Enhancer failures of any kind must fall back to the pure service
             # so MCP clients still get a structured result on the headless path.
             if enhancer_entry.fallback == "error":
                 raise
-            log.exception(
-                "enhancer for {!r} crashed; falling back to headless", entry.name
-            )
-            try:
-                result = func(input_obj)
-            except ConnectRequiredError as exc:
-                reraise_with_elicitation(ctx.session, exc)
+            result = _recover_from_enhancer_crash(tool, entry, ctx, enhancer_exc)
             # Discard any partial output the enhancer accumulated before crashing.
             tool.extra_content = []
             tool.app_resource_uri = None
@@ -168,6 +162,42 @@ def _make_enhanced_tool(
     )
     mcp.tool(name=entry.name, description=entry.description, meta=meta)(tool_fn)
     _patch_output_schema(mcp, entry.name, output_model)
+
+
+def _recover_from_enhancer_crash(
+    tool: EnhancedTool,
+    entry: ServiceEntry,
+    ctx: Context,
+    enhancer_exc: Exception,
+) -> BaseModel:
+    """Resolve the headless-fallback result after an enhancer crash.
+
+    Never executes the service twice:
+
+    - If the enhancer's last ``tool.call()`` completed, reuse that stashed
+      result - re-invoking the service would duplicate side effects for
+      mutating services (e.g. a second Gmail draft or a double charge).
+    - If there is no completed result and the service is ``mutating``,
+      propagate the enhancer error instead of silently re-executing.
+    - Otherwise (non-mutating, never completed) retry headless via
+      ``tool.call()`` - the single code path that invokes the service.
+    """
+    if tool.call_result is not None:
+        log.opt(exception=enhancer_exc).error(
+            "enhancer for {!r} crashed after tool.call(); reusing the "
+            "completed service result",
+            entry.name,
+        )
+        return tool.call_result
+    if entry.mutating:
+        raise enhancer_exc
+    log.opt(exception=enhancer_exc).error(
+        "enhancer for {!r} crashed; falling back to headless", entry.name
+    )
+    try:
+        return tool.call()
+    except ConnectRequiredError as exc:
+        reraise_with_elicitation(ctx.session, exc)
 
 
 def _patch_output_schema(mcp: FastMCP, tool_name: str, output_model: type) -> None:
