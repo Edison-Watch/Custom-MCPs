@@ -18,6 +18,7 @@ import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotoc
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
+import { logApifyFailure, type ApifyFailure } from "./apify_log";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
@@ -57,6 +58,9 @@ export interface Env {
   EDISON_JWT_AUDIENCE?: string;
 }
 
+/** Fleet server id, used to tag log events. */
+const SERVICE = "youtube";
+
 function textError(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
 }
@@ -70,6 +74,12 @@ export class YoutubeMCP extends McpAgent<Env, unknown, Record<string, unknown>> 
     actorInput: Record<string, unknown>,
     token: string,
   ): Promise<Record<string, unknown>[] | { error: string }> {
+    // Every failure below is logged (see ./apify_log) before it becomes an
+    // isError result, so an Apify outage shows up in Workers Logs.
+    const fail = (f: Omit<ApifyFailure, "service" | "actor">) => ({
+      error: logApifyFailure({ service: SERVICE, actor: actorId, ...f }),
+    });
+
     const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
     const url = new URL(runSyncUrl(actorId, base));
     url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
@@ -87,23 +97,28 @@ export class YoutubeMCP extends McpAgent<Env, unknown, Record<string, unknown>> 
       });
     } catch (err) {
       const name = err instanceof Error ? err.constructor.name : "Error";
-      return { error: `could not reach Apify: ${name}` };
+      return fail({ stage: "network", message: `could not reach Apify: ${name}` });
     }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      return { error: `Apify returned ${res.status}: ${body.slice(0, 500)}` };
+      return fail({
+        stage: "http",
+        status: res.status,
+        body,
+        message: `Apify returned ${res.status}: ${body.slice(0, 500)}`,
+      });
     }
 
     let json: unknown;
     try {
       json = await res.json();
     } catch {
-      return { error: "Apify returned invalid JSON" };
+      return fail({ stage: "json", message: "Apify returned invalid JSON" });
     }
 
     const parsed = validateDatasetItems(json);
-    if (!parsed.ok) return { error: parsed.error };
+    if (!parsed.ok) return fail({ stage: "dataset", message: parsed.error });
     return parsed.items;
   }
 

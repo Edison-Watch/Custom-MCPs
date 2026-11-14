@@ -4,9 +4,10 @@
  * Search and scrape Reddit posts, comments, communities, and users. Wraps the
  * `fatihtahta/reddit-scraper-search-fast` Apify Actor (swappable via
  * APIFY_ACTOR_ID; trudax/reddit-scraper-lite is a supported fallback). The
- * fast `reddit_scrape` tool uses the synchronous `run-sync-get-dataset-items`
- * endpoint (one blocking call); the `reddit_scrape_start` / `reddit_scrape_fetch`
- * pair runs a slow query asynchronously (enqueue a run, then poll it). All three
+ * fast `reddit_scrape` tool starts a run and waits up to SYNC_WAIT_S for it,
+ * handing the run id back if it is still going; the `reddit_scrape_start` /
+ * `reddit_scrape_fetch` pair runs a slow query asynchronously (enqueue a run,
+ * then poll it). All three
  * return items normalized onto a stable, actor-agnostic shape (see ./reddit).
  * The Worker holds a single first-party Apify token
  * (APIFY_TOKEN, a secret) and authenticates *callers* separately via the fleet
@@ -21,22 +22,27 @@ import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 
 import { buildActorInput } from "./adapters";
+import { logApifyFailure, type ApifyFailure } from "./apify_log";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
   DEFAULT_ACTOR_ID,
-  RUN_TIMEOUT_S,
+  MIN_FETCH_S,
   SUCCEEDED,
-  TERMINAL_FAILURE,
+  SYNC_BUDGET_S,
+  SYNC_WAIT_S,
   datasetItemsUrl,
   hasTarget,
   normalizeItems,
   parseRunStart,
   parseRunStatus,
+  runOutcome,
   runStatusUrl,
-  runSyncUrl,
+  fetchLaterMessage,
   runsUrl,
+  stillRunningMessage,
   validateDatasetItems,
+  type NormalizedRedditItem,
   type RedditScrapeArgs,
 } from "./reddit";
 
@@ -59,6 +65,9 @@ export interface Env {
   EDISON_JWT_ISSUER?: string;
   EDISON_JWT_AUDIENCE?: string;
 }
+
+/** Fleet server id, used to tag log events. */
+const SERVICE = "reddit";
 
 function textError(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
@@ -127,8 +136,102 @@ const normalizedItemSchema = z.object({
   raw: z.record(z.string(), z.any()).describe("The untouched Actor dataset item."),
 });
 
+type ApifyCall = { ok: true; json: unknown } | { ok: false; message: string };
+type ItemsResult = { ok: true; items: NormalizedRedditItem[] } | { ok: false; message: string };
+
 export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
   server = new McpServer({ name: "reddit", version: "0.1.0" });
+
+  private actorId(): string {
+    return this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
+  }
+
+  private apifyBase(): string {
+    return this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
+  }
+
+  /**
+   * One Apify API call: fetch, check the status, parse the JSON. Every failure
+   * is logged (see ./apify_log) before it becomes the caller's error message, so
+   * an Apify outage shows up in Workers Logs instead of only in isError results.
+   */
+  private async callApify(
+    token: string,
+    actorId: string,
+    url: string,
+    opts: { method: "GET" | "POST"; body?: unknown; timeoutMs: number; runId?: string },
+  ): Promise<ApifyCall> {
+    const fail = (f: Omit<ApifyFailure, "service" | "actor" | "runId">): ApifyCall => ({
+      ok: false,
+      message: logApifyFailure({ service: SERVICE, actor: actorId, runId: opts.runId, ...f }),
+    });
+
+    // Bearer header rather than a ?token= query param: keeps the secret out of
+    // URLs that proxies and servers may log.
+    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+    if (opts.body !== undefined) headers["content-type"] = "application/json";
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: opts.method,
+        headers,
+        body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+        signal: AbortSignal.timeout(opts.timeoutMs),
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.constructor.name : "Error";
+      return fail({ stage: "network", message: `could not reach Apify: ${name}` });
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return fail({
+        stage: "http",
+        status: res.status,
+        body,
+        message: `Apify returned ${res.status}: ${body.slice(0, 500)}`,
+      });
+    }
+
+    try {
+      return { ok: true, json: await res.json() };
+    } catch {
+      return fail({ stage: "json", message: "Apify returned invalid JSON" });
+    }
+  }
+
+  /** Log a malformed Apify response and return the caller-facing message. */
+  private badShape(actorId: string, message: string, runId?: string): string {
+    return logApifyFailure({ service: SERVICE, actor: actorId, stage: "json", message, runId });
+  }
+
+  /** Fetch a finished run's dataset and normalize it onto the stable item shape. */
+  private async fetchItems(
+    token: string,
+    actorId: string,
+    datasetId: string,
+    runId: string,
+    timeoutMs: number = 60_000,
+  ): Promise<ItemsResult> {
+    const url = new URL(datasetItemsUrl(datasetId, this.apifyBase()));
+    url.searchParams.set("format", "json");
+    url.searchParams.set("clean", "true");
+    // The run has finished, so this is normally fast.
+    const res = await this.callApify(token, actorId, url.toString(), { method: "GET", timeoutMs, runId });
+    if (!res.ok) return res;
+
+    const parsed = validateDatasetItems(res.json);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        message: logApifyFailure({ service: SERVICE, actor: actorId, stage: "dataset", message: parsed.error, runId }),
+      };
+    }
+    // Normalize onto the stable, actor-agnostic shape so callers never depend
+    // on the configured Actor's raw field names.
+    return { ok: true, items: normalizeItems(parsed.items, actorId) };
+  }
 
   async init(): Promise<void> {
     this.server.registerTool(
@@ -138,7 +241,8 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           "Search and scrape Reddit. Provide `search` (optionally narrowed to a `subreddit`) or " +
           "one or more `start_urls` pointing at Reddit posts/communities/users. Returns the matched " +
           "dataset items (posts by default; comments too when include_comments is set). Fast path " +
-          "for listing/comment pulls; use reddit_scrape_start for slow keyword searches.",
+          `for listing/comment pulls: a run that takes longer than ${SYNC_WAIT_S}s returns an error ` +
+          "carrying its run_id for reddit_scrape_fetch. Use reddit_scrape_start for slow keyword searches.",
         inputSchema: scrapeInputSchema,
         outputSchema: {
           count: z.number().describe("Number of items returned."),
@@ -158,51 +262,55 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           return textError("server misconfigured: APIFY_TOKEN not set");
         }
 
-        const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
-        const url = new URL(runSyncUrl(actorId, base));
-        url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
-        url.searchParams.set("format", "json");
+        const actorId = this.actorId();
+        // The whole call, start-and-wait plus dataset fetch, fits in SYNC_BUDGET_S.
+        const deadline = Date.now() + SYNC_BUDGET_S * 1000;
+        // Start the run and let Apify hold the response until it finishes, up to
+        // SYNC_WAIT_S. Unlike run-sync-get-dataset-items, a slow run is not lost
+        // when the wait runs out: its id goes back to the caller.
+        const url = new URL(runsUrl(actorId, this.apifyBase()));
+        url.searchParams.set("waitForFinish", String(SYNC_WAIT_S));
+        const res = await this.callApify(token, actorId, url.toString(), {
+          method: "POST",
+          body: buildActorInput(args, actorId),
+          timeoutMs: SYNC_BUDGET_S * 1000,
+        });
+        if (!res.ok) return textError(res.message);
 
-        let res: Response;
-        try {
-          res = await fetch(url.toString(), {
-            method: "POST",
-            // Bearer header rather than a ?token= query param: keeps the secret
-            // out of URLs that proxies and servers may log.
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify(buildActorInput(args, actorId)),
-            signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
-          });
-        } catch (err) {
-          const name = err instanceof Error ? err.constructor.name : "Error";
-          return textError(`could not reach Apify: ${name}`);
+        const run = parseRunStart(res.json);
+        if (!run.ok) return textError(this.badShape(actorId, run.error));
+
+        const outcome = runOutcome(run.status);
+        if (outcome === "running") {
+          console.warn({ event: "reddit_scrape_handed_off", run_id: run.run_id, reason: "still_running" });
+          return textError(stillRunningMessage(run.run_id));
+        }
+        if (outcome === "failed") {
+          return textError(
+            logApifyFailure({
+              service: SERVICE,
+              actor: actorId,
+              stage: "run",
+              runId: run.run_id,
+              message: `Reddit scrape run ${run.run_id} ended without items: ${run.status}`,
+            }),
+          );
         }
 
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return textError(`Apify returned ${res.status}: ${body.slice(0, 500)}`);
+        // The run succeeded, so its results exist on Apify: if they cannot be
+        // fetched within the budget, hand the run id back rather than lose them.
+        const remainingMs = deadline - Date.now();
+        if (remainingMs < MIN_FETCH_S * 1000) {
+          console.warn({ event: "reddit_scrape_handed_off", run_id: run.run_id, reason: "budget" });
+          return textError(fetchLaterMessage(run.run_id));
         }
-
-        let json: unknown;
-        try {
-          json = await res.json();
-        } catch {
-          return textError("Apify returned invalid JSON");
-        }
-
-        const parsed = validateDatasetItems(json);
-        if (!parsed.ok) return textError(parsed.error);
-
-        // Normalize onto the stable, actor-agnostic shape so callers never
-        // depend on the configured Actor's raw field names.
-        const items = normalizeItems(parsed.items, actorId);
-        const structuredContent = { count: items.length, items };
+        const items = await this.fetchItems(token, actorId, run.dataset_id, run.run_id, remainingMs);
+        if (!items.ok) return textError(`${items.message}. ${fetchLaterMessage(run.run_id)}`);
         return {
           content: [
-            { type: "text" as const, text: `Reddit scrape returned ${items.length} item(s)` },
+            { type: "text" as const, text: `Reddit scrape returned ${items.items.length} item(s)` },
           ],
-          structuredContent,
+          structuredContent: { count: items.items.length, items: items.items },
         };
       },
     );
@@ -232,37 +340,17 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           return textError("server misconfigured: APIFY_TOKEN not set");
         }
 
-        const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
+        const actorId = this.actorId();
+        const res = await this.callApify(token, actorId, runsUrl(actorId, this.apifyBase()), {
+          method: "POST",
+          body: buildActorInput(args, actorId),
+          // Short budget: this call only enqueues a run, it never waits on it.
+          timeoutMs: 30_000,
+        });
+        if (!res.ok) return textError(res.message);
 
-        let res: Response;
-        try {
-          res = await fetch(runsUrl(actorId, base), {
-            method: "POST",
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            body: JSON.stringify(buildActorInput(args, actorId)),
-            // Short budget: this call only enqueues a run, it never waits on it.
-            signal: AbortSignal.timeout(30_000),
-          });
-        } catch (err) {
-          const name = err instanceof Error ? err.constructor.name : "Error";
-          return textError(`could not reach Apify: ${name}`);
-        }
-
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          return textError(`Apify returned ${res.status}: ${body.slice(0, 500)}`);
-        }
-
-        let json: unknown;
-        try {
-          json = await res.json();
-        } catch {
-          return textError("Apify returned invalid JSON");
-        }
-
-        const parsed = parseRunStart(json);
-        if (!parsed.ok) return textError(parsed.error);
+        const parsed = parseRunStart(res.json);
+        if (!parsed.ok) return textError(this.badShape(actorId, parsed.error));
 
         const structuredContent = {
           run_id: parsed.run_id,
@@ -280,9 +368,9 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
       "reddit_scrape_fetch",
       {
         description:
-          "Poll an asynchronous Reddit scrape started by reddit_scrape_start. Returns the run status; " +
-          "items are empty while it is still running and populated once it has SUCCEEDED. Poll again " +
-          "on a non-terminal status.",
+          "Poll an asynchronous Reddit scrape started by reddit_scrape_start (or handed back by " +
+          "reddit_scrape). Returns the run status; items are empty while it is still running and " +
+          "populated once it has SUCCEEDED. Poll again on a non-terminal status.",
         inputSchema: {
           // Opaque Apify run id: reject anything with path/query syntax so a
           // caller value can never reshape the actor-runs URL (mirrors the
@@ -311,42 +399,33 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           return textError("server misconfigured: APIFY_TOKEN not set");
         }
 
-        const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
-        const headers = { authorization: `Bearer ${token}` };
+        const actorId = this.actorId();
 
         // 1. Run-status GET - always fast.
-        let runRes: Response;
-        try {
-          runRes = await fetch(runStatusUrl(runId, base), {
-            method: "GET",
-            headers,
-            signal: AbortSignal.timeout(30_000),
-          });
-        } catch (err) {
-          const name = err instanceof Error ? err.constructor.name : "Error";
-          return textError(`could not reach Apify: ${name}`);
-        }
-        if (!runRes.ok) {
-          const body = await runRes.text().catch(() => "");
-          return textError(`Apify returned ${runRes.status}: ${body.slice(0, 500)}`);
-        }
-        let runJson: unknown;
-        try {
-          runJson = await runRes.json();
-        } catch {
-          return textError("Apify returned invalid JSON");
-        }
-        const status = parseRunStatus(runJson);
-        if (!status.ok) return textError(status.error);
+        const res = await this.callApify(token, actorId, runStatusUrl(runId, this.apifyBase()), {
+          method: "GET",
+          timeoutMs: 30_000,
+          runId,
+        });
+        if (!res.ok) return textError(res.message);
+        const status = parseRunStatus(res.json);
+        if (!status.ok) return textError(this.badShape(actorId, status.error, runId));
 
         // Non-terminal or terminal-failure: hand back the status with no items.
         // Split the two so the message states intent - a terminal failure means
         // stop polling, a non-terminal status means poll again.
-        if (status.status !== SUCCEEDED) {
-          const text = TERMINAL_FAILURE.has(status.status)
-            ? `Run ${runId} ended without items: ${status.status}`
-            : `Run ${runId} status: ${status.status} - poll again`;
+        const outcome = runOutcome(status.status);
+        if (outcome !== "succeeded") {
+          const text =
+            outcome === "failed"
+              ? `Run ${runId} ended without items: ${status.status}`
+              : `Run ${runId} status: ${status.status} - poll again`;
+          // A terminal failure is an Apify failure even though the status GET
+          // itself succeeded. Each poll of the same failed run logs again; the
+          // run_id field lets a query count distinct runs.
+          if (outcome === "failed") {
+            logApifyFailure({ service: SERVICE, actor: actorId, stage: "run", runId, message: text });
+          }
           return {
             content: [{ type: "text" as const, text }],
             structuredContent: { status: status.status, count: 0, items: [] },
@@ -354,43 +433,17 @@ export class RedditMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         }
 
         if (!status.dataset_id) {
-          return textError("Apify run SUCCEEDED but returned no defaultDatasetId");
+          return textError(this.badShape(actorId, "Apify run SUCCEEDED but returned no defaultDatasetId", runId));
         }
 
-        // 2. Dataset items GET - the run has finished, so this is fast too.
-        const itemsUrl = new URL(datasetItemsUrl(status.dataset_id, base));
-        itemsUrl.searchParams.set("format", "json");
-        itemsUrl.searchParams.set("clean", "true");
-        let itemsRes: Response;
-        try {
-          itemsRes = await fetch(itemsUrl.toString(), {
-            method: "GET",
-            headers,
-            signal: AbortSignal.timeout(60_000),
-          });
-        } catch (err) {
-          const name = err instanceof Error ? err.constructor.name : "Error";
-          return textError(`could not reach Apify: ${name}`);
-        }
-        if (!itemsRes.ok) {
-          const body = await itemsRes.text().catch(() => "");
-          return textError(`Apify returned ${itemsRes.status}: ${body.slice(0, 500)}`);
-        }
-        let itemsJson: unknown;
-        try {
-          itemsJson = await itemsRes.json();
-        } catch {
-          return textError("Apify returned invalid JSON");
-        }
-        const parsed = validateDatasetItems(itemsJson);
-        if (!parsed.ok) return textError(parsed.error);
-
-        const items = normalizeItems(parsed.items, actorId);
+        // 2. Dataset items GET.
+        const items = await this.fetchItems(token, actorId, status.dataset_id, runId);
+        if (!items.ok) return textError(items.message);
         return {
           content: [
-            { type: "text" as const, text: `Run ${runId} SUCCEEDED with ${items.length} item(s)` },
+            { type: "text" as const, text: `Run ${runId} SUCCEEDED with ${items.items.length} item(s)` },
           ],
-          structuredContent: { status: SUCCEEDED, count: items.length, items },
+          structuredContent: { status: SUCCEEDED, count: items.items.length, items: items.items },
         };
       },
     );
