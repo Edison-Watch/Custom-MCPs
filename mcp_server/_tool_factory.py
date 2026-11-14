@@ -1,12 +1,14 @@
 """Internal tool-registration factory for `mcp_server.server`.
 
-Builds FastMCP tools from `ServiceEntry` records, branching between two paths:
+Builds MCPServer (python-sdk 2.x) tools from `ServiceEntry` records, branching between two paths:
 
-- **Headless**: sync wrapper, returns the Pydantic output model. FastMCP derives
-  `outputSchema` from the return annotation.
+- **Headless**: sync wrapper, returns the Pydantic output model. The SDK derives
+  `outputSchema` from the return annotation. It also takes a hidden ``ctx``
+  (excluded from the input schema) purely to read client capabilities when
+  upgrading a connect-required failure to URL elicitation.
 - **Enhanced**: async wrapper with `Context`, calls an `@enhance`-registered
   function. Returns a `CallToolResult`. We patch `outputSchema` explicitly
-  because FastMCP doesn't derive it when a tool returns `CallToolResult`.
+  because the SDK doesn't derive it when a tool returns `CallToolResult`.
 
 Don't reach for these helpers from feature code - use `@service` and `@enhance`.
 """
@@ -15,8 +17,7 @@ import inspect
 from typing import Any
 
 from loguru import logger as log
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import Context
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel
@@ -64,19 +65,23 @@ def _check_quota() -> None:
     ensure_daily_limit(user.user_id)
 
 
-def _current_session(mcp: FastMCP) -> ServerSession | None:
+def _current_session(ctx: Context | None) -> ServerSession | None:
     """Return the live ServerSession, or None outside an MCP request.
 
-    Direct in-process invocations (unit tests calling a tool function) have no
-    request context; None makes capability support read as "unknown".
+    SDK 2.x removed ``MCPServer.get_context()``; the session now only reaches a
+    tool through its injected ``ctx``. Direct in-process invocations (unit
+    tests calling a tool function) pass no ctx, or one with no request bound;
+    None makes capability support read as "unknown".
     """
+    if ctx is None:
+        return None
     try:
-        return mcp.get_context().session
-    except (LookupError, ValueError):
+        return ctx.session
+    except (LookupError, ValueError, AttributeError):
         return None
 
 
-def make_tool(mcp: FastMCP, entry: ServiceEntry) -> None:
+def make_tool(mcp: MCPServer, entry: ServiceEntry) -> None:
     """Register a service as an MCP tool - enhanced if an enhancer exists, else headless."""
     enhancer_entry = get_enhancer(entry.name)
     if enhancer_entry is not None:
@@ -85,13 +90,13 @@ def make_tool(mcp: FastMCP, entry: ServiceEntry) -> None:
         _make_headless_tool(mcp, entry)
 
 
-def _make_headless_tool(mcp: FastMCP, entry: ServiceEntry) -> None:
-    """Sync wrapper. Returns the Pydantic output model so FastMCP derives outputSchema."""
+def _make_headless_tool(mcp: MCPServer, entry: ServiceEntry) -> None:
+    """Sync wrapper. Returns the Pydantic output model so the SDK derives outputSchema."""
     func = entry.func
     input_model = entry.input_model
     output_model = entry.output_model
 
-    def tool_fn(**kwargs):
+    def tool_fn(ctx: Context | None = None, **kwargs):  # ctx: see _current_session
         _check_scopes()
         if "user_id" in input_model.model_fields:  # ty: ignore[unresolved-attribute]
             user = current_user()
@@ -106,14 +111,20 @@ def _make_headless_tool(mcp: FastMCP, entry: ServiceEntry) -> None:
         except ConnectRequiredError as exc:
             # MCP-only affordance: upgrade to the SEP-1036 URL-elicitation
             # error (-32042) so capable hosts open the consent flow natively.
-            reraise_with_elicitation(_current_session(mcp), exc)
+            reraise_with_elicitation(_current_session(ctx), exc)
 
-    _apply_tool_signature(tool_fn, entry, return_annotation=output_model)
+    _apply_tool_signature(
+        tool_fn,
+        entry,
+        return_annotation=output_model,
+        include_context=True,
+        optional_context=True,
+    )
     mcp.tool(name=entry.name, description=entry.description)(tool_fn)
 
 
 def _make_enhanced_tool(
-    mcp: FastMCP, entry: ServiceEntry, enhancer_entry: EnhancerEntry
+    mcp: MCPServer, entry: ServiceEntry, enhancer_entry: EnhancerEntry
 ) -> None:
     """Async wrapper that calls the enhancer with an `EnhancedTool`."""
     func = entry.func
@@ -137,7 +148,7 @@ def _make_enhanced_tool(
             # Expected condition, not an enhancer crash: the headless fallback
             # would only raise it again. MCP-only affordance: upgrade to the
             # SEP-1036 URL-elicitation error (-32042) when possible.
-            reraise_with_elicitation(ctx.session, exc)
+            reraise_with_elicitation(_current_session(ctx), exc)
         except Exception as enhancer_exc:  # noqa: BLE001
             # Enhancer failures of any kind must fall back to the pure service
             # so MCP clients still get a structured result on the headless path.
@@ -197,18 +208,18 @@ def _recover_from_enhancer_crash(
     try:
         return tool.call()
     except ConnectRequiredError as exc:
-        reraise_with_elicitation(ctx.session, exc)
+        reraise_with_elicitation(_current_session(ctx), exc)
 
 
-def _patch_output_schema(mcp: FastMCP, tool_name: str, output_model: type) -> None:
+def _patch_output_schema(mcp: MCPServer, tool_name: str, output_model: type) -> None:
     """Publish outputSchema for tools that return CallToolResult.
 
-    FastMCP only derives outputSchema from a tool's return type annotation,
+    The SDK only derives outputSchema from a tool's return type annotation,
     and our enhanced wrappers return CallToolResult so the structured output
     is opaque to it. We patch the registered Tool's output_schema directly.
 
     KNOWN FRAGILITY: this reaches into `mcp._tool_manager._tools` (double-
-    private). FastMCP has no public API for setting outputSchema on a tool
+    private). MCPServer has no public API for setting outputSchema on a tool
     that returns CallToolResult. Backstopped by integration tests in
     `tests/test_mcp_server.py::test_enhanced_tools_publish_output_schema`.
     """
@@ -218,7 +229,7 @@ def _patch_output_schema(mcp: FastMCP, tool_name: str, output_model: type) -> No
         tools_registry = mcp._tool_manager._tools
     except AttributeError:
         log.warning(
-            "FastMCP private _tool_manager._tools not found; outputSchema for "
+            "MCPServer private _tool_manager._tools not found; outputSchema for "
             "{!r} will not be published. Likely an SDK upgrade incompatibility.",
             tool_name,
         )
@@ -226,7 +237,7 @@ def _patch_output_schema(mcp: FastMCP, tool_name: str, output_model: type) -> No
     tool = tools_registry.get(tool_name)
     if tool is None:
         log.warning(
-            "Tool {!r} not found in FastMCP registry; outputSchema not published.",
+            "Tool {!r} not found in MCPServer registry; outputSchema not published.",
             tool_name,
         )
         return
@@ -237,7 +248,7 @@ def _resolve_signature_default(param: inspect.Parameter, field_info: Any) -> Any
     """Return a signature-safe default for a synthesized tool parameter.
 
     ``inspect.signature(model)`` renders a Pydantic ``default_factory`` field
-    with the private ``<factory>`` sentinel instead of a real value. FastMCP's
+    with the private ``<factory>`` sentinel instead of a real value. The SDK's
     ``func_metadata`` copies each parameter's ``default`` verbatim into the
     tool's argument model (see its ``func_arg_to_pydantic_field``), so that
     sentinel would be handed back as the argument value whenever the caller
@@ -261,8 +272,15 @@ def _apply_tool_signature(
     entry: ServiceEntry,
     return_annotation: type,
     include_context: bool = False,
+    optional_context: bool = False,
 ) -> None:
-    """Synthesize __signature__ and __annotations__ so FastMCP derives input/output schema."""
+    """Synthesize __signature__ and __annotations__ so the SDK derives input/output schema.
+
+    ``include_context`` adds a ``ctx: Context`` parameter, which the SDK
+    detects by annotation, injects per request and excludes from the input
+    schema. ``optional_context`` makes it a trailing keyword-only parameter
+    defaulting to None, so in-process callers (tests) can omit it.
+    """
     tool_fn.__name__ = entry.name
     tool_fn.__doc__ = entry.description
 
@@ -284,7 +302,12 @@ def _apply_tool_signature(
         p.replace(default=_resolve_signature_default(p, field_by_param.get(name)))
         for name, p in input_sig.parameters.items()
     ]
-    if include_context:
+    if include_context and optional_context:
+        ctx_param = inspect.Parameter(
+            "ctx", inspect.Parameter.KEYWORD_ONLY, annotation=Context, default=None
+        )
+        params = [*params, ctx_param]
+    elif include_context:
         ctx_param = inspect.Parameter(
             "ctx", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Context
         )
@@ -312,7 +335,9 @@ def _build_call_tool_result(result: BaseModel, tool: EnhancedTool) -> CallToolRe
         TextContent(type="text", text=result.model_dump_json()),
         *tool.extra_content,
     ]
-    kwargs: dict = {"content": content, "structuredContent": result.model_dump()}
+    # SDK 2.x types are snake_case in Python (camelCase on the wire); ``meta``
+    # is only addressable by its ``_meta`` alias in the constructor signature.
+    kwargs: dict = {"content": content, "structured_content": result.model_dump()}
     app_meta = tool.app_meta()
     if app_meta is not None:
         kwargs["_meta"] = app_meta
