@@ -17,18 +17,30 @@ class ServiceEntry:
     mutating: bool = False
 
 
-class InvalidArgument(ValueError):  # noqa: N818 - reads as a verdict, like ValueError
+class ModelFacingError(Exception):
+    """Text written for the model to read and act on; never wraps third-party text.
+
+    The single opt-in that lets the MCP layer show an exception's message to the
+    model (``mcp_server/_tool_errors.py``); every other exception reaches the
+    client sanitized. Subclass it only when the message is first-party prose -
+    recovery guidance, a refusal reason, a correctable argument problem - and
+    never interpolate an upstream exception's text or a response body into it:
+    log those instead.
+    """
+
+
+class InvalidArgument(ModelFacingError, ValueError):  # noqa: N818 - reads as a verdict, like ValueError
     """A service rejected the caller's arguments; the text is for the caller.
 
-    Subclasses ``ValueError`` so CLI and API handling is unchanged, but - unlike
-    a bare ``ValueError``, which any third-party library may raise with
-    internals in its text (a full URL, a payload ``input_value=``) - its
-    first-party origin is what lets the MCP layer show the message to the model.
+    Subclasses ``ValueError`` so CLI handling is unchanged; REST maps it to 400.
+    Unlike a bare ``ValueError``, which any third-party library may raise with
+    internals in its text (a full URL, a payload ``input_value=``), it is a
+    ``ModelFacingError``, so the MCP layer shows its message to the model.
     Raise this, not ``ValueError``, for a model-correctable argument problem.
     """
 
 
-class ConnectRequiredError(Exception):
+class ConnectRequiredError(ModelFacingError):
     """A service call requires the user to first complete an external connect flow.
 
     Transport-agnostic contract: each integration that links a third-party

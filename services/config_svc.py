@@ -14,7 +14,7 @@ from models.config import (
     ConfigShowInput,
     ConfigShowResult,
 )
-from services import service
+from services import InvalidArgument, service
 
 _ROOT_DIR = Path(__file__).parent.parent
 
@@ -64,13 +64,14 @@ def config_show(input: ConfigShowInput) -> ConfigShowResult:
 )
 def config_get(input: ConfigGetInput) -> ConfigGetResult:
     # Walk the public view so secrets are unreachable: config_get(
-    # "OPENAI_API_KEY") / config_get("BACKEND_DB_URI") raise KeyError.
+    # "OPENAI_API_KEY") / config_get("BACKEND_DB_URI") raise InvalidArgument,
+    # exactly like a key that does not exist (so REST answers 400, not 500).
     obj: Any = global_config.to_public_dict()
     for part in input.key.split("."):
         if isinstance(obj, dict) and part in obj:
             obj = obj[part]
         else:
-            raise KeyError(f"Key not found: {input.key}")
+            raise InvalidArgument(f"Key not found: {input.key}")
     return ConfigGetResult(key=input.key, value=obj)
 
 

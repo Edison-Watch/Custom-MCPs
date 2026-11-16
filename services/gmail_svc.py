@@ -40,14 +40,14 @@ from models.gmail import (
     GmailStatusResult,
     InlineImageUpload,
 )
-from services import ConnectRequiredError, InvalidArgument, service
+from services import ConnectRequiredError, InvalidArgument, ModelFacingError, service
 
 # ---------------------------------------------------------------------------
 # Domain errors
 # ---------------------------------------------------------------------------
 
 
-class GoogleOAuthNotConfiguredError(RuntimeError):
+class GoogleOAuthNotConfiguredError(ModelFacingError, RuntimeError):
     """GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI missing.
 
     Subclasses RuntimeError so pre-existing callers catching the old bare
@@ -88,7 +88,7 @@ class GmailNotConnectedError(ConnectRequiredError):
             return None
 
 
-class GmailAttachmentTooLargeError(Exception):
+class GmailAttachmentTooLargeError(ModelFacingError):
     """Raised when a fetched attachment exceeds the configured size ceiling.
 
     Carries the sizes so a transport can build a precise client-facing message

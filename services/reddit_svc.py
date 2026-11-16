@@ -29,7 +29,7 @@ from models.reddit import (
     RedditScrapeResult,
     RedditScrapeStartResult,
 )
-from services import service
+from services import ModelFacingError, service
 from services.reddit_adapters import adapter_for
 from services.reddit_normalize import normalize_item, normalize_items
 
@@ -80,8 +80,48 @@ def _apify_base() -> str:
     return _APIFY_BASE.rstrip("/")
 
 
-class ApifyError(RuntimeError):
-    """Raised when the Apify API is unreachable, unauthorized, or errors out."""
+class ApifyError(ModelFacingError, RuntimeError):
+    """Raised when the Apify API is unreachable, unauthorized, or errors out.
+
+    Model-facing, so its text must stay first-party: the operation, the HTTP
+    status and a short reason of our own. The upstream body and httpx's
+    exception text (which carries the request URL) go to the log only.
+    """
+
+
+# Our own short reason per upstream status, so no server-supplied text (the
+# body, or a custom reason phrase) is ever echoed into a model-facing message.
+_STATUS_REASONS: dict[int, str] = {
+    400: "Apify rejected the request input",
+    401: "check APIFY_API_KEY",
+    402: "the Apify account is out of credit",
+    403: "check APIFY_API_KEY and the actor's permissions",
+    404: "not found; check the run id and APIFY_ACTOR_ID",
+    429: "rate limited by Apify; retry later",
+}
+
+
+def _status_reason(status: int) -> str:
+    if status >= 500:
+        return "Apify server error; retry later"
+    return _STATUS_REASONS.get(status, "unexpected response")
+
+
+def _raise_apify_http(exc: httpx.HTTPError, operation: str) -> NoReturn:
+    """Map an httpx error onto a first-party ApifyError; details go to the log."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        log.warning(
+            "Apify {} failed: HTTP {}: {}", operation, status, exc.response.text[:500]
+        )
+        raise ApifyError(
+            f"Apify {operation} failed: HTTP {status} ({_status_reason(status)})"
+        ) from exc
+    log.warning("Apify {}: could not reach Apify: {!r}", operation, exc)
+    raise ApifyError(
+        f"Apify {operation} failed: could not reach Apify "
+        f"({type(exc).__name__}); retry later"
+    ) from exc
 
 
 def _require_token() -> str:
@@ -158,18 +198,10 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
         with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
             resp = client.post(url, params=params, headers=headers, json=actor_input)
         resp.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        # Apify puts a JSON {"error": {...}} body on 4xx/5xx; surface it.
-        raise ApifyError(
-            f"Apify returned {exc.response.status_code}: {exc.response.text[:500]}"
-        ) from exc
     except httpx.HTTPError as exc:
-        raise ApifyError(f"Could not reach Apify: {type(exc).__name__}: {exc}") from exc
+        _raise_apify_http(exc, "run")
 
-    try:
-        items = resp.json()
-    except ValueError as exc:
-        raise ApifyError(f"Apify returned invalid JSON: {exc}") from exc
+    items = _json(resp, "run")
 
     normalized = _normalize_dataset(items, actor_id)
     log.info("reddit_scrape: run returned {} items", len(normalized))
@@ -185,21 +217,18 @@ def reddit_scrape(input: RedditScrapeInput) -> RedditScrapeResult:
 # resolution, and _normalize_dataset so the contract matches the sync path.
 
 
-def _raise_apify_http(exc: httpx.HTTPError) -> NoReturn:
-    """Map an httpx error onto ApifyError the same way the sync path does."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        raise ApifyError(
-            f"Apify returned {exc.response.status_code}: {exc.response.text[:500]}"
-        ) from exc
-    raise ApifyError(f"Could not reach Apify: {type(exc).__name__}: {exc}") from exc
-
-
-def _run_data(resp: httpx.Response) -> dict[str, Any]:
-    """Parse an Apify run envelope ``{"data": {...}}`` and return ``data``."""
+def _json(resp: httpx.Response, operation: str) -> Any:
+    """Parse an Apify JSON body; the decoder's text goes to the log only."""
     try:
-        payload = resp.json()
+        return resp.json()
     except ValueError as exc:
-        raise ApifyError(f"Apify returned invalid JSON: {exc}") from exc
+        log.warning("Apify {}: invalid JSON response: {}", operation, exc)
+        raise ApifyError(f"Apify {operation} failed: invalid JSON response") from exc
+
+
+def _run_data(resp: httpx.Response, operation: str) -> dict[str, Any]:
+    """Parse an Apify run envelope ``{"data": {...}}`` and return ``data``."""
+    payload = _json(resp, operation)
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         raise ApifyError(f"Unexpected Apify response shape: {type(payload).__name__}")
@@ -237,9 +266,9 @@ def reddit_scrape_start(input: RedditScrapeInput) -> RedditScrapeStartResult:
             resp = client.post(url, headers=headers, json=actor_input)
         resp.raise_for_status()
     except httpx.HTTPError as exc:
-        _raise_apify_http(exc)
+        _raise_apify_http(exc, "run start")
 
-    data = _run_data(resp)
+    data = _run_data(resp, "run start")
     run_id = _str_field(data.get("id"))
     dataset_id = _str_field(data.get("defaultDatasetId"))
     status = _str_field(data.get("status"))
@@ -271,7 +300,7 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
                 f"{_apify_base()}/actor-runs/{input.run_id}", headers=headers
             )
             run_resp.raise_for_status()
-            data = _run_data(run_resp)
+            data = _run_data(run_resp, "run status")
             status = _str_field(data.get("status"))
             # A run envelope with no status is malformed, not a non-terminal
             # state; reject it the same way the start path validates its fields.
@@ -290,10 +319,7 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
                     headers=headers,
                 )
                 items_resp.raise_for_status()
-                try:
-                    items = items_resp.json()
-                except ValueError as exc:
-                    raise ApifyError(f"Apify returned invalid JSON: {exc}") from exc
+                items = _json(items_resp, "dataset fetch")
                 normalized = _normalize_dataset(items, actor_id)
                 log.info(
                     "reddit_scrape_fetch: run {} SUCCEEDED with {} items",
@@ -304,7 +330,7 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
                     status=status, count=len(normalized), items=normalized
                 )
     except httpx.HTTPError as exc:
-        _raise_apify_http(exc)
+        _raise_apify_http(exc, "run fetch")
 
     # Non-terminal (READY/RUNNING/*ING) or terminal failure (FAILED/TIMED-OUT/
     # ABORTED): return the status with no items so the caller either keeps

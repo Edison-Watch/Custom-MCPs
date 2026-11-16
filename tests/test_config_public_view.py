@@ -12,7 +12,7 @@ import pytest
 from common import global_config
 from common.global_config import _SECRET_FIELD_NAMES, PUBLIC_ENV_FIELDS
 from models.config import ConfigGetInput, ConfigShowInput
-from services import config_svc
+from services import InvalidArgument, config_svc
 from services.config_svc import config_get, config_show
 from tests.test_template import TestTemplate
 
@@ -104,7 +104,7 @@ class TestPublicView(TestTemplate):
         cfg = self._with_secrets()
         with (
             patch.object(config_svc, "global_config", cfg),
-            pytest.raises(KeyError),
+            pytest.raises(InvalidArgument),
         ):
             config_get(ConfigGetInput(key=secret))
 

@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from models.config import ConfigGetInput, ConfigShowInput
 from models.doctor import DoctorFixInput, DoctorInput
 from models.greet import GreetInput
+from services import InvalidArgument
 from services.config_svc import config_get, config_show
 from services.doctor_svc import doctor
 from services.greet import greet
@@ -41,18 +42,18 @@ class TestConfigService(TestTemplate):
         assert isinstance(result.value, bool)
 
     def test_config_get_nonexistent(self):
-        with pytest.raises(KeyError):
+        with pytest.raises(InvalidArgument):
             config_get(ConfigGetInput(key="nonexistent.key"))
 
     def test_config_get_rejects_env_secrets(self):
-        # A secret key is unreachable through config_get - it raises KeyError
+        # A secret key is unreachable through config_get - it raises InvalidArgument
         # rather than returning the value.
         for secret_field in (
             "OPENAI_API_KEY",
             "BACKEND_DB_URI",
             "GOOGLE_TOKEN_ENC_KEY",
         ):
-            with pytest.raises(KeyError):
+            with pytest.raises(InvalidArgument):
                 config_get(ConfigGetInput(key=secret_field))
 
 

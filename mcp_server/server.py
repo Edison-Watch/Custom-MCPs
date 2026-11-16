@@ -135,13 +135,13 @@ def _transport_security() -> TransportSecuritySettings:
 # resources and ``_meta.ui`` tool metadata are still registered by hand below
 # so the same wire shapes reach handshake-era hosts that predate extensions.
 class _TemplateMCPServer(MCPServer):
-    """MCPServer that lets first-party failure text reach the model.
+    """MCPServer that lets opted-in failure text reach the model.
 
     SDK 2.x reports any non-``ToolError`` tool exception as a bare
-    ``Error executing tool <name>``. Our services fail with model-facing
-    messages (recovery scripts, quota/scope refusals), so a crash whose cause
-    is first-party is re-labelled as a ``ToolError`` keeping its text - the v1
-    wire behavior. Third-party crashes stay sanitized. See
+    ``Error executing tool <name>``. Services that fail with a message written
+    for the model raise a ``services.ModelFacingError`` (and billing refusals
+    are HTTP-shaped), so such a crash is re-labelled as a ``ToolError`` keeping
+    its text. Everything else stays sanitized. See
     ``mcp_server/_tool_errors.py``. Tool functions themselves are untouched,
     so in-process callers still see the original exception types.
     """

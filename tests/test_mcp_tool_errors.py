@@ -15,7 +15,7 @@ from mcp_server._tool_factory import make_tool
 from mcp_server.enhancers.base import client_can_elicit
 from mcp_server.server import _TemplateMCPServer
 from models.gmail import GmailDraft
-from services import InvalidArgument, ServiceEntry
+from services import InvalidArgument, ModelFacingError, ServiceEntry
 from services.gmail_svc import GmailNotConnectedError
 from services.reddit_svc import ApifyError
 from src.utils.current_user import reset_current_user, set_current_user
@@ -25,6 +25,16 @@ from tests.test_template import TestTemplate
 # class whose defining module is outside the first-party packages.
 _ThirdPartyError = type(
     "OperationalError", (Exception,), {"__module__": "sqlalchemy.exc"}
+)
+# A library's own ValueError subclass (e.g. requests.InvalidURL) whose text
+# carries internals.
+_ThirdPartyValueError = type(
+    "InvalidURL", (ValueError,), {"__module__": "somelib.exceptions"}
+)
+# A first-party exception that did NOT opt in to ModelFacingError: defined in
+# services, but its text was never vetted for the model.
+_FirstPartyInternalError = type(
+    "StoreCorrupted", (RuntimeError,), {"__module__": "services.some_svc"}
 )
 
 
@@ -99,6 +109,29 @@ class TestModelFacingMessage(TestTemplate):
             == "Could not reach Apify: timeout"
         )
 
+    def test_only_model_facing_error_opts_in(self):
+        assert model_facing_message(ModelFacingError("do X, then retry")) == (
+            "do X, then retry"
+        )
+        # A third-party ValueError subclass, a google-auth-style bare
+        # ValueError, and a first-party error that did not opt in.
+        assert model_facing_message(_ThirdPartyValueError("https://x?t=s3")) is None
+        google_auth_style = _raised_from(
+            "google.oauth2.credentials",
+            ValueError("Invalid token: refresh_token=1//0abc"),
+        )
+        assert model_facing_message(google_auth_style) is None
+        assert model_facing_message(_FirstPartyInternalError("dsn=secret")) is None
+
+    def test_http_exception_outside_billing_stays_sanitized(self):
+        # First-party, but not a billing refusal: the detail was not written
+        # for the model.
+        exc = _raised_from(
+            "api_server.routes.services",
+            HTTPException(status_code=500, detail="dsn=secret"),
+        )
+        assert model_facing_message(exc) is None
+
     def test_third_party_crashes_stay_sanitized(self):
         assert model_facing_message(_ThirdPartyError("dsn=secret")) is None
         assert model_facing_message(RuntimeError("internal")) is None
@@ -158,6 +191,12 @@ class TestTemplateServerErrorRelabel(TestTemplate):
             asyncio.run(server.call_tool("boom", {}))
         assert not isinstance(excinfo.value, UnexpectedToolError)
         assert "APIFY_API_KEY is not configured" in str(excinfo.value)
+
+    def test_first_party_non_opt_in_failure_is_sanitized(self):
+        server = self._server_with(_FirstPartyInternalError("dsn=secret"))
+        with pytest.raises(UnexpectedToolError) as excinfo:
+            asyncio.run(server.call_tool("boom", {}))
+        assert "secret" not in str(excinfo.value)
 
     def test_third_party_failure_is_sanitized(self):
         server = self._server_with(_ThirdPartyError("dsn=secret"))
