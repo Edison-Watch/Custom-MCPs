@@ -6,6 +6,7 @@
       "name": "@sealgate/bash-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.32.2",
+        "hono": "4.13.16",
         "zod": "^4.3.6",
       },
       "devDependencies": {
