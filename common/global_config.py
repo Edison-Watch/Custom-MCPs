@@ -398,6 +398,10 @@ class Config(BaseSettings):
            dropped (case-insensitively), so a secret hand-placed under a nested
            YAML key cannot leak either.
 
+        ``features`` allows arbitrary extras, so ``FEATURES__ANYTHING=...`` in
+        the environment lands there; only boolean flags are shown (see
+        :func:`_public_feature_flags`).
+
         Every uppercase field must appear in exactly one of the two lists;
         ``tests/test_config_public_view.py`` enforces it.
         """
@@ -412,6 +416,8 @@ class Config(BaseSettings):
             for name, value in dumped.items()
             if name in declared and (not name.isupper() or name in PUBLIC_ENV_FIELDS)
         }
+        if isinstance(public.get("features"), dict):
+            public["features"] = _public_feature_flags(public["features"])
         return _redact_secret_keys(public)
 
     def _identify_provider(self, model_name: str) -> str:
@@ -513,6 +519,37 @@ _SECRET_FIELD_NAMES: frozenset[str] = frozenset(
         "WEBHOOK_RUNNER_TOKEN",
     }
 )
+
+
+# Spellings an env override (always a string) may use for a boolean flag.
+_BOOL_STRINGS: dict[str, bool] = {
+    "true": True,
+    "false": False,
+    "1": True,
+    "0": False,
+    "yes": True,
+    "no": False,
+    "on": True,
+    "off": False,
+}
+
+
+def _public_feature_flags(flags: dict[str, Any]) -> dict[str, bool]:
+    """Keep only boolean feature flags; drop any other ``features`` extra.
+
+    ``FeaturesConfig`` is ``extra="allow"`` so a flag can be added from the
+    environment (``FEATURES__NEW_UI=true``), which also means any
+    ``FEATURES__<NAME>=<value>`` - say a misplaced ``FEATURES__LANGFUSE_SECRET_KEY``
+    - lands there. A flag is a boolean: an env-sourced one arrives as a string,
+    so boolean spellings are shown coerced; anything else is omitted.
+    """
+    public: dict[str, bool] = {}
+    for name, value in flags.items():
+        if isinstance(value, bool):
+            public[name] = value
+        elif isinstance(value, str) and value.strip().lower() in _BOOL_STRINGS:
+            public[name] = _BOOL_STRINGS[value.strip().lower()]
+    return public
 
 
 def _redact_secret_keys(value: Any) -> Any:

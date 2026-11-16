@@ -121,3 +121,18 @@ class TestUndeclaredExtras(TestTemplate):
         assert "langfuse_secret_key" not in shown
         assert "made_up_token" not in shown
         assert "leak" not in str(shown)
+
+    def test_features_extra_from_env_is_not_shown(self, monkeypatch):
+        # FeaturesConfig is extra="allow": any FEATURES__<NAME> env var lands in
+        # features. Only boolean flags may appear in the public view.
+        monkeypatch.setenv("FEATURES__LANGFUSE_SECRET_KEY", "sk-lf-leak")
+        monkeypatch.setenv("FEATURES__NEW_UI", "true")
+        cfg = _CONFIG_CLS()  # ty: ignore[missing-argument]
+        assert cfg.features.model_dump()["langfuse_secret_key"] == "sk-lf-leak"
+        shown = cfg.to_public_dict()
+        assert "langfuse_secret_key" not in shown["features"]
+        assert "leak" not in str(shown)
+        # A real env-sourced flag still shows, as a boolean.
+        assert shown["features"]["new_ui"] is True
+        with patch.object(config_svc, "global_config", cfg):
+            assert "leak" not in str(config_show(ConfigShowInput()).config)
