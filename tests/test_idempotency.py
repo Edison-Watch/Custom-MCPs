@@ -253,6 +253,23 @@ class TestExecuteIdempotent(_IdempotentDB):
         assert result.value == 1
         assert counter["n"] == 1
 
+    def test_invalid_argument_releases_claim(self):
+        # A service's InvalidArgument is a 400 client error: nothing committed.
+        def _compute_fail():
+            raise services_pkg.InvalidArgument("bad url")
+
+        with pytest.raises(services_pkg.InvalidArgument):
+            execute_idempotent(
+                request=_request("k1"),
+                user_id="u1",
+                route="demo",
+                request_payload={"a": 1},
+                compute=_compute_fail,
+            )
+        counter = {"n": 0}
+        result = self._run("k1", {"a": 1}, counter)
+        assert result.value == 1
+
     def test_ambiguous_failure_keeps_claim(self):
         # A 5xx / ambiguous failure may have committed the side effect remotely,
         # so the claim is kept: a same-key retry returns 409 and does NOT

@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from common.token_encryption import TokenEncryption, require_encryption
 from db.engine import use_db_session
 from db.models.idempotency_keys import IdempotencyRecord
+from services import InvalidArgument
 
 # Mirror the DB column width and (loosely) Stripe's own key-length guidance.
 _KEY_MAX_LEN = 255
@@ -213,12 +214,13 @@ def execute_idempotent(
         # it.
         try:
             result = compute()
-        except HTTPException as exc:
-            # Client errors (4xx: quota 402, validation 422, bad input 400) are
-            # raised before the side effect commits, so release the claim for a
-            # clean same-key retry. A 5xx HTTPException is ambiguous and falls
-            # through to the no-release path below. Errors are never cached.
-            if exc.status_code < 500:
+        except (HTTPException, InvalidArgument) as exc:
+            # Client errors (4xx: quota 402, validation 422, bad input 400 -
+            # including a service's InvalidArgument, which the app maps to 400)
+            # are raised before the side effect commits, so release the claim
+            # for a clean same-key retry. A 5xx HTTPException is ambiguous and
+            # falls through to the no-release path below. Errors are never cached.
+            if isinstance(exc, InvalidArgument) or exc.status_code < 500:
                 _release(session, user_id, route, key)
             raise
         # Any other failure - a 5xx HTTPException, a network drop, or an

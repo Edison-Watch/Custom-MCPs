@@ -15,6 +15,7 @@ from api_server.middleware.error_handler import (
     ErrorHandlerMiddleware,
     RequestIdMiddleware,
     attachment_too_large_handler,
+    invalid_argument_handler,
 )
 from api_server.middleware.mcp_auth import MCPAuthMiddleware
 from api_server.middleware.rate_limit import RateLimitMiddleware
@@ -35,6 +36,7 @@ from api_server.runner import idempotency_sweep_lifespan, runner_lifespan
 from common import global_config
 from mcp_server.server import lifespan as mcp_lifespan
 from mcp_server.server import mount_on as mount_mcp_server
+from services import InvalidArgument
 from services.gmail_svc import GmailAttachmentTooLargeError
 
 try:
@@ -180,6 +182,9 @@ app.add_middleware(
 # Map the oversized-attachment domain error to 413 so an over-cap
 # gmail_get_attachment request is a client error, not a generic 500.
 app.add_exception_handler(GmailAttachmentTooLargeError, attachment_too_large_handler)
+# A service's InvalidArgument is the caller's mistake: 400 with its text, not a
+# 500 (and execute_idempotent releases the Idempotency-Key claim for it).
+app.add_exception_handler(InvalidArgument, invalid_argument_handler)
 
 # --- Routes ---------------------------------------------------------------
 
