@@ -5,6 +5,7 @@ later by satisfying ``TokenEncryption``. ``key_id`` lets us roll keys forward
 without a destructive migration.
 """
 
+from functools import cache
 from typing import Protocol, runtime_checkable
 
 from cryptography.fernet import Fernet
@@ -93,15 +94,39 @@ def require_encryption() -> TokenEncryption:
         return enc
 
     if global_config.is_dev:
-        log.warning(
-            "GOOGLE_TOKEN_ENC_KEY is not set; falling back to PlaintextEncryption "
-            "for refresh-token storage. NEVER use this in production."
-        )
+        _warn_plaintext_fallback()
         return PlaintextEncryption()
 
-    raise RuntimeError(
-        "GOOGLE_TOKEN_ENC_KEY is required in non-dev environments. "
-        "Generate one with: "
-        "python -c 'from cryptography.fernet import Fernet; "
-        "print(Fernet.generate_key().decode())'"
+    raise RuntimeError(_MISSING_KEY_MESSAGE)
+
+
+_MISSING_KEY_MESSAGE = (
+    "GOOGLE_TOKEN_ENC_KEY is required in non-dev environments. "
+    "Generate one with: "
+    "python -c 'from cryptography.fernet import Fernet; "
+    "print(Fernet.generate_key().decode())'"
+)
+
+
+@cache
+def _warn_plaintext_fallback() -> None:
+    """Log the dev plaintext-fallback warning once per process, not per call."""
+    log.warning(
+        "GOOGLE_TOKEN_ENC_KEY is not set; falling back to PlaintextEncryption "
+        "for refresh-token storage. NEVER use this in production."
     )
+
+
+def ensure_encryption_configured() -> None:
+    """Fail fast at startup when a database is configured but the key is missing.
+
+    ``require_encryption`` is otherwise only consulted lazily - by every
+    mutating REST call (idempotency records), token storage, webhook secrets -
+    so outside dev a missing key would surface as a 500 on the first such
+    request instead of a refused start. Without ``BACKEND_DB_URI`` there is
+    nothing to encrypt at rest, so the check is skipped.
+    """
+    if not global_config.BACKEND_DB_URI or global_config.is_dev:
+        return
+    if get_default_encryption() is None:
+        raise RuntimeError(_MISSING_KEY_MESSAGE)

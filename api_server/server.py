@@ -34,6 +34,7 @@ from api_server.routes.google import webhooks as google_webhooks
 from api_server.routes.payments import checkout, metering, subscription, webhooks
 from api_server.runner import idempotency_sweep_lifespan, runner_lifespan
 from common import global_config
+from common.token_encryption import ensure_encryption_configured
 from mcp_server.server import lifespan as mcp_lifespan
 from mcp_server.server import mount_on as mount_mcp_server
 from services import InvalidArgument
@@ -108,7 +109,12 @@ def session_cookie_policy() -> SessionCookiePolicy:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Compose the MCPServer session manager with the periodic background loops."""
+    """Compose the MCPServer session manager with the periodic background loops.
+
+    Refuses to start outside dev when a database is configured but
+    GOOGLE_TOKEN_ENC_KEY is not, rather than 500 on the first mutating request.
+    """
+    ensure_encryption_configured()
     async with (
         mcp_lifespan(app),
         runner_lifespan(app),
