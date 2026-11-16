@@ -382,43 +382,14 @@ class Config(BaseSettings):
     def to_public_dict(self) -> dict[str, Any]:
         """Return the *effective* config with every secret removed.
 
-        This is the view behind the ``config_show`` / ``config_get`` services
-        (reachable over the authenticated HTTP transport and MCP), so it shows
-        what the process is actually running with: YAML layers, pydantic
-        defaults and env-var overrides (``DEV_ENV=prod`` reads ``"prod"``).
-
-        Two layers keep secrets out, and the first one fails closed:
-
-        1. Top-level UPPERCASE fields are the env-sourced settings. Only those
-           named in :data:`PUBLIC_ENV_FIELDS` are kept; any other uppercase
-           field - including one added later without classifying it - is
-           omitted. Lowercase fields are the nested YAML-backed models and are
-           kept.
-        2. Any key, at any depth, matching :data:`_SECRET_FIELD_NAMES` is
-           dropped (case-insensitively), so a secret hand-placed under a nested
-           YAML key cannot leak either.
-
-        ``features`` allows arbitrary extras, so ``FEATURES__ANYTHING=...`` in
-        the environment lands there; only boolean flags are shown (see
-        :func:`_public_feature_flags`).
-
-        Every uppercase field must appear in exactly one of the two lists;
-        ``tests/test_config_public_view.py`` enforces it.
+        The view behind ``config_show`` / ``config_get``; see
+        :func:`common.public_config.public_dict` for the rules.
         """
-        dumped = self.model_dump(mode="json")
-        # Only *declared* fields: with ``extra="allow"`` and
-        # ``case_sensitive=False``, any undeclared ``.env`` key (e.g.
-        # ``LANGFUSE_SECRET_KEY``) becomes a lowercase extra, which would
-        # otherwise pass as a "nested model" and leak.
-        declared = type(self).model_fields
-        public = {
-            name: value
-            for name, value in dumped.items()
-            if name in declared and (not name.isupper() or name in PUBLIC_ENV_FIELDS)
-        }
-        if isinstance(public.get("features"), dict):
-            public["features"] = _public_feature_flags(public["features"])
-        return _redact_secret_keys(public)
+        # Call-time import: public_config derives its secret-name set from
+        # this class, so it imports this module.
+        from common.public_config import public_dict  # noqa: PLC0415
+
+        return public_dict(self)
 
     def _identify_provider(self, model_name: str) -> str:
         """Identify the LLM provider from a model name string."""
@@ -455,121 +426,6 @@ class Config(BaseSettings):
                 )
             return key
         raise ValueError(f"No API key configured for model: {model_identifier}")
-
-
-# Env-sourced (UPPERCASE) Config fields that are safe to show through
-# config_show / config_get: identifiers, public URLs, OAuth client ids, flags
-# and tuning knobs. This is an allowlist - an uppercase field missing from it is
-# omitted from the public view, so a new secret cannot leak by default.
-PUBLIC_ENV_FIELDS: frozenset[str] = frozenset(
-    {
-        "DEV_ENV",
-        "APIFY_ACTOR_ID",
-        "X402_WALLET_ADDRESS",  # a public receiving address
-        "WORKOS_CLIENT_ID",
-        "WORKOS_AUTHKIT_DOMAIN",
-        "MCP_PUBLIC_URL",
-        "API_PUBLIC_URL",
-        "ALLOW_TEST_TOKENS",
-        "STRIPE_ALLOW_LIVE_KEY_IN_DEV",
-        "FRONTEND_URL",
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_REDIRECT_URI",
-        # Pub/Sub topic + OIDC audience/service-account the push receiver
-        # checks: identifiers, not credentials (the JWT is Google-signed).
-        "GMAIL_PUBSUB_TOPIC",
-        "GMAIL_PUSH_AUDIENCE",
-        "GMAIL_PUSH_SA_EMAIL",
-        "WEBHOOK_RUNNER_MODE",
-        "WEBHOOK_RUNNER_INTERVAL_S",
-        "WEBHOOK_MAX_ATTEMPTS",
-    }
-)
-
-# The credential-bearing (env-sourced) fields on Config, enumerated explicitly
-# rather than by keyword heuristic (which both over-matched non-secret flags
-# like STRIPE_ALLOW_LIVE_KEY_IN_DEV and missed names like REDIS_URL). Used to
-# drop any key that collides with one of these names, at any depth, from the
-# public view - the second layer behind PUBLIC_ENV_FIELDS, so a secret
-# mistakenly placed under a nested YAML key (e.g. a hand-edited
-# .global_config.yaml) can never leak through config_show / config_get.
-# Non-secret env fields live in PUBLIC_ENV_FIELDS instead. Matched by full key name, case-insensitively (see
-# _redact_secret_keys): substrings never match, but a lowercase spelling of a
-# secret name such as ``openai_api_key`` is dropped at any depth.
-_SECRET_FIELD_NAMES: frozenset[str] = frozenset(
-    {
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GROQ_API_KEY",
-        "PERPLEXITY_API_KEY",
-        "GEMINI_API_KEY",
-        "APIFY_API_KEY",
-        "X402_PRIVATE_KEY",
-        "BACKEND_DB_URI",
-        "REDIS_URL",
-        "WORKOS_API_KEY",
-        "WEB_BOT_AUTH_PRIVATE_KEY",
-        "SESSION_SECRET_KEY",
-        "STRIPE_SECRET_KEY",
-        "STRIPE_TEST_SECRET_KEY",
-        "STRIPE_WEBHOOK_SECRET",
-        "STRIPE_TEST_WEBHOOK_SECRET",
-        "GOOGLE_CLIENT_SECRET",
-        "GOOGLE_TOKEN_ENC_KEY",
-        "WEBHOOK_RUNNER_TOKEN",
-    }
-)
-
-
-# Spellings an env override (always a string) may use for a boolean flag.
-_BOOL_STRINGS: dict[str, bool] = {
-    "true": True,
-    "false": False,
-    "1": True,
-    "0": False,
-    "yes": True,
-    "no": False,
-    "on": True,
-    "off": False,
-}
-
-
-def _public_feature_flags(flags: dict[str, Any]) -> dict[str, bool]:
-    """Keep only boolean feature flags; drop any other ``features`` extra.
-
-    ``FeaturesConfig`` is ``extra="allow"`` so a flag can be added from the
-    environment (``FEATURES__NEW_UI=true``), which also means any
-    ``FEATURES__<NAME>=<value>`` - say a misplaced ``FEATURES__LANGFUSE_SECRET_KEY``
-    - lands there. A flag is a boolean: an env-sourced one arrives as a string,
-    so boolean spellings are shown coerced; anything else is omitted.
-    """
-    public: dict[str, bool] = {}
-    for name, value in flags.items():
-        if isinstance(value, bool):
-            public[name] = value
-        elif isinstance(value, str) and value.strip().lower() in _BOOL_STRINGS:
-            public[name] = _BOOL_STRINGS[value.strip().lower()]
-    return public
-
-
-def _redact_secret_keys(value: Any) -> Any:
-    """Recursively drop any dict key matching a secret field name.
-
-    Removing the key (rather than masking its value) keeps the guarantee simple:
-    a secret-named key never appears in the returned view at all.
-    """
-    if isinstance(value, dict):
-        # Case-insensitive: pydantic-settings is case_sensitive=False, so a
-        # lowercase YAML key like ``openai_api_key`` still populates the secret
-        # field and must be dropped too.
-        return {
-            k: _redact_secret_keys(v)
-            for k, v in value.items()
-            if not (isinstance(k, str) and k.upper() in _SECRET_FIELD_NAMES)
-        }
-    if isinstance(value, list):
-        return [_redact_secret_keys(v) for v in value]
-    return value
 
 
 # Load .env files before creating the config instance

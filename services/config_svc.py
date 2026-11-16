@@ -49,8 +49,8 @@ def _coerce_value(value: str) -> bool | int | float | str | None:
 )
 def config_show(input: ConfigShowInput) -> ConfigShowResult:
     # Effective config minus secrets (see Config.to_public_dict): env fields
-    # appear only if allowlisted in PUBLIC_ENV_FIELDS. Same view on every
-    # transport, including the authenticated HTTP one.
+    # appear only if allowlisted in common.public_config.PUBLIC_ENV_FIELDS.
+    # Same view on every transport, including the authenticated HTTP one.
     return ConfigShowResult(config=global_config.to_public_dict())
 
 

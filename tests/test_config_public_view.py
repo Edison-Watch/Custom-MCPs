@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from common import global_config
-from common.global_config import _SECRET_FIELD_NAMES, PUBLIC_ENV_FIELDS
+from common.public_config import PUBLIC_ENV_FIELDS, SECRET_FIELD_NAMES, public_dict
 from models.config import ConfigGetInput, ConfigShowInput
 from services import InvalidArgument, config_svc
 from services.config_svc import config_get, config_show
@@ -30,34 +30,65 @@ def _keys(obj):
             yield from _keys(v)
 
 
+# The credential-bearing Config fields, pinned literally so the derived
+# SECRET_FIELD_NAMES (uppercase fields minus the allowlist) is checked against
+# an independent list: moving a secret onto PUBLIC_ENV_FIELDS fails here.
+_KNOWN_SECRETS = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "GEMINI_API_KEY",
+        "APIFY_API_KEY",
+        "X402_PRIVATE_KEY",
+        "BACKEND_DB_URI",
+        "REDIS_URL",
+        "WORKOS_API_KEY",
+        "WEB_BOT_AUTH_PRIVATE_KEY",
+        "SESSION_SECRET_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_TEST_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_TEST_WEBHOOK_SECRET",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_TOKEN_ENC_KEY",
+        "WEBHOOK_RUNNER_TOKEN",
+    }
+)
+_SECRET_FIELDS = SECRET_FIELD_NAMES & _UPPER_FIELDS
+
+
 class TestFieldClassification(TestTemplate):
-    def test_every_env_field_is_classified_exactly_once(self):
-        # Not derived from either list: walks the real model, so a new
-        # uppercase field with no decision fails here.
-        unclassified = _UPPER_FIELDS - PUBLIC_ENV_FIELDS - _SECRET_FIELD_NAMES
-        assert not unclassified, f"classify these env fields: {sorted(unclassified)}"
-        both = PUBLIC_ENV_FIELDS & _SECRET_FIELD_NAMES
-        assert not both, both
+    def test_secret_set_is_every_non_public_env_field(self):
+        assert _SECRET_FIELDS == _UPPER_FIELDS - PUBLIC_ENV_FIELDS
+        assert not (PUBLIC_ENV_FIELDS & SECRET_FIELD_NAMES)
 
-    def test_lists_name_only_real_fields(self):
+    def test_derived_secrets_match_the_pinned_list(self):
+        assert _SECRET_FIELDS == _KNOWN_SECRETS
+
+    def test_allowlist_names_only_real_fields(self):
         assert PUBLIC_ENV_FIELDS <= _UPPER_FIELDS
-        assert _SECRET_FIELD_NAMES <= _UPPER_FIELDS
 
-    def test_apify_key_is_secret(self):
-        assert "APIFY_API_KEY" in _SECRET_FIELD_NAMES
+    def test_env_only_secret_names_are_included(self):
+        # Read from os.environ outside Config, so not derivable from fields.
+        assert "LANGFUSE_SECRET_KEY" in SECRET_FIELD_NAMES
+
+    def test_config_keeps_its_public_dict_delegate(self):
+        assert global_config.to_public_dict() == public_dict(global_config)
 
 
 class TestPublicView(TestTemplate):
     def _with_secrets(self):
         """A Config whose every secret field holds a recognisable value."""
-        values = {name: f"sekrit-{name.lower()}" for name in _SECRET_FIELD_NAMES}
+        values = {name: f"sekrit-{name.lower()}" for name in _SECRET_FIELDS}
         return global_config.model_copy(update=values)
 
     def test_no_secret_names_or_values(self):
         cfg = self._with_secrets()
         with patch.object(config_svc, "global_config", cfg):
             shown = config_show(ConfigShowInput()).config
-        assert not (set(_keys(shown)) & _SECRET_FIELD_NAMES)
+        assert not (set(_keys(shown)) & SECRET_FIELD_NAMES)
         assert "sekrit-" not in repr(shown)
 
     def test_unlisted_env_field_is_omitted(self):
@@ -65,7 +96,7 @@ class TestPublicView(TestTemplate):
         cfg = self._with_secrets()
         with (
             patch.object(config_svc, "global_config", cfg),
-            patch("common.global_config.PUBLIC_ENV_FIELDS", frozenset()),
+            patch("common.public_config.PUBLIC_ENV_FIELDS", frozenset()),
         ):
             shown = config_show(ConfigShowInput()).config
         assert not any(k.isupper() for k in shown)
@@ -99,7 +130,7 @@ class TestPublicView(TestTemplate):
         with patch.object(config_svc, "global_config", cfg):
             assert config_get(ConfigGetInput(key="DEV_ENV")).value == "staging"
 
-    @pytest.mark.parametrize("secret", sorted(_SECRET_FIELD_NAMES))
+    @pytest.mark.parametrize("secret", sorted(_SECRET_FIELDS))
     def test_config_get_refuses_every_secret(self, secret):
         cfg = self._with_secrets()
         with (
