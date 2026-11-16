@@ -883,9 +883,7 @@ class TestGmailGetAttachment(TestTemplate):
             try:
                 with (
                     patch.object(global_config.gmail, "max_attachment_bytes", 5),
-                    pytest.raises(
-                        GmailAttachmentTooLargeError, match="over the 5-byte limit"
-                    ),
+                    pytest.raises(GmailAttachmentTooLargeError, match="5-byte limit"),
                 ):
                     gmail_get_attachment(
                         GmailGetAttachmentInput(

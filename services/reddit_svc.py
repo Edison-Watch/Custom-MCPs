@@ -96,7 +96,7 @@ _STATUS_REASONS: dict[int, str] = {
     401: "check APIFY_API_KEY",
     402: "the Apify account is out of credit",
     403: "check APIFY_API_KEY and the actor's permissions",
-    404: "not found; check the run id and APIFY_ACTOR_ID",
+    404: "not found; check APIFY_ACTOR_ID (and the run id, when fetching a run)",
     429: "rate limited by Apify; retry later",
 }
 
@@ -318,7 +318,10 @@ def reddit_scrape_fetch(input: RedditScrapeFetchInput) -> RedditScrapeFetchResul
                     params={"format": "json", "clean": "true"},
                     headers=headers,
                 )
-                items_resp.raise_for_status()
+                try:
+                    items_resp.raise_for_status()
+                except httpx.HTTPError as exc:
+                    _raise_apify_http(exc, "dataset fetch")
                 items = _json(items_resp, "dataset fetch")
                 normalized = _normalize_dataset(items, actor_id)
                 log.info(

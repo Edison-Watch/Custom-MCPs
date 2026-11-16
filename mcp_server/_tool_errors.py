@@ -16,7 +16,7 @@ builtin such as ``ValueError``, which every library raises with internals in
 its text (``requests.InvalidURL`` carries the full URL, a pydantic
 ``ValidationError`` from an upstream payload carries ``input_value=``).
 
-The one other model-facing shape is HTTP: the daily quota (429) and paywall
+The one other model-facing shape is HTTP: the daily quota (402) and paywall
 refusals are ``HTTPException`` raised by ``api_server.billing``. Starlette's
 type says nothing about who raised it, so the innermost traceback frame
 decides. The wrappers' own refusals - the scope check and input-model

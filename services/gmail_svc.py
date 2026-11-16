@@ -100,9 +100,9 @@ class GmailAttachmentTooLargeError(ModelFacingError):
         self.size = size
         self.max_bytes = max_bytes
         super().__init__(
-            f"Attachment {attachment_id} is {size} bytes, over the {max_bytes}-byte "
-            "limit (global_config.gmail.max_attachment_bytes). Raise the limit or "
-            "handle this file out of band."
+            f"Attachment {attachment_id} is {size} bytes, over this server's "
+            f"{max_bytes}-byte limit, so it cannot be loaded here; retrying will "
+            "not help."
         )
 
 
