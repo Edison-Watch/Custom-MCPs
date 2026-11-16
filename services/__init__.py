@@ -15,6 +15,7 @@ class ServiceEntry:
     output_model: type
     func: Callable[..., Any]
     mutating: bool = False
+    operator_only: bool = False
 
 
 class ModelFacingError(Exception):
@@ -77,6 +78,7 @@ def service(
     input_model: type,
     output_model: type,
     mutating: bool = False,
+    operator_only: bool = False,
 ):
     """Decorator that registers a function as a service.
 
@@ -87,6 +89,11 @@ def service(
     (``mcp_server/_tool_factory.py``): a mutating service is never silently
     re-executed - the fallback reuses the already-completed ``tool.call()``
     result or propagates the enhancer error. CLI behavior is unchanged.
+
+    Set ``operator_only=True`` for services that act on the host itself
+    (rewrite its config, run ``uv sync``, scaffold ``.env``): they are CLI-only.
+    Neither the REST auto-router nor the MCP server registers them, since any
+    authenticated end user can reach those transports.
     """
 
     def decorator(func):
@@ -98,6 +105,7 @@ def service(
                 output_model=output_model,
                 func=func,
                 mutating=mutating,
+                operator_only=operator_only,
             )
         )
         return func

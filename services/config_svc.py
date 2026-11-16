@@ -81,6 +81,8 @@ def config_get(input: ConfigGetInput) -> ConfigGetResult:
     input_model=ConfigSetInput,
     output_model=ConfigSetResult,
     mutating=True,
+    # Rewrites the host's .global_config.yaml for every user: CLI only.
+    operator_only=True,
 )
 def config_set(input: ConfigSetInput) -> ConfigSetResult:
     override_path = _ROOT_DIR / ".global_config.yaml"

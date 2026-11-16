@@ -12,9 +12,15 @@ router = APIRouter(prefix="/api/v1/services", tags=["services"])
 
 
 def _register_service_routes() -> None:
-    """Discover all service modules and create one route per service."""
+    """Discover all service modules and create one route per service.
+
+    ``operator_only`` services (host config / environment fixers) are CLI-only
+    and get no route: any authenticated user can reach this router.
+    """
     discover_services()
     for entry in get_registry():
+        if entry.operator_only:
+            continue
         _make_route(entry)
 
 

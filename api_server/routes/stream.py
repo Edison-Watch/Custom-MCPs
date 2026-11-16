@@ -12,8 +12,8 @@ blocks up to 30s), so streaming each result as it lands turns a ~30s silent
 wait into a live, CI-style checklist. The pure ``doctor`` service stays unary
 and unchanged; this route consumes the ``iter_doctor`` generator instead.
 The stream is read-only: its body is ``DoctorInput`` (``extra="forbid"``), so
-``{"fix": true}`` is a 422 and fixers run only via ``POST
-/api/v1/services/doctor_fix``, which enforces Idempotency-Key.
+``{"fix": true}`` is a 422. Fixers run only via the operator-only
+``doctor_fix`` service, which has no HTTP route (``edisonmcps doctor --fix``).
 """
 
 from collections.abc import Iterator

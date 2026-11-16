@@ -197,7 +197,7 @@ class TestAPIServer(TestTemplate):
         assert isinstance(done["has_failures"], bool)
 
     def test_stream_doctor_rejects_fix(self):
-        """The stream is read-only: fixers run only via the doctor_fix route."""
+        """The stream is read-only: fixers run only via the CLI (doctor --fix)."""
         with patch("services.doctor_svc._apply_fixers") as fixers:
             for payload in ({"fix": True}, {"fix": False}):
                 resp = self.client.post("/api/v1/stream/doctor", json=payload)

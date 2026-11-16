@@ -84,27 +84,9 @@ curl -X POST http://localhost:8000/api/v1/services/config_get \
 
 ## config_set
 
-Set a configuration override. The value is coerced to the appropriate type (bool, int, float, or string).
-
-```bash
-curl -X POST http://localhost:8000/api/v1/services/config_set \
-  -H "Authorization: Bearer sk_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{"key": "logging.verbose", "value": "true"}'
-```
-
-**Request body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key` | string | Dot-separated config path |
-| `value` | string | New value (auto-coerced) |
-
-**Response:**
-
-```json
-{ "key": "logging.verbose", "coerced_value": true }
-```
+CLI only: `config_set` rewrites the host's config for every user, so it is an
+operator-only service with no REST route (or MCP tool). Use
+`edisonmcps config set <key> <value>` on the host.
 
 ## doctor
 
@@ -118,16 +100,9 @@ curl -X POST http://localhost:8000/api/v1/services/doctor \
   -d '{}'
 ```
 
-To also auto-fix fixable issues, call `doctor_fix` instead. It has side
-effects, so it requires an `Idempotency-Key` header:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/services/doctor_fix \
-  -H "Authorization: Bearer sk_live_..." \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
+Auto-fixing (`uv sync`, `.env` scaffold, `prek install`) acts on the host, so
+`doctor_fix` is an operator-only service with no REST route (or MCP tool). Run
+`edisonmcps doctor --fix` on the host instead.
 
 **Response:**
 

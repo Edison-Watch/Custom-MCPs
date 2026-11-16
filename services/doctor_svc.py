@@ -315,12 +315,13 @@ def doctor(input: DoctorInput) -> DoctorResult:
     input_model=DoctorFixInput,
     output_model=DoctorResult,
     mutating=True,
+    # Runs uv sync / writes .env / installs hooks on the host: CLI only.
+    operator_only=True,
 )
 def doctor_fix(input: DoctorFixInput) -> DoctorResult:
     """Mutating variant: check, apply fixers (uv sync, .env scaffold, prek
     install), then re-check. Split from ``doctor`` so the plain health check
-    stays a pure read (no Idempotency-Key needed) while the fixer path gets
-    REST idempotency enforcement.
+    stays a pure read; this fixer path acts on the host, so it is CLI-only.
     """
     results = _run_checks()
     if _apply_fixers(results):
@@ -337,8 +338,8 @@ def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
 
     Read-only, like ``doctor``: it never applies fixers. Fixing has side
     effects (``uv sync``, ``.env`` scaffold, ``prek install``) and so goes only
-    through the mutating ``doctor_fix`` service, whose REST route enforces
-    Idempotency-Key. Only the SSE route uses this generator.
+    through the operator-only ``doctor_fix`` service (CLI only). Only the SSE
+    route uses this generator.
     """
     for check_fn in _ALL_CHECKS:
         yield check_fn()

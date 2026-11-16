@@ -164,16 +164,20 @@ mcp: MCPServer = _TemplateMCPServer(
 )
 
 _populated: bool = False
+# Template/CLI conveniences kept off the LLM tool surface. Operator-only
+# services (``@service(operator_only=True)``) are skipped by their flag instead.
 _EXCLUDED_DEFAULT_MCP_SERVICES = frozenset(
     {
         "config_get",
-        "config_set",
         "config_show",
         "doctor",
-        "doctor_fix",
         "greet",
     }
 )
+
+
+def _exposed_over_mcp(entry: ServiceEntry) -> bool:
+    return not entry.operator_only and entry.name not in _EXCLUDED_DEFAULT_MCP_SERVICES
 
 
 def build_mcp_server() -> MCPServer:
@@ -193,7 +197,7 @@ def build_mcp_server() -> MCPServer:
     discover_app_tools()
 
     for entry in get_registry():
-        if entry.name in _EXCLUDED_DEFAULT_MCP_SERVICES:
+        if not _exposed_over_mcp(entry):
             log.debug("Skipping default MCP registration for service {!r}", entry.name)
             continue
         make_tool(mcp, entry)
@@ -206,7 +210,8 @@ def build_mcp_server() -> MCPServer:
 def llm_tool_surface() -> list[ServiceEntry]:
     """Service entries this server exposes to the LLM as MCP tools.
 
-    The registry minus the CLI-only defaults that ``build_mcp_server`` skips.
+    The registry minus the CLI-only defaults and operator-only services that
+    ``build_mcp_server`` skips.
     App-only tools (registered directly via ``@mcp.tool`` and hidden from the
     LLM) are not in the service registry, so they are excluded automatically.
 
@@ -215,10 +220,7 @@ def llm_tool_surface() -> list[ServiceEntry]:
     so the committed landing-page snapshot is stable across environments.
     """
     build_mcp_server()
-    surface = (
-        e for e in get_registry() if e.name not in _EXCLUDED_DEFAULT_MCP_SERVICES
-    )
-    return sorted(surface, key=lambda e: e.name)
+    return sorted(filter(_exposed_over_mcp, get_registry()), key=lambda e: e.name)
 
 
 def _register_app_resources(mcp: MCPServer) -> None:
