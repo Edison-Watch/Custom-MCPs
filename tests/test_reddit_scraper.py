@@ -273,6 +273,26 @@ class TestRedditScrape(TestTemplate):
         ):
             reddit_scrape(RedditScrapeInput(search="rust"))
 
+    def test_upstream_text_never_reaches_the_message(self):
+        # ApifyError is model-facing: the upstream body and httpx's exception
+        # text (which carries the request URL) stay in the log.
+        def bad_status(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="internal trace: dsn=postgres://s3cr3t")
+
+        def unreachable(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(f"boom s3cr3t {request.url}", request=request)
+
+        for handler in (bad_status, unreachable):
+            with (
+                _token("test-token"),
+                _mock_http(handler),
+                pytest.raises(ApifyError) as excinfo,
+            ):
+                reddit_scrape(RedditScrapeInput(search="rust"))
+            message = str(excinfo.value)
+            assert "s3cr3t" not in message
+            assert "apify.com" not in message
+
     def test_non_list_response_raises(self):
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"not": "a list"})
@@ -288,9 +308,10 @@ class TestRedditScrape(TestTemplate):
         discover_services()
         names = {e.name for e in get_registry()}
         assert {"reddit_scrape", "reddit_scrape_start", "reddit_scrape_fetch"} <= names
-        # read-only scrape: not a mutating service
+        # The blocking scrape also runs (and bills) an Apify Actor, so like
+        # reddit_scrape_start it is mutating: REST retries need an Idempotency-Key.
         entry = next(e for e in get_registry() if e.name == "reddit_scrape")
-        assert entry.mutating is False
+        assert entry.mutating is True
         assert reddit_svc  # module imported
 
     def test_scrape_start_is_mutating(self):

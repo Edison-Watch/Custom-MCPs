@@ -15,9 +15,33 @@ class ServiceEntry:
     output_model: type
     func: Callable[..., Any]
     mutating: bool = False
+    operator_only: bool = False
 
 
-class ConnectRequiredError(Exception):
+class ModelFacingError(Exception):
+    """Text written for the model to read and act on; never wraps third-party text.
+
+    The single opt-in that lets the MCP layer show an exception's message to the
+    model (``mcp_server/_tool_errors.py``); every other exception reaches the
+    client sanitized. Subclass it only when the message is first-party prose -
+    recovery guidance, a refusal reason, a correctable argument problem - and
+    never interpolate an upstream exception's text or a response body into it:
+    log those instead.
+    """
+
+
+class InvalidArgument(ModelFacingError, ValueError):  # noqa: N818 - reads as a verdict, like ValueError
+    """A service rejected the caller's arguments; the text is for the caller.
+
+    Subclasses ``ValueError`` so CLI handling is unchanged; REST maps it to 400.
+    Unlike a bare ``ValueError``, which any third-party library may raise with
+    internals in its text (a full URL, a payload ``input_value=``), it is a
+    ``ModelFacingError``, so the MCP layer shows its message to the model.
+    Raise this, not ``ValueError``, for a model-correctable argument problem.
+    """
+
+
+class ConnectRequiredError(ModelFacingError):
     """A service call requires the user to first complete an external connect flow.
 
     Transport-agnostic contract: each integration that links a third-party
@@ -54,14 +78,22 @@ def service(
     input_model: type,
     output_model: type,
     mutating: bool = False,
+    operator_only: bool = False,
 ):
     """Decorator that registers a function as a service.
 
     Set ``mutating=True`` for services with side effects (create/charge/send)
     so the HTTP transport enforces ``Idempotency-Key`` and replays the stored
     response on retries. Leave it ``False`` (the default) for pure/read-only
-    services. The flag only affects the API transport; CLI and MCP are
-    unchanged.
+    services. On MCP, the flag also gates the enhancer crash-fallback
+    (``mcp_server/_tool_factory.py``): a mutating service is never silently
+    re-executed - the fallback reuses the already-completed ``tool.call()``
+    result or propagates the enhancer error. CLI behavior is unchanged.
+
+    Set ``operator_only=True`` for services that act on the host itself
+    (rewrite its config, run ``uv sync``, scaffold ``.env``): they are CLI-only.
+    Neither the REST auto-router nor the MCP server registers them, since any
+    authenticated end user can reach those transports.
     """
 
     def decorator(func):
@@ -73,6 +105,7 @@ def service(
                 output_model=output_model,
                 func=func,
                 mutating=mutating,
+                operator_only=operator_only,
             )
         )
         return func

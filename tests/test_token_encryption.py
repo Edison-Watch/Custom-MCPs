@@ -9,6 +9,7 @@ from common import token_encryption
 from common.token_encryption import (
     FernetEncryption,
     PlaintextEncryption,
+    ensure_encryption_configured,
     get_default_encryption,
     require_encryption,
 )
@@ -86,3 +87,47 @@ class TestRequireEncryption(TestTemplate):
         with patch.object(token_encryption.global_config, "GOOGLE_TOKEN_ENC_KEY", key):
             enc = require_encryption()
         assert isinstance(enc, FernetEncryption)
+
+
+class TestStartupEncryptionCheck(TestTemplate):
+    def _cfg(self, *, db, env, key=None):
+        cfg = token_encryption.global_config
+        return (
+            patch.object(cfg, "BACKEND_DB_URI", db),
+            patch.object(cfg, "DEV_ENV", env),
+            patch.object(cfg, "GOOGLE_TOKEN_ENC_KEY", key),
+        )
+
+    def test_lifespan_refuses_to_start_in_prod_without_key(self):
+        from fastapi.testclient import TestClient  # noqa: PLC0415
+
+        from api_server.server import app  # noqa: PLC0415
+
+        a, b, c = self._cfg(db="postgresql://db/x", env="prod")
+        with (
+            a,
+            b,
+            c,
+            pytest.raises(RuntimeError, match="GOOGLE_TOKEN_ENC_KEY"),
+            TestClient(app),
+        ):
+            pass
+
+    def test_ok_with_key_in_dev_or_without_db(self):
+        key = Fernet.generate_key().decode()
+        for db, env, k in (
+            ("postgresql://db/x", "prod", key),
+            ("postgresql://db/x", "dev", None),
+            (None, "prod", None),
+        ):
+            a, b, c = self._cfg(db=db, env=env, key=k)
+            with a, b, c:
+                ensure_encryption_configured()
+
+    def test_plaintext_warning_logged_once(self):
+        token_encryption._warn_plaintext_fallback.cache_clear()
+        a, b, c = self._cfg(db=None, env="dev")
+        with a, b, c, patch.object(token_encryption.log, "warning") as warn:
+            require_encryption()
+            require_encryption()
+        assert warn.call_count == 1
