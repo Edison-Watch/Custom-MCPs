@@ -42,11 +42,15 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "hono": "4.13.16",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "hono": "4.13.16"
   }
 }
