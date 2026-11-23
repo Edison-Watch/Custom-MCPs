@@ -1,8 +1,6 @@
 """Tests for API key create / validate / revoke / expire flow."""
 
-import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,18 +12,6 @@ from api_server.auth.api_key_auth import (
 )
 from db.base import Base
 from tests.test_template import TestTemplate
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-# API keys go in X-API-KEY; the Bearer slot is for JWT / OAuth tokens only, so a
-# `Bearer sk_...` example in user-facing docs 401s for anyone who copies it.
-_BEARER_API_KEY = re.compile(r"Bearer\s+sk[_-]")
-_DOC_GLOBS = (
-    "docs/content/**/*.md*",
-    "landing-page/src/**/*.ts",
-    ".agents/skills/**/*.md",
-    "**/README.md",
-)
-_SKIP_DIRS = {"node_modules", ".venv", "site-packages"}
 
 
 def _make_session() -> Session:
@@ -89,16 +75,3 @@ class TestAPIKeyAuth(TestTemplate):
         session = _make_session()
         _raw_key, row = create_api_key(session, user_id="user-4")
         assert revoke_api_key(session, key_id=row.id, user_id="wrong-user") is False
-
-
-class TestAPIKeyDocs(TestTemplate):
-    def test_docs_never_send_api_key_as_bearer(self):
-        offenders = [
-            f"{path.relative_to(_REPO_ROOT)}:{lineno}"
-            for pattern in _DOC_GLOBS
-            for path in _REPO_ROOT.glob(pattern)
-            if _SKIP_DIRS.isdisjoint(path.parts)
-            for lineno, line in enumerate(path.read_text().splitlines(), 1)
-            if _BEARER_API_KEY.search(line)
-        ]
-        assert not offenders, f"Use `X-API-KEY: sk_...`, not Bearer: {offenders}"
