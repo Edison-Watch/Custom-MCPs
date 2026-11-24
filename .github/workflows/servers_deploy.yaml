@@ -156,7 +156,9 @@ jobs:
 
       - name: Test (gate deploy on the server's own suite)
         working-directory: servers/${{ matrix.server }}
+        # shared/ is bundled into the Worker, so its suites gate the deploy too.
         run: |
+          bun test ../../shared/
           bun run test
           bun run typecheck
           bun run test:integration

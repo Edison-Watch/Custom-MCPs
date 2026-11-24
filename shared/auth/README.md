@@ -31,7 +31,7 @@ reads `sub` to attribute usage.
 Every TS connector re-exports `ts/` from its own `src/auth.ts` / `src/jwt.ts`.
 The verifier's suites live beside it (`ts/*.test.ts`, run by the `test-shared`
 job in `servers_ts.yaml`); a server keeps only a smoke test that it re-exports
-this module. A change under `shared/` redeploys every server.
+this module. A non-markdown change under `shared/` redeploys every server.
 
 The JWKS issuer itself is an **edison-watch** change, specified in
 `edison-watch/dev-docs/architecture/first_party_mcp_integration.md` §(3).

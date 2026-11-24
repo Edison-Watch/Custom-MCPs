@@ -5,7 +5,7 @@
  * Why "best-effort": the shared promise belongs to the request that started
  * the job. Workers refuses to settle it inside any other request once that one
  * has ended (handle_cross_request_promise_resolution, on by default for
- * compatibility dates from 2026), so a joiner's await rejects with "This
+ * compatibility dates from 2024-10-14), so a joiner's await rejects with "This
  * promise was created by a request that has since ended". If the starter is
  * cancelled mid-job its cleanup never runs either, leaving the slot pointing at
  * a dead promise for the isolate's lifetime. So in {@link SingleFlight.do}:
