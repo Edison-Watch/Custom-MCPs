@@ -252,6 +252,42 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     }
   });
 
+  test("a failed refetch keeps this url's pre-wait keys when another url took the cache", async () => {
+    // The cache is one global slot. While a kid-miss refetch for url A is in
+    // flight (and then fails), a request for url B fills the slot. A must fall
+    // back to the A set it had before waiting - a kid miss is then a 401 - not
+    // find no same-url set and 503.
+    __resetJwksCacheForTest();
+    const CONFIG_B: EdisonJwtConfig = { ...CONFIG, jwksUrl: "https://other.example/.well-known/jwks.json" };
+    let aFetches = 0;
+    const realFetch = globalThis.fetch;
+    const realNow = Date.now;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const ok = () =>
+        new Response(JSON.stringify(jwks), { status: 200, headers: { "content-type": "application/json" } });
+      if (url === CONFIG_B.jwksUrl) return ok();
+      aFetches++;
+      if (aFetches === 1) return ok();
+      await new Promise((r) => setTimeout(r, 20));
+      return new Response("upstream down", { status: 500 });
+    }) as unknown as typeof fetch;
+    try {
+      const good = await sign(realClaims());
+      const rotated = await sign(realClaims(), { kid: "rotated-key" });
+      const base = realNow();
+      Date.now = () => base;
+      expect((await verifyEdisonJwt(good, CONFIG)).ok).toBe(true); // caches A
+      Date.now = () => base + 31_000; // past the refetch cooldown, within TTL
+      const a = verifyEdisonJwt(rotated, CONFIG); // kid miss: slow, failing refetch of A
+      expect((await verifyEdisonJwt(good, CONFIG_B)).ok).toBe(true); // B takes the slot
+      expect(await a).toMatchObject({ ok: false, status: 401 });
+    } finally {
+      globalThis.fetch = realFetch;
+      Date.now = realNow;
+    }
+  });
+
   test("coalesces a concurrent cold-start burst into a single JWKS fetch", async () => {
     __resetJwksCacheForTest();
     let fetches = 0;
