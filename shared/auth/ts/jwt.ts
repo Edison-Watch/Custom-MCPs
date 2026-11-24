@@ -16,6 +16,8 @@
  * natively, and pinning one alg avoids the classic "alg confusion" downgrade.
  */
 
+import { MISS, SingleFlight } from "./single_flight";
+
 export interface EdisonJwtConfig {
   jwksUrl: string;
   issuer: string;
@@ -51,21 +53,30 @@ export interface Jwks {
 const CLOCK_SKEW_SEC = 60;
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const JWKS_MIN_REFETCH_MS = 30 * 1000;
+// Cap the JWKS fetch: a stalled endpoint must not hold the shared in-flight
+// promise (and every /mcp auth request joined to it) open until the Worker's
+// own request budget expires. A timeout aborts the fetch, fetchJwks maps it to
+// "no JWKS", and the caller 503s.
+const JWKS_FETCH_TIMEOUT_MS = 5000;
+// An in-flight fetch older than this cannot be live (the fetch itself aborts at
+// JWKS_FETCH_TIMEOUT_MS), so it is an orphan no request should wait on.
+const JWKS_INFLIGHT_MAX_AGE_MS = JWKS_FETCH_TIMEOUT_MS + 1000;
 
 // Module-scoped JWKS cache. A cold isolate refetches; within an isolate we
 // avoid a fetch per request but still pick up rotations within JWKS_TTL_MS (and
 // on a kid miss, subject to the refetch cooldown - see ensureJwks).
 let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
 let lastFetchAt = 0;
-// A single outstanding fetch, so a cold/stale-cache burst coalesces into ONE
-// upstream GET instead of one per concurrent request (see ensureJwks).
-let inFlight: { url: string; promise: Promise<Jwks | null> } | null = null;
+// One outstanding fetch per isolate, so a cold/stale-cache burst coalesces into
+// ONE upstream GET instead of one per concurrent request. Joining is
+// best-effort across Workers requests; see ./single_flight for why.
+const jwksFlight = new SingleFlight<Jwks | null>(JWKS_INFLIGHT_MAX_AGE_MS);
 
 /** Reset the JWKS cache. Test-only. */
 export function __resetJwksCacheForTest(): void {
   jwksCache = null;
   lastFetchAt = 0;
-  inFlight = null;
+  jwksFlight.reset();
 }
 
 function fail(status: number, message: string): JwtFail {
@@ -207,12 +218,6 @@ function isUsableJwks(body: unknown): body is Jwks {
   return Array.isArray(keys) && keys.every(isPlainObject);
 }
 
-// Cap the JWKS fetch: a stalled endpoint must not hold the shared inFlight
-// promise (and every /mcp auth request joined to it) open until the Worker's
-// own request budget expires. A timeout aborts the fetch, the catch below maps
-// it to "no JWKS", and the caller 503s.
-const JWKS_FETCH_TIMEOUT_MS = 5000;
-
 async function fetchJwks(url: string): Promise<Jwks | null> {
   try {
     const res = await fetch(url, {
@@ -242,36 +247,35 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   const hasKid = wantKid ? jwksCache?.jwks.keys.some((k) => k.kid === wantKid) : true;
   if (fresh && hasKid) return jwksCache!.jwks;
 
-  // Only the cache fetched from THIS url is a valid fallback - never serve a set
-  // fetched for a different jwksUrl (which would verify against the wrong issuer).
-  const cachedForUrl = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
+  // Same-url cache as of now: a fallback if the wait below ends in a miss and the
+  // global slot has meanwhile been taken by a different jwksUrl.
+  const cachedBefore = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
 
-  // If a fetch for this url is already outstanding, join it rather than opening
-  // a second upstream GET. This is what actually bounds a concurrent burst: the
-  // cooldown below only throttles *sequential* requests, so without dedup every
-  // request in a cold-isolate burst would fetch (lastFetchAt only advances after
-  // success). Failures don't advance the cooldown, so the next request retries.
-  if (inFlight && inFlight.url === url) return (await inFlight.promise) ?? cachedForUrl;
-
-  // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
-  // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
-  // set for this url (a kid miss then 401s) rather than hammering the endpoint.
-  if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return cachedForUrl;
-
-  const promise = fetchJwks(url);
-  inFlight = { url, promise };
-  let jwks: Jwks | null;
-  try {
-    jwks = await promise;
-  } finally {
-    if (inFlight && inFlight.promise === promise) inFlight = null;
-  }
-  if (!jwks) return cachedForUrl; // network blip: fall back to a same-url cached set, else null (503)
-  // Advance the cooldown only after a *successful* fetch, so a failed fetch can
-  // retry on the next request instead of being suppressed for the whole window.
-  lastFetchAt = now;
-  jwksCache = { url, jwks, fetchedAt: now };
-  return jwks;
+  // Join an outstanding fetch for this url, else start one. Dedup is what bounds
+  // a concurrent burst: the cooldown only throttles *sequential* requests.
+  const result = await jwksFlight.do(url, () => {
+    // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
+    // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
+    // set for this url (a kid miss then 401s) rather than hammering the endpoint.
+    if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return undefined;
+    return fetchJwks(url).then((jwks) => {
+      // Advance the cooldown only after a *successful* fetch, so a failed fetch
+      // can retry on the next request instead of being suppressed for the window.
+      if (jwks) {
+        lastFetchAt = now;
+        jwksCache = { url, jwks, fetchedAt: now };
+      }
+      return jwks;
+    });
+  });
+  if (result !== MISS && result) return result;
+  // A miss (cooldown) or a failed fetch falls back to the cached set. Prefer a
+  // read taken now, since another request may have refilled it during the wait;
+  // else the pre-wait snapshot. Only a set fetched from THIS url is a valid
+  // fallback: one for a different jwksUrl would verify against the wrong
+  // issuer. Else null (503).
+  const cachedNow = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
+  return cachedNow ?? cachedBefore;
 }
 
 /** Full verify: resolve Edison's JWKS (cached) and verify the token against it. */

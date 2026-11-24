@@ -17,6 +17,13 @@ on:
       - main
     paths:
       - 'servers/**'
+      # Servers import shared/ (auth, apify logging) at build time, so a change
+      # there must ship too - see the assemble step.
+      - 'shared/**'
+      # ...but not docs-only shared pushes: they select no server, and a no-op
+      # run would still take the one pending slot in the deploy-fleet
+      # concurrency group, cancelling a queued deploy that carried real code.
+      - '!shared/**/*.md'
       - '.github/workflows/servers_deploy.yaml'
   workflow_dispatch:
     inputs:
@@ -90,6 +97,16 @@ jobs:
 
             mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
             sel='[]'
+            # Workers bundle shared/ (auth, apify logging), so a non-markdown
+            # change there redeploys every Worker; otherwise a shared-only fix
+            # would merge and never ship. Deliberately coarse: a shared/ui or
+            # shared/catalog change also redeploys all, rather than tracing
+            # imports per server. awk, not `grep -q` in a pipe: grep -q exits on
+            # the first match, SIGPIPEs the upstream stage, and under pipefail
+            # turns a large shared diff into "no shared change".
+            if printf '%s\n' "$changed" | awk '/^shared\// && !/\.md$/ { found = 1 } END { exit !found }'; then
+              CH=("${ALL[@]}")
+            fi
             for s in "${CH[@]:-}"; do
               [ -n "$s" ] || continue
               if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
@@ -144,7 +161,9 @@ jobs:
 
       - name: Test (gate deploy on the server's own suite)
         working-directory: servers/${{ matrix.server }}
+        # shared/ is bundled into the Worker, so its suites gate the deploy too.
         run: |
+          bun test ../../shared/
           bun run test
           bun run typecheck
           bun run test:integration
