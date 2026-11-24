@@ -15,7 +15,7 @@ Greet a user by name.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/greet \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "shout": true, "times": 1}'
 ```
@@ -40,7 +40,7 @@ Show the full project configuration.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/config_show \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -65,7 +65,7 @@ Get a single configuration value by dot-separated key.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/config_get \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{"key": "llm_config.cache_enabled"}'
 ```
@@ -95,7 +95,7 @@ fields such as `fix` are rejected with `422`.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/doctor \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{}'
 ```

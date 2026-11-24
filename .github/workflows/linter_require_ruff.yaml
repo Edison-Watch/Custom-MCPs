@@ -42,3 +42,5 @@ jobs:
         run: uv run python scripts/check_file_length.py
       - name: Run blind-except justification check
         run: uv run python scripts/check_blind_except_justification.py
+      - name: Run API-key header examples check
+        run: uv run python scripts/check_api_key_header_examples.py
