@@ -16,6 +16,8 @@
  * natively, and pinning one alg avoids the classic "alg confusion" downgrade.
  */
 
+import { MISS, SingleFlight } from "./single_flight";
+
 export interface EdisonJwtConfig {
   jwksUrl: string;
   issuer: string;
@@ -51,31 +53,30 @@ export interface Jwks {
 const CLOCK_SKEW_SEC = 60;
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const JWKS_MIN_REFETCH_MS = 30 * 1000;
+// Cap the JWKS fetch: a stalled endpoint must not hold the shared in-flight
+// promise (and every /mcp auth request joined to it) open until the Worker's
+// own request budget expires. A timeout aborts the fetch, fetchJwks maps it to
+// "no JWKS", and the caller 503s.
+const JWKS_FETCH_TIMEOUT_MS = 5000;
+// An in-flight fetch older than this cannot be live (the fetch itself aborts at
+// JWKS_FETCH_TIMEOUT_MS), so it is an orphan no request should wait on.
+const JWKS_INFLIGHT_MAX_AGE_MS = JWKS_FETCH_TIMEOUT_MS + 1000;
 
 // Module-scoped JWKS cache. A cold isolate refetches; within an isolate we
 // avoid a fetch per request but still pick up rotations within JWKS_TTL_MS (and
 // on a kid miss, subject to the refetch cooldown - see ensureJwks).
 let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
 let lastFetchAt = 0;
-// A single outstanding fetch, so a cold/stale-cache burst coalesces into ONE
-// upstream GET instead of one per concurrent request (see ensureJwks).
-//
-// The promise belongs to the request that started the fetch. Workers forbids
-// settling it inside any other request once that one has ended (the
-// handle_cross_request_promise_resolution behaviour on compatibility dates
-// from 2026): a joiner's await then rejects with "This promise was created by a
-// request that has since ended", and if the starter was cancelled mid-fetch its
-// `finally` never runs, leaving this slot pointing at a dead promise for the
-// isolate's lifetime. ensureJwks therefore treats a join as best-effort: a
-// rejected join, or an entry older than the fetch timeout, is discarded and the
-// caller fetches for itself.
-let inFlight: { url: string; promise: Promise<Jwks | null>; startedAt: number } | null = null;
+// One outstanding fetch per isolate, so a cold/stale-cache burst coalesces into
+// ONE upstream GET instead of one per concurrent request. Joining is
+// best-effort across Workers requests; see ./single_flight for why.
+const jwksFlight = new SingleFlight<Jwks | null>(JWKS_INFLIGHT_MAX_AGE_MS);
 
 /** Reset the JWKS cache. Test-only. */
 export function __resetJwksCacheForTest(): void {
   jwksCache = null;
   lastFetchAt = 0;
-  inFlight = null;
+  jwksFlight.reset();
 }
 
 function fail(status: number, message: string): JwtFail {
@@ -217,15 +218,6 @@ function isUsableJwks(body: unknown): body is Jwks {
   return Array.isArray(keys) && keys.every(isPlainObject);
 }
 
-// Cap the JWKS fetch: a stalled endpoint must not hold the shared inFlight
-// promise (and every /mcp auth request joined to it) open until the Worker's
-// own request budget expires. A timeout aborts the fetch, the catch below maps
-// it to "no JWKS", and the caller 503s.
-const JWKS_FETCH_TIMEOUT_MS = 5000;
-// An in-flight entry older than this cannot belong to a live fetch (the fetch
-// itself aborts at JWKS_FETCH_TIMEOUT_MS), so it is an orphan to discard.
-const JWKS_INFLIGHT_MAX_AGE_MS = JWKS_FETCH_TIMEOUT_MS + 1000;
-
 async function fetchJwks(url: string): Promise<Jwks | null> {
   try {
     const res = await fetch(url, {
@@ -259,44 +251,26 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   // fetched for a different jwksUrl (which would verify against the wrong issuer).
   const cachedForUrl = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
 
-  // If a fetch for this url is already outstanding, join it rather than opening
-  // a second upstream GET. This is what actually bounds a concurrent burst: the
-  // cooldown below only throttles *sequential* requests, so without dedup every
-  // request in a cold-isolate burst would fetch (lastFetchAt only advances after
-  // success). Failures don't advance the cooldown, so the next request retries.
-  if (inFlight && inFlight.url === url) {
-    const joined = inFlight;
-    if (now - joined.startedAt <= JWKS_INFLIGHT_MAX_AGE_MS) {
-      try {
-        return (await joined.promise) ?? cachedForUrl;
-      } catch {
-        // Cross-request promise from an ended request (see `inFlight`): fall
-        // through and fetch on this request instead of 500ing it.
+  // Join an outstanding fetch for this url, else start one. Dedup is what bounds
+  // a concurrent burst: the cooldown only throttles *sequential* requests.
+  const result = await jwksFlight.do(url, now, () => {
+    // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
+    // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
+    // set for this url (a kid miss then 401s) rather than hammering the endpoint.
+    if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return undefined;
+    return fetchJwks(url).then((jwks) => {
+      // Advance the cooldown only after a *successful* fetch, so a failed fetch
+      // can retry on the next request instead of being suppressed for the window.
+      if (jwks) {
+        lastFetchAt = now;
+        jwksCache = { url, jwks, fetchedAt: now };
       }
-    }
-    // Dead or orphaned entry: drop it so later requests don't join it either.
-    if (inFlight === joined) inFlight = null;
-  }
-
-  // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
-  // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
-  // set for this url (a kid miss then 401s) rather than hammering the endpoint.
-  if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return cachedForUrl;
-
-  const promise = fetchJwks(url);
-  inFlight = { url, promise, startedAt: now };
-  let jwks: Jwks | null;
-  try {
-    jwks = await promise;
-  } finally {
-    if (inFlight && inFlight.promise === promise) inFlight = null;
-  }
-  if (!jwks) return cachedForUrl; // network blip: fall back to a same-url cached set, else null (503)
-  // Advance the cooldown only after a *successful* fetch, so a failed fetch can
-  // retry on the next request instead of being suppressed for the whole window.
-  lastFetchAt = now;
-  jwksCache = { url, jwks, fetchedAt: now };
-  return jwks;
+      return jwks;
+    });
+  });
+  // A miss (cooldown) or a failed fetch falls back to a same-url cached set,
+  // else null (the caller 503s).
+  return result === MISS ? cachedForUrl : (result ?? cachedForUrl);
 }
 
 /** Full verify: resolve Edison's JWKS (cached) and verify the token against it. */

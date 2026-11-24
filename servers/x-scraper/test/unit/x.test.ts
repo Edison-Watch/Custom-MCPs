@@ -107,7 +107,7 @@ describe("buildActorInput", () => {
       only_verified: true,
     });
     expect(input).toMatchObject({
-      twitterContent: "keyboards from:apify",
+      twitterContent: "(keyboards) from:apify",
       queryType: "Top",
       since_time: "1704067200",
       until_time: "1735689599",
@@ -124,8 +124,13 @@ describe("buildActorInput", () => {
 
   test("from_user is folded into the query, not sent as the Actor's from field", () => {
     const input = buildActorInput({ search: "keyboards", from_user: "@apify" });
-    expect(input.twitterContent).toBe("keyboards from:apify");
+    expect(input.twitterContent).toBe("(keyboards) from:apify");
     expect(input.from).toBeUndefined();
+  });
+
+  test("from_user scopes an OR query as a whole", () => {
+    const input = buildActorInput({ search: "AI OR LLM", from_user: "sama" });
+    expect(input.twitterContent).toBe("(AI OR LLM) from:sama");
   });
 });
 

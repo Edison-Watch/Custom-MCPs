@@ -17,6 +17,9 @@ on:
       - main
     paths:
       - 'servers/**'
+      # Servers import shared/ (auth, apify logging) at build time, so a change
+      # there must ship too - see the assemble step.
+      - 'shared/**'
       - '.github/workflows/servers_deploy.yaml'
   workflow_dispatch:
     inputs:
@@ -90,6 +93,11 @@ jobs:
 
             mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
             sel='[]'
+            # shared/ is bundled into every Worker, so a change there redeploys
+            # all of them; otherwise a shared-only fix would merge and never ship.
+            if echo "$changed" | grep '^shared/' | grep -qv '\.md$'; then
+              CH=("${ALL[@]}")
+            fi
             for s in "${CH[@]:-}"; do
               [ -n "$s" ] || continue
               if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then

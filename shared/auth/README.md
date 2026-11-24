@@ -24,14 +24,14 @@ reads `sub` to attribute usage.
 
 - `ts/` - the TypeScript port (Workers `fetch` middleware). **Live.** All three
   modes including `edison-jwt` (stateless JWKS verify, see [`ts/jwt.ts`](./ts/jwt.ts)).
-  The `reddit` and `youtube` connectors re-export it from their own
-  `src/auth.ts` / `src/jwt.ts`, so the verify layer is defined once here. A new
-  TS connector should do the same rather than copy the files.
+  A new TS connector should re-export it rather than copy the files.
 - `py/` - the Python/FastMCP port (dependency for the Gmail-style servers). Not
   yet extracted.
 
-`image-host` still carries its own copy of `src/auth.ts` + `src/jwt.ts` (all
-three modes, same contract); migrating it onto `ts/` is a follow-up.
+Every TS connector re-exports `ts/` from its own `src/auth.ts` / `src/jwt.ts`.
+The verifier's suites live beside it (`ts/*.test.ts`, run by the `test-shared`
+job in `servers_ts.yaml`); a server keeps only a smoke test that it re-exports
+this module. A change under `shared/` redeploys every server.
 
 The JWKS issuer itself is an **edison-watch** change, specified in
 `edison-watch/dev-docs/architecture/first_party_mcp_integration.md` §(3).

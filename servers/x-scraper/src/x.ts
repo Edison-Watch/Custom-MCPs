@@ -139,7 +139,10 @@ export function buildActorInput(args: XScrapeArgs): Record<string, unknown> {
   // separate `from` field: with no `twitterContent` that field returns an empty
   // dataset, and combined with a query it has failed the run outright, while
   // `from:<handle>` in the query is reliable either way.
-  const query = [search, fromUser ? `from:${fromUser}` : undefined].filter(Boolean).join(" ");
+  // The search is parenthesised so the handle scopes all of it: `a OR b` must
+  // become `(a OR b) from:x`, never `a OR (b from:x)`.
+  const fromOp = fromUser ? `from:${fromUser}` : undefined;
+  const query = search && fromOp ? `(${search}) ${fromOp}` : (search ?? fromOp);
   if (query) actorInput.twitterContent = query;
   // Documented Actor date fields: Unix seconds (as strings) under since_time /
   // until_time. Drop a bound that doesn't parse rather than widen the scrape.
