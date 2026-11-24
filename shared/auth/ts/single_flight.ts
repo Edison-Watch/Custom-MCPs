@@ -32,17 +32,25 @@ interface Entry<T> {
 export class SingleFlight<T> {
   private entry: Entry<T> | null = null;
 
-  /** @param maxAgeMs how long an entry can be live; older ones are orphans. */
-  constructor(private readonly maxAgeMs: number) {}
+  /**
+   * @param maxAgeMs how long an entry can be live; older ones are orphans.
+   * @param clock read on every attempt, so a replacement started after a long
+   *   wait is stamped with when it really started (injectable for tests).
+   */
+  constructor(
+    private readonly maxAgeMs: number,
+    private readonly clock: () => number = () => Date.now(),
+  ) {}
 
   /**
    * Join the live job for `key`, or else call `start()` and make its promise
    * the outstanding job. `start` returns undefined to decline (e.g. a
    * cooldown), which yields {@link MISS}; it is called synchronously.
    */
-  async do(key: string, now: number, start: () => Promise<T> | undefined): Promise<T | typeof MISS> {
+  async do(key: string, start: () => Promise<T> | undefined): Promise<T | typeof MISS> {
     const failed = new Set<Entry<T>>();
     for (;;) {
+      const now = this.clock();
       const cur = this.entry;
       if (cur && cur.key === key && !failed.has(cur)) {
         const remaining = this.maxAgeMs - (now - cur.startedAt);

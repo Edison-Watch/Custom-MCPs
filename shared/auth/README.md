@@ -28,7 +28,7 @@ reads `sub` to attribute usage.
 - `py/` - the Python/FastMCP port (dependency for the Gmail-style servers). Not
   yet extracted.
 
-Every TS connector re-exports `ts/` from its own `src/auth.ts` / `src/jwt.ts`.
+Every Workers connector re-exports `ts/` from its own `src/auth.ts` / `src/jwt.ts`.
 The verifier's suites live beside it (`ts/*.test.ts`, run by the `test-shared`
 job in `servers_ts.yaml`); a server keeps only a smoke test that it re-exports
 this module. A non-markdown change under `shared/` redeploys every server.

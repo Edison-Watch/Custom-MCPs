@@ -97,9 +97,14 @@ jobs:
 
             mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
             sel='[]'
-            # shared/ is bundled into every Worker, so a change there redeploys
-            # all of them; otherwise a shared-only fix would merge and never ship.
-            if echo "$changed" | grep '^shared/' | grep -qv '\.md$'; then
+            # Workers bundle shared/ (auth, apify logging), so a non-markdown
+            # change there redeploys every Worker; otherwise a shared-only fix
+            # would merge and never ship. Deliberately coarse: a shared/ui or
+            # shared/catalog change also redeploys all, rather than tracing
+            # imports per server. awk, not `grep -q` in a pipe: grep -q exits on
+            # the first match, SIGPIPEs the upstream stage, and under pipefail
+            # turns a large shared diff into "no shared change".
+            if printf '%s\n' "$changed" | awk '/^shared\// && !/\.md$/ { found = 1 } END { exit !found }'; then
               CH=("${ALL[@]}")
             fi
             for s in "${CH[@]:-}"; do

@@ -249,7 +249,7 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
 
   // Join an outstanding fetch for this url, else start one. Dedup is what bounds
   // a concurrent burst: the cooldown only throttles *sequential* requests.
-  const result = await jwksFlight.do(url, now, () => {
+  const result = await jwksFlight.do(url, () => {
     // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
     // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
     // set for this url (a kid miss then 401s) rather than hammering the endpoint.
