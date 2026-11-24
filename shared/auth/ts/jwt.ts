@@ -59,7 +59,17 @@ let jwksCache: { url: string; jwks: Jwks; fetchedAt: number } | null = null;
 let lastFetchAt = 0;
 // A single outstanding fetch, so a cold/stale-cache burst coalesces into ONE
 // upstream GET instead of one per concurrent request (see ensureJwks).
-let inFlight: { url: string; promise: Promise<Jwks | null> } | null = null;
+//
+// The promise belongs to the request that started the fetch. Workers forbids
+// settling it inside any other request once that one has ended (the
+// handle_cross_request_promise_resolution behaviour on compatibility dates
+// from 2026): a joiner's await then rejects with "This promise was created by a
+// request that has since ended", and if the starter was cancelled mid-fetch its
+// `finally` never runs, leaving this slot pointing at a dead promise for the
+// isolate's lifetime. ensureJwks therefore treats a join as best-effort: a
+// rejected join, or an entry older than the fetch timeout, is discarded and the
+// caller fetches for itself.
+let inFlight: { url: string; promise: Promise<Jwks | null>; startedAt: number } | null = null;
 
 /** Reset the JWKS cache. Test-only. */
 export function __resetJwksCacheForTest(): void {
@@ -212,6 +222,9 @@ function isUsableJwks(body: unknown): body is Jwks {
 // own request budget expires. A timeout aborts the fetch, the catch below maps
 // it to "no JWKS", and the caller 503s.
 const JWKS_FETCH_TIMEOUT_MS = 5000;
+// An in-flight entry older than this cannot belong to a live fetch (the fetch
+// itself aborts at JWKS_FETCH_TIMEOUT_MS), so it is an orphan to discard.
+const JWKS_INFLIGHT_MAX_AGE_MS = JWKS_FETCH_TIMEOUT_MS + 1000;
 
 async function fetchJwks(url: string): Promise<Jwks | null> {
   try {
@@ -251,7 +264,19 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   // cooldown below only throttles *sequential* requests, so without dedup every
   // request in a cold-isolate burst would fetch (lastFetchAt only advances after
   // success). Failures don't advance the cooldown, so the next request retries.
-  if (inFlight && inFlight.url === url) return (await inFlight.promise) ?? cachedForUrl;
+  if (inFlight && inFlight.url === url) {
+    const joined = inFlight;
+    if (now - joined.startedAt <= JWKS_INFLIGHT_MAX_AGE_MS) {
+      try {
+        return (await joined.promise) ?? cachedForUrl;
+      } catch {
+        // Cross-request promise from an ended request (see `inFlight`): fall
+        // through and fetch on this request instead of 500ing it.
+      }
+    }
+    // Dead or orphaned entry: drop it so later requests don't join it either.
+    if (inFlight === joined) inFlight = null;
+  }
 
   // Rate-limit sequential refetches so an attacker-chosen `kid` can't force one
   // upstream JWKS GET per request. Until the cooldown lapses, serve the cached
@@ -259,7 +284,7 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   if (now - lastFetchAt < JWKS_MIN_REFETCH_MS) return cachedForUrl;
 
   const promise = fetchJwks(url);
-  inFlight = { url, promise };
+  inFlight = { url, promise, startedAt: now };
   let jwks: Jwks | null;
   try {
     jwks = await promise;

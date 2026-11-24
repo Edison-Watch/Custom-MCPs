@@ -184,6 +184,38 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     }
   });
 
+  test("an orphaned in-flight JWKS fetch is discarded, not joined forever", async () => {
+    // Models a request cancelled mid-fetch on Workers: its promise never settles
+    // and its `finally` never clears the in-flight slot. Later requests must not
+    // join it (which 500'd every auth on the isolate) once it outlives the fetch
+    // timeout; they fetch for themselves.
+    __resetJwksCacheForTest();
+    let fetches = 0;
+    const realFetch = globalThis.fetch;
+    const realNow = Date.now;
+    globalThis.fetch = (async () => {
+      fetches++;
+      if (fetches === 1) return new Promise<Response>(() => {}); // never settles
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const token = await sign(realClaims());
+      void verifyEdisonJwt(token, CONFIG); // orphaned starter
+      await new Promise((r) => setTimeout(r, 0));
+      const later = realNow() + 7_000; // past the fetch timeout + margin
+      Date.now = () => later;
+      const result = await verifyEdisonJwt(token, CONFIG);
+      expect(result.ok).toBe(true);
+      expect(fetches).toBe(2);
+    } finally {
+      globalThis.fetch = realFetch;
+      Date.now = realNow;
+    }
+  });
+
   test("coalesces a concurrent cold-start burst into a single JWKS fetch", async () => {
     __resetJwksCacheForTest();
     let fetches = 0;

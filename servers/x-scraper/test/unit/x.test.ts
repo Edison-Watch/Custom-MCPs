@@ -107,8 +107,7 @@ describe("buildActorInput", () => {
       only_verified: true,
     });
     expect(input).toMatchObject({
-      twitterContent: "keyboards",
-      from: "apify",
+      twitterContent: "keyboards from:apify",
       queryType: "Top",
       since_time: "1704067200",
       until_time: "1735689599",
@@ -117,10 +116,16 @@ describe("buildActorInput", () => {
     });
   });
 
-  test("from_user alone (no search) is a valid target", () => {
+  test("from_user alone (no search) becomes a from: query", () => {
     const input = buildActorInput({ search: "   ", from_user: "elonmusk" });
-    expect(input.from).toBe("elonmusk");
-    expect(input.twitterContent).toBeUndefined();
+    expect(input.twitterContent).toBe("from:elonmusk");
+    expect(input.from).toBeUndefined();
+  });
+
+  test("from_user is folded into the query, not sent as the Actor's from field", () => {
+    const input = buildActorInput({ search: "keyboards", from_user: "@apify" });
+    expect(input.twitterContent).toBe("keyboards from:apify");
+    expect(input.from).toBeUndefined();
   });
 });
 
