@@ -218,6 +218,40 @@ describe("verifyEdisonJwt (JWKS fetch + refetch cooldown)", () => {
     }
   });
 
+  test("a joiner released after another request refilled the cache uses the fresh keys", async () => {
+    // A starter is orphaned; B joins near the end of its life; C arrives after
+    // it expired, fetches and caches; then B's join times out with the slot
+    // free and the cooldown armed. B must read the cache C filled, not the
+    // empty snapshot it took before waiting (which 503'd).
+    __resetJwksCacheForTest();
+    let fetches = 0;
+    const realFetch = globalThis.fetch;
+    const realNow = Date.now;
+    globalThis.fetch = (async () => {
+      fetches++;
+      if (fetches === 1) return new Promise<Response>(() => {}); // orphaned starter
+      return new Response(JSON.stringify(jwks), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    try {
+      const token = await sign(realClaims());
+      const base = realNow();
+      Date.now = () => base;
+      void verifyEdisonJwt(token, CONFIG); // A: never settles
+      Date.now = () => base + 5_900; // ~100ms left on A's entry
+      const b = verifyEdisonJwt(token, CONFIG);
+      Date.now = () => base + 7_000; // A expired: C fetches for itself
+      expect((await verifyEdisonJwt(token, CONFIG)).ok).toBe(true);
+      expect((await b).ok).toBe(true);
+      expect(fetches).toBe(2);
+    } finally {
+      globalThis.fetch = realFetch;
+      Date.now = realNow;
+    }
+  });
+
   test("coalesces a concurrent cold-start burst into a single JWKS fetch", async () => {
     __resetJwksCacheForTest();
     let fetches = 0;

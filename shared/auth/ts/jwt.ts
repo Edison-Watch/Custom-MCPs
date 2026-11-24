@@ -247,10 +247,6 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
   const hasKid = wantKid ? jwksCache?.jwks.keys.some((k) => k.kid === wantKid) : true;
   if (fresh && hasKid) return jwksCache!.jwks;
 
-  // Only the cache fetched from THIS url is a valid fallback - never serve a set
-  // fetched for a different jwksUrl (which would verify against the wrong issuer).
-  const cachedForUrl = jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
-
   // Join an outstanding fetch for this url, else start one. Dedup is what bounds
   // a concurrent burst: the cooldown only throttles *sequential* requests.
   const result = await jwksFlight.do(url, now, () => {
@@ -268,9 +264,12 @@ async function ensureJwks(url: string, wantKid: string | undefined, now: number)
       return jwks;
     });
   });
-  // A miss (cooldown) or a failed fetch falls back to a same-url cached set,
-  // else null (the caller 503s).
-  return result === MISS ? cachedForUrl : (result ?? cachedForUrl);
+  if (result !== MISS && result) return result;
+  // A miss (cooldown) or a failed fetch falls back to the cached set - read now,
+  // not before the wait, since another request may have refilled it meanwhile.
+  // Only a set fetched from THIS url is a valid fallback: one fetched for a
+  // different jwksUrl would verify against the wrong issuer. Else null (503).
+  return jwksCache && jwksCache.url === url ? jwksCache.jwks : null;
 }
 
 /** Full verify: resolve Edison's JWKS (cached) and verify the token against it. */

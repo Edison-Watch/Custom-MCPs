@@ -20,6 +20,10 @@ on:
       # Servers import shared/ (auth, apify logging) at build time, so a change
       # there must ship too - see the assemble step.
       - 'shared/**'
+      # ...but not docs-only shared pushes: they select no server, and a no-op
+      # run would still take the one pending slot in the deploy-fleet
+      # concurrency group, cancelling a queued deploy that carried real code.
+      - '!shared/**/*.md'
       - '.github/workflows/servers_deploy.yaml'
   workflow_dispatch:
     inputs:
