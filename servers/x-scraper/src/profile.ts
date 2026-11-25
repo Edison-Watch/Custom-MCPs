@@ -6,13 +6,18 @@
  * full user objects (bio, follower/following counts, verified flag, join date,
  * location, tweet count...).
  *
- * Quirk this module exists to tame: the Actor returns the requested profiles
- * first, then pads the run up to `maxItems` with "who to follow" suggestions,
- * and at a very small `maxItems` its ordering is unstable (a suggestion can
- * crowd the requested account out of the window entirely - observed: asking for
- * `sama` at `maxItems: 1` returned `paulg`). So we deliberately over-fetch by a
- * fixed buffer and then filter the dataset back down to exactly the requested
- * accounts: the caller only ever sees profiles it asked for, never suggestions.
+ * Quirk this module exists to tame: the Actor's `getFollowers`, `getFollowing`
+ * and `getRetweeters` inputs all DEFAULT TO TRUE. Left on, a profile lookup also
+ * scrapes each account's followers and following (rows tagged `followerOf` /
+ * `followedBy`), each a billed "Follower/Following Query" plus a billed dataset
+ * item, and those rows share the `maxItems` window with the profiles - so a
+ * requested profile could be crowded out and silently dropped (observed:
+ * `["openai","sama"]` at maxItems 12 returned OpenAI plus 10 of its
+ * following/followers; `sama` at maxItems 1 returned `paulg`, one of sama's
+ * follows). We turn all three off and ask for one item per target plus
+ * {@link PROFILE_HEADROOM};
+ * {@link selectProfiles} still filters to the requested set as a defensive floor,
+ * and {@link missingTargets} names any requested account that did not come back.
  */
 
 import { normalizeHandle } from "./x";
@@ -20,11 +25,14 @@ import { normalizeHandle } from "./x";
 export const DEFAULT_PROFILE_ACTOR_ID = "apidojo~twitter-user-scraper";
 
 /**
- * Headroom over the requested count (see file header): fetch this many extra
- * items so the Actor's suggestion padding can never truncate a requested
- * profile out of the returned window before we filter back to the requested set.
+ * Small headroom over the target count. With follower/following scraping off
+ * the Actor returns only the requested profiles (measured: 2 handles at
+ * maxItems 4 returned exactly 2), and it bills per item actually returned, so
+ * unused headroom costs nothing. It only matters if the Actor ever starts
+ * emitting an extra non-requested row again: then that row cannot crowd a
+ * requested profile out of the window, and selectProfiles drops it.
  */
-export const PROFILE_PADDING_BUFFER = 10;
+export const PROFILE_HEADROOM = 2;
 
 /**
  * Hard cap on how many accounts one call may request. Each requested account is
@@ -127,9 +135,6 @@ export function hasProfileTarget(args: XProfileArgs): boolean {
   return handles.length > 0 || urls.length > 0;
 }
 
-/** Map the caller's input onto the Actor's input schema, over-fetching by
- * {@link PROFILE_PADDING_BUFFER} so suggestion padding never truncates a
- * requested profile out of the window (see file header). */
 /**
  * Count unique account identities in a request: a handle, or the raw URL when it
  * has no resolvable handle. Used both to size the run and to enforce the
@@ -149,7 +154,11 @@ export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
   const targetCount = uniqueTargetCount(args);
   const input: Record<string, unknown> = {
     getAbout: args.include_about ?? true,
-    maxItems: targetCount + PROFILE_PADDING_BUFFER,
+    // Profiles only: these default to true in the Actor (see file header).
+    getFollowers: false,
+    getFollowing: false,
+    getRetweeters: false,
+    maxItems: targetCount + PROFILE_HEADROOM,
   };
   if (handles.length) input.twitterHandles = handles;
   if (urls.length) input.startUrls = urls;
@@ -182,6 +191,28 @@ export function selectProfiles(
     if (!names.has(key) || seen.has(key)) continue;
     seen.add(key);
     out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Requested handles (as the caller spelled them, URL targets resolved to their
+ * handle) with no matching profile in `profiles`, so a dropped or nonexistent
+ * account is reported instead of silently missing from the result.
+ */
+export function missingTargets(profiles: Record<string, unknown>[], args: XProfileArgs): string[] {
+  const found = new Set(
+    profiles.flatMap((p) => (typeof p.userName === "string" ? [p.userName.toLowerCase()] : [])),
+  );
+  const { handles, urls } = profileTargets(args);
+  const requested = [...handles, ...urls.flatMap((u) => handleFromUrl(u) ?? [])];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const h of requested) {
+    const key = h.toLowerCase();
+    if (found.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(h);
   }
   return out;
 }

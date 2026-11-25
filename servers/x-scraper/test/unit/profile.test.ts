@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  PROFILE_PADDING_BUFFER,
   buildProfileInput,
   handleFromUrl,
   hasProfileTarget,
   normalizeHandles,
   profileTargets,
+  missingTargets,
+  PROFILE_HEADROOM,
   selectProfiles,
   uniqueTargetCount,
 } from "../../src/profile";
@@ -62,12 +63,12 @@ describe("profileTargets / hasProfileTarget", () => {
 });
 
 describe("buildProfileInput", () => {
-  test("maps handles/urls and over-fetches by the padding buffer", () => {
+  test("maps handles, asks for one item per target plus headroom, profiles only", () => {
     const input = buildProfileInput({ handles: ["openai", "sama"] });
     expect(input).toMatchObject({
       twitterHandles: ["openai", "sama"],
       getAbout: true,
-      maxItems: 2 + PROFILE_PADDING_BUFFER,
+      maxItems: 2 + PROFILE_HEADROOM,
     });
     expect(input.startUrls).toBeUndefined();
   });
@@ -77,7 +78,7 @@ describe("buildProfileInput", () => {
     expect(input).toMatchObject({
       startUrls: ["https://x.com/nasa"],
       getAbout: false,
-      maxItems: 1 + PROFILE_PADDING_BUFFER,
+      maxItems: 1 + PROFILE_HEADROOM,
     });
   });
 
@@ -88,7 +89,29 @@ describe("buildProfileInput", () => {
       handles: ["openai", "OpenAI"],
       profile_urls: ["https://x.com/openai", "https://x.com/sama"],
     });
-    expect(input.maxItems).toBe(2 + PROFILE_PADDING_BUFFER);
+    expect(input.maxItems).toBe(2 + PROFILE_HEADROOM);
+  });
+
+  test("turns off the Actor's follower/following/retweeter scraping (all default to true)", () => {
+    // Left on, those billed list rows share the maxItems window and crowded a
+    // requested profile out (["openai","sama"] returned OpenAI + 10 list rows).
+    const input = buildProfileInput({ handles: ["openai"], profile_urls: ["https://x.com/sama"] });
+    expect(input).toMatchObject({ getFollowers: false, getFollowing: false, getRetweeters: false });
+  });
+});
+
+describe("missingTargets", () => {
+  const openai = { userName: "OpenAI" };
+  test("names requested handles with no matching profile, case-insensitively", () => {
+    expect(missingTargets([openai], { handles: ["openai", "sama"] })).toEqual(["sama"]);
+  });
+  test("resolves URL targets to handles and dedupes across fields", () => {
+    expect(
+      missingTargets([openai], { handles: ["SAMA"], profile_urls: ["https://x.com/sama", "https://x.com/openai"] }),
+    ).toEqual(["SAMA"]);
+  });
+  test("is empty when everything came back", () => {
+    expect(missingTargets([openai], { handles: ["@openai"] })).toEqual([]);
   });
 });
 
