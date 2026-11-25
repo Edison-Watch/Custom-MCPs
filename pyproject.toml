@@ -23,7 +23,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "human-id>=0.2.0",
     "import-linter>=2.13",
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-xdist>=3.6.1",
     "termcolor>=2.5.0",
     "loguru>=0.7.3",
@@ -246,7 +246,13 @@ exclude-newer-package = { certifi = false }
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
-    "pytest-check-links>=0.9.1",
+    # NOTE: pytest-check-links is deliberately NOT a project dependency. It still
+    # declares the pytest `path` collect hook removed in pytest 9.1, so having it
+    # in this venv would make pytest 9.1+ abort at plugin load. The link checker
+    # instead runs it in a throwaway env that never installs this project (so it
+    # can pin pytest<9.1 independently of the project's own pytest, which is a
+    # runtime dep): see the `make lint_links` target and the prek `lint-links`
+    # hook - both `uv run --no-project --with 'pytest<9.1' --with pytest-check-links`.
     # Validates the served A2A Agent Card against the vendored AgentCard schema
     # in tests/data/ (test-only; the app builds the card from typed models).
     "jsonschema>=4.26.0",

@@ -275,7 +275,7 @@ docs_lint: ## Lint docs links
 
 lint_links: ## Lint all markdown links using pytest-check-links
 	@echo "$(YELLOW)🔍Linting all markdown links with pytest-check-links...$(RESET)"
-	@uv run python scripts/lint_links.py
+	@uv run --no-project --with "pytest<9.1" --with "pytest-check-links" python scripts/lint_links.py
 	@echo "$(GREEN)✅Link linting completed.$(RESET)"
 
 agents_validate: ## Validate AGENTS.md content
