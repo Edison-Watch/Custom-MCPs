@@ -27,12 +27,15 @@ from models.gmail import (
     InlineImageUpload,
     _UnsetType,
 )
+from services import InvalidArgument
 from services.gmail_svc import _build_raw_message, _parse_message_resource
 
 
-def _attachment_not_found(attachment_id: str, draft_id: str) -> ValueError:
+def _attachment_not_found(attachment_id: str, draft_id: str) -> InvalidArgument:
     """Uniform error for an attachment_id that is not on a draft."""
-    return ValueError(f"attachment_id {attachment_id!r} is not on draft {draft_id!r}")
+    return InvalidArgument(
+        f"attachment_id {attachment_id!r} is not on draft {draft_id!r}"
+    )
 
 
 def _draft_resource_to_model(draft: dict[str, Any]) -> GmailDraft:

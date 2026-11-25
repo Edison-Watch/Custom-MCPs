@@ -15,7 +15,7 @@ Greet a user by name.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/greet \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice", "shout": true, "times": 1}'
 ```
@@ -40,7 +40,7 @@ Show the full project configuration.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/config_show \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -65,7 +65,7 @@ Get a single configuration value by dot-separated key.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/config_get \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
   -d '{"key": "llm_config.cache_enabled"}'
 ```
@@ -84,44 +84,25 @@ curl -X POST http://localhost:8000/api/v1/services/config_get \
 
 ## config_set
 
-Set a configuration override. The value is coerced to the appropriate type (bool, int, float, or string).
-
-```bash
-curl -X POST http://localhost:8000/api/v1/services/config_set \
-  -H "Authorization: Bearer sk_live_..." \
-  -H "Content-Type: application/json" \
-  -d '{"key": "logging.verbose", "value": "true"}'
-```
-
-**Request body:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `key` | string | Dot-separated config path |
-| `value` | string | New value (auto-coerced) |
-
-**Response:**
-
-```json
-{ "key": "logging.verbose", "coerced_value": true }
-```
+CLI only: `config_set` rewrites the host's config for every user, so it is an
+operator-only service with no REST route (or MCP tool). Use
+`edisonmcps config set <key> <value>` on the host.
 
 ## doctor
 
-Run project health checks. Optionally auto-fix issues.
+Run project health checks (read-only). The body takes no fields; unknown
+fields such as `fix` are rejected with `422`.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/services/doctor \
-  -H "Authorization: Bearer sk_live_..." \
+  -H "X-API-KEY: sk_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"fix": false}'
+  -d '{}'
 ```
 
-**Request body:**
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `fix` | boolean | `false` | Auto-fix fixable issues |
+Auto-fixing (`uv sync`, `.env` scaffold, `prek install`) acts on the host, so
+`doctor_fix` is an operator-only service with no REST route (or MCP tool). Run
+`edisonmcps doctor --fix` on the host instead.
 
 **Response:**
 

@@ -40,7 +40,7 @@ request to thread your trace ID through the server logs.
 | HTTP | `error.code` | Retryable? | What to do |
 |------|--------------|------------|------------|
 | `400` | `bad_request` | No | Fix the request before retrying |
-| `401` | `unauthorized` | No | Verify the `Authorization: Bearer` header / API key |
+| `401` | `unauthorized` | No | Verify the `X-API-KEY` header (API key) or `Authorization: Bearer` (WorkOS JWT). When WorkOS is configured, a stale or invalid Bearer header is checked first and returns 401 even with a valid `X-API-KEY`, so drop it |
 | `402` | `payment_required` / `quota_exceeded` | After daily reset | Daily quota exhausted - the `Retry-After` can be hours away, so handle it separately from the [retry loop](#reference-retry-loop-python): wait for the reset or upgrade the plan |
 | `403` | `forbidden` | No | The key lacks the required [scope](/docs/api/authentication#scopes) |
 | `404` | `not_found` | No | Check the endpoint URL or resource ID |
@@ -53,11 +53,11 @@ request to thread your trace ID through the server logs.
 | `503` | `service_unavailable` | Yes | Retry with backoff; check `/health` |
 
 <Callout type="info">
-`/health` is the canonical status probe (no auth required). It reports
-per-component health (`api`, `database`, `redis`, `stripe`) and returns
-`"degraded"` when any component is unhealthy - see the
-[API overview](/docs/api#health-check). Poll it to distinguish a server-side
-incident from a client-side error before retrying.
+`/health` is the public liveness probe (no auth required). For per-component
+health (`api`, `database`, `redis`, `stripe`), call the authenticated
+`/health/detail`, which returns `"degraded"` when any component is unhealthy -
+see the [API overview](/docs/api#health-check). Poll it to distinguish a
+server-side incident from a client-side error before retrying.
 </Callout>
 
 ## Retry Guidance

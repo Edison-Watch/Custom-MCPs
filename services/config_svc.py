@@ -1,6 +1,7 @@
 """Config service - pure business logic."""
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -13,7 +14,7 @@ from models.config import (
     ConfigShowInput,
     ConfigShowResult,
 )
-from services import service
+from services import InvalidArgument, service
 
 _ROOT_DIR = Path(__file__).parent.parent
 
@@ -39,36 +40,38 @@ def _coerce_value(value: str) -> bool | int | float | str | None:
 
 @service(
     name="config_show",
-    description="Show the full project configuration",
+    description=(
+        "Show the project's effective configuration (YAML, defaults and env "
+        "overrides; secrets excluded)"
+    ),
     input_model=ConfigShowInput,
     output_model=ConfigShowResult,
 )
 def config_show(input: ConfigShowInput) -> ConfigShowResult:
-    return ConfigShowResult(config=global_config.to_dict())
+    # Effective config minus secrets (see Config.to_public_dict): env fields
+    # appear only if allowlisted in common.public_config.PUBLIC_ENV_FIELDS.
+    # Same view on every transport, including the authenticated HTTP one.
+    return ConfigShowResult(config=global_config.to_public_dict())
 
 
 @service(
     name="config_get",
-    description="Get a single configuration value by dot-separated key",
+    description=(
+        "Get an effective config value by dot-separated key (secrets excluded)"
+    ),
     input_model=ConfigGetInput,
     output_model=ConfigGetResult,
 )
 def config_get(input: ConfigGetInput) -> ConfigGetResult:
-    obj = global_config
+    # Walk the public view so secrets are unreachable: config_get(
+    # "OPENAI_API_KEY") / config_get("BACKEND_DB_URI") raise InvalidArgument,
+    # exactly like a key that does not exist (so REST answers 400, not 500).
+    obj: Any = global_config.to_public_dict()
     for part in input.key.split("."):
-        try:
-            obj = getattr(obj, part)
-        except AttributeError:
-            if isinstance(obj, dict):
-                try:
-                    obj = obj[part]
-                except KeyError:
-                    raise KeyError(f"Key not found: {input.key}") from None
-            else:
-                raise KeyError(f"Key not found: {input.key}") from None
-
-    if hasattr(obj, "model_dump"):
-        return ConfigGetResult(key=input.key, value=obj.model_dump())
+        if isinstance(obj, dict) and part in obj:
+            obj = obj[part]
+        else:
+            raise InvalidArgument(f"Key not found: {input.key}")
     return ConfigGetResult(key=input.key, value=obj)
 
 
@@ -77,6 +80,9 @@ def config_get(input: ConfigGetInput) -> ConfigGetResult:
     description="Set a configuration override",
     input_model=ConfigSetInput,
     output_model=ConfigSetResult,
+    mutating=True,
+    # Rewrites the host's .global_config.yaml for every user: CLI only.
+    operator_only=True,
 )
 def config_set(input: ConfigSetInput) -> ConfigSetResult:
     override_path = _ROOT_DIR / ".global_config.yaml"

@@ -8,7 +8,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from models.doctor import CheckResultModel, DoctorInput, DoctorResult
+from models.doctor import (
+    CheckResultModel,
+    DoctorFixInput,
+    DoctorInput,
+    DoctorResult,
+)
 from services import service
 
 _ROOT_DIR = Path(__file__).parent.parent
@@ -275,6 +280,24 @@ _FIXERS: dict[str, Callable[[], bool]] = {
 }
 
 
+def _run_checks() -> list[CheckResultModel]:
+    return [check_fn() for check_fn in _ALL_CHECKS]
+
+
+def _apply_fixers(results: list[CheckResultModel]) -> bool:
+    """Run every applicable fixer; return True if any of them succeeded."""
+    fixed_any = False
+    for r in results:
+        if r.status != "pass" and r.fixable and r.name in _FIXERS and _FIXERS[r.name]():
+            fixed_any = True
+    return fixed_any
+
+
+def _to_result(results: list[CheckResultModel]) -> DoctorResult:
+    has_failures = any(r.status == "fail" for r in results)
+    return DoctorResult(checks=results, has_failures=has_failures)
+
+
 @service(
     name="doctor",
     description="Run health checks on the project environment",
@@ -282,23 +305,28 @@ _FIXERS: dict[str, Callable[[], bool]] = {
     output_model=DoctorResult,
 )
 def doctor(input: DoctorInput) -> DoctorResult:
-    results = [check_fn() for check_fn in _ALL_CHECKS]
+    """Pure read: run every check and report. Fixing lives in ``doctor_fix``."""
+    return _to_result(_run_checks())
 
-    if input.fix:
-        fixed_any = False
-        for r in results:
-            if (
-                r.status != "pass"
-                and r.fixable
-                and r.name in _FIXERS
-                and _FIXERS[r.name]()
-            ):
-                fixed_any = True
-        if fixed_any:
-            results = [check_fn() for check_fn in _ALL_CHECKS]
 
-    has_failures = any(r.status == "fail" for r in results)
-    return DoctorResult(checks=results, has_failures=has_failures)
+@service(
+    name="doctor_fix",
+    description="Run health checks and attempt to auto-fix fixable issues",
+    input_model=DoctorFixInput,
+    output_model=DoctorResult,
+    mutating=True,
+    # Runs uv sync / writes .env / installs hooks on the host: CLI only.
+    operator_only=True,
+)
+def doctor_fix(input: DoctorFixInput) -> DoctorResult:
+    """Mutating variant: check, apply fixers (uv sync, .env scaffold, prek
+    install), then re-check. Split from ``doctor`` so the plain health check
+    stays a pure read; this fixer path acts on the host, so it is CLI-only.
+    """
+    results = _run_checks()
+    if _apply_fixers(results):
+        results = _run_checks()
+    return _to_result(results)
 
 
 def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
@@ -308,24 +336,10 @@ def iter_doctor(input: DoctorInput) -> Iterator[CheckResultModel]:
     ``uv sync --dry-run``), so a unary caller blocks until every check is done.
     This generator lets a transport surface each result the moment it lands.
 
-    In ``--fix`` mode it yields the initial pass first, then applies the fixers
-    and yields the re-checked results, so a consumer sees the full progression.
-    The pure ``doctor`` service is intentionally left unchanged and stays the
-    shared entry point for CLI/MCP/API; only the SSE route uses this generator.
+    Read-only, like ``doctor``: it never applies fixers. Fixing has side
+    effects (``uv sync``, ``.env`` scaffold, ``prek install``) and so goes only
+    through the operator-only ``doctor_fix`` service (CLI only). Only the SSE
+    route uses this generator.
     """
-    results: list[CheckResultModel] = []
     for check_fn in _ALL_CHECKS:
-        result = check_fn()
-        results.append(result)
-        yield result
-
-    if not input.fix:
-        return
-
-    fixed_any = False
-    for r in results:
-        if r.status != "pass" and r.fixable and r.name in _FIXERS and _FIXERS[r.name]():
-            fixed_any = True
-    if fixed_any:
-        for check_fn in _ALL_CHECKS:
-            yield check_fn()
+        yield check_fn()

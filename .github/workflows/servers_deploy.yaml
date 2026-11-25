@@ -1,0 +1,218 @@
+name: Deploy TS Fleet Servers
+
+# Deploys the changed servers/<id> Cloudflare Workers on merge to main, so a
+# reviewed PR ships itself - no local `wrangler deploy`. Each deploy is gated on
+# that server's own test suite (unit + typecheck + workerd integration), so a
+# server can never ship untested even if servers_ts.yaml's matrix lags behind.
+#
+# One-time setup this workflow does NOT do (and cannot, safely):
+#   - Repo secrets CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (Actions secrets).
+#   - Per-server runtime secrets, e.g. `wrangler secret put APIFY_TOKEN` for
+#     reddit - set once via the CLI or the Cloudflare dashboard; they never live
+#     in the repo, so `wrangler deploy` here does not touch them.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'servers/**'
+      # Servers import shared/ (auth, apify logging) at build time, so a change
+      # there must ship too - see the assemble step.
+      - 'shared/**'
+      # ...but not docs-only shared pushes: they select no server, and a no-op
+      # run would still take the one pending slot in the deploy-fleet
+      # concurrency group, cancelling a queued deploy that carried real code.
+      - '!shared/**/*.md'
+      - '.github/workflows/servers_deploy.yaml'
+  workflow_dispatch:
+    inputs:
+      server:
+        description: 'Server id to deploy (e.g. image-host, reddit) or "all"'
+        required: true
+        default: all
+        type: string
+
+concurrency:
+  # Serialize deploys; never cancel one mid-flight. GitHub still keeps only ONE
+  # pending run per group, so a newer run replaces (cancels) a queued one. That
+  # is safe only because the select job ships everything changed since the last
+  # SUCCESSFUL push deploy, not just this run's own push: the surviving run picks
+  # up whatever the cancelled one would have shipped.
+  group: deploy-fleet
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Read this workflow's own run history to find the last successful deploy.
+  actions: read
+
+jobs:
+  select:
+    name: Select servers to deploy
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.assemble.outputs.matrix }}
+      any: ${{ steps.assemble.outputs.any }}
+    steps:
+      # A manual dispatch checks out and deploys the dispatched ref with
+      # production Cloudflare credentials - so only allow it from main, never an
+      # arbitrary (untrusted) branch.
+      - name: Guard - manual runs only from main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        # Read the ref from the environment, never `${{ github.ref }}` inlined
+        # into the shell source: a ref like `x$(...)` would otherwise be
+        # interpolated and executed before this guard can exit.
+        run: |
+          echo "::error::workflow_dispatch for this deploy is only allowed on main (got $GITHUB_REF)"
+          exit 1
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the diff base (last successful deploy) is reachable.
+          fetch-depth: 0
+
+      - name: Assemble deploy matrix
+        id: assemble
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_SERVER: ${{ github.event.inputs.server }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Deployable servers = every servers/<id>/ carrying a wrangler config.
+          # Auto-discovered so a new server needs no edit here.
+          mapfile -t ALL < <(for d in servers/*/; do [ -f "${d}wrangler.jsonc" ] && basename "$d"; done)
+          all_json=$(printf '%s\n' "${ALL[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+
+          # Servers with changes not yet known to be deployed: every file touched
+          # by ANY first-parent commit since the last SUCCESSFUL push deploy.
+          #   - Not this push's own `before`: runs in the deploy-fleet group
+          #     serialize and a newer run cancels a still-pending one, so a
+          #     per-push range would drop the cancelled push's servers.
+          #   - Not a failed run: a failed matrix may have published some Workers
+          #     and not others, so its servers retry on the next deploy.
+          #   - Per-commit file lists, not the net diff: if a failed run published
+          #     a change and a later push reverts it, the net diff from the base
+          #     is empty but production is not; both commits name the Worker.
+          #   - --no-renames: a copy in one push plus a delete in another would
+          #     otherwise collapse into a rename that names only the destination.
+          # Dispatch runs are never a base (they deploy a hand-picked subset).
+          base=$(gh api "repos/${REPO}/actions/workflows/servers_deploy.yaml/runs?branch=main&event=push&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
+          if [ -n "$base" ] && git merge-base --is-ancestor "$base" "$SHA" 2>/dev/null; then
+            echo "Pending base: last successful deploy $base"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            base=""
+            echo "::warning::no usable last-successful-deploy base; deploying only the dispatched server(s)"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # No usable deploy history (first run, API error, rewritten main):
+            # fall back to this push's own range.
+            base="$BEFORE"
+            echo "::warning::no usable last-successful-deploy base; using push before ($base)"
+          else
+            base="${SHA}^"
+            echo "::warning::no usable base; using the merge commit's first parent"
+          fi
+          changed=""
+          if [ -n "$base" ]; then
+            changed=$(git log --first-parent -m --no-renames --name-only --format= "${base}..${SHA}")
+          fi
+
+          mapfile -t CH < <(printf '%s\n' "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
+          # Workers bundle shared/ (auth, apify logging), so a non-markdown
+          # change there redeploys every Worker; otherwise a shared-only fix
+          # would merge and never ship. Deliberately coarse: a shared/ui or
+          # shared/catalog change also redeploys all, rather than tracing
+          # imports per server. awk, not `grep -q` in a pipe: grep -q exits on
+          # the first match, SIGPIPEs the upstream stage, and under pipefail
+          # turns a large shared diff into "no shared change".
+          if printf '%s\n' "$changed" | awk '/^shared\// && !/\.md$/ { found = 1 } END { exit !found }'; then
+            CH=("${ALL[@]}")
+          fi
+          sel='[]'
+          for s in "${CH[@]:-}"; do
+            [ -n "$s" ] || continue
+            # A server deleted since the base has nothing left to deploy.
+            if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
+              sel=$(echo "$sel" | jq -c --arg s "$s" '. + [$s] | unique')
+            fi
+          done
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # A dispatch can replace a queued push run in the group, so it ships
+            # that pending work too, plus whatever was asked for.
+            inp=$(echo "${DISPATCH_SERVER:-}" | tr -d '[:space:]')
+            if [ "$inp" = "all" ]; then
+              sel="$all_json"
+            else
+              sel=$(echo "$sel" | jq -c --arg s "$inp" '. + [$s] | unique')
+            fi
+          fi
+
+          # Every selected server must be a real deployable server, so a mistyped
+          # dispatch id fails loud here instead of the deploy job blowing up on a
+          # missing servers/<bad-id> directory.
+          for s in $(echo "$sel" | jq -r '.[]'); do
+            if ! printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
+              echo "::error::unknown server '$s' (deployable: ${ALL[*]:-none})"
+              exit 1
+            fi
+          done
+
+          echo "matrix={\"server\":$sel}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$sel" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Selected servers: $sel"
+
+  deploy:
+    name: Deploy ${{ matrix.server }}
+    needs: select
+    if: needs.select.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't let one server's deploy failure abort the others; deploy serially
+      # (top-level concurrency groups the run, not the individual matrix jobs).
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        working-directory: servers/${{ matrix.server }}
+        # Frozen only: never deploy freshly-resolved, unreviewed dependency
+        # versions. A lockfile error must be fixed explicitly, not worked around.
+        run: bun install --frozen-lockfile
+
+      - name: Test (gate deploy on the server's own suite)
+        working-directory: servers/${{ matrix.server }}
+        # shared/ is bundled into the Worker, so its suites gate the deploy too.
+        run: |
+          bun test ../../shared/
+          bun run test
+          bun run typecheck
+          bun run test:integration
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: servers/${{ matrix.server }}
+          command: deploy
