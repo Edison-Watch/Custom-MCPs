@@ -6,8 +6,8 @@ import {
   hasProfileTarget,
   normalizeHandles,
   profileTargets,
+  malformedTargets,
   missingTargets,
-  PROFILE_HEADROOM,
   selectProfiles,
   uniqueTargetCount,
 } from "../../src/profile";
@@ -68,7 +68,7 @@ describe("buildProfileInput", () => {
     expect(input).toMatchObject({
       twitterHandles: ["openai", "sama"],
       getAbout: true,
-      maxItems: 2 + PROFILE_HEADROOM,
+      maxItems: 4, // 2 targets + 2 headroom
     });
     expect(input.startUrls).toBeUndefined();
   });
@@ -78,7 +78,7 @@ describe("buildProfileInput", () => {
     expect(input).toMatchObject({
       startUrls: ["https://x.com/nasa"],
       getAbout: false,
-      maxItems: 1 + PROFILE_HEADROOM,
+      maxItems: 3, // 1 target + 2 headroom
     });
   });
 
@@ -89,7 +89,7 @@ describe("buildProfileInput", () => {
       handles: ["openai", "OpenAI"],
       profile_urls: ["https://x.com/openai", "https://x.com/sama"],
     });
-    expect(input.maxItems).toBe(2 + PROFILE_HEADROOM);
+    expect(input.maxItems).toBe(4); // 2 unique targets + 2 headroom
   });
 
   test("turns off the Actor's follower/following/retweeter scraping (all default to true)", () => {
@@ -109,6 +109,17 @@ describe("missingTargets", () => {
     expect(
       missingTargets([openai], { handles: ["SAMA"], profile_urls: ["https://x.com/sama", "https://x.com/openai"] }),
     ).toEqual(["SAMA"]);
+  });
+  test("reports malformed handles (never sent to the Actor) as not found", () => {
+    // 29 chars: over X's 15-char limit, so normalizeHandle drops it before the run.
+    expect(missingTargets([openai], { handles: ["openai", " this_handle_does_not_exist_zz ", "", "@"] })).toEqual([
+      "this_handle_does_not_exist_zz",
+    ]);
+  });
+  test("reports a profile URL whose handle is malformed, as given", () => {
+    expect(missingTargets([openai], { handles: ["openai"], profile_urls: [" https://x.com/foo.bar "] })).toEqual([
+      "https://x.com/foo.bar",
+    ]);
   });
   test("is empty when everything came back", () => {
     expect(missingTargets([openai], { handles: ["@openai"] })).toEqual([]);
@@ -153,5 +164,21 @@ describe("selectProfiles", () => {
   test("skips items without a string userName", () => {
     const kept = selectProfiles([{ id: 1 }, sama], { handles: ["sama"] });
     expect(kept).toEqual([sama]);
+  });
+});
+
+describe("malformedTargets", () => {
+  test("collects malformed handles and malformed profile URLs, deduped, blanks ignored", () => {
+    expect(
+      malformedTargets({
+        handles: ["openai", "foo.bar", "FOO.BAR", "", "@", "x".repeat(16)],
+        profile_urls: ["https://x.com/sama", "https://x.com/foo.bar", "https://x.com/openai/status/1"],
+      }),
+    ).toEqual(["foo.bar", "x".repeat(16), "https://x.com/foo.bar"]);
+  });
+
+  test("malformed profile URLs are not sent to the Actor", () => {
+    const input = buildProfileInput({ handles: ["sama"], profile_urls: ["https://x.com/foo.bar"] });
+    expect(input.startUrls).toBeUndefined();
   });
 });

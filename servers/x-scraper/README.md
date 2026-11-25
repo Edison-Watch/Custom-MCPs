@@ -69,7 +69,13 @@ requested profile could be crowded out. The Worker turns all three off, asks for
 one item per target plus a small headroom (unused headroom is not billed: the
 Actor charges per item returned), then filters the dataset to the requested
 accounts. Any requested handle that did not come back (nonexistent, suspended, or
-dropped upstream) is listed in the result's `not_found`.
+dropped upstream) is listed in the result's `not_found`, as is a malformed handle
+(X handles are 1-15 of `[A-Za-z0-9_]`), which is never sent to the Actor.
+
+**`isVerified` is unreliable:** the Actor returns profiles in two row shapes, and
+in one of them `isVerified` is `false` even for verified accounts (observed for
+`sama` and `OpenAI` in repeated calls). A `false` value is not proof an account is
+unverified.
 
 ## `x_engagers` input
 
