@@ -1,5 +1,7 @@
 """Tests for main CLI entry point and commands."""
 
+from unittest.mock import patch
+
 from typer.testing import CliRunner
 
 from src.cli.app import _register_builtin_commands, _register_user_commands, app
@@ -73,6 +75,13 @@ class TestCLI(TestTemplate):
         )
         assert result.exit_code == 0
         assert "DRY RUN" in result.output
+
+    def test_doctor_fix_dry_run_applies_nothing(self):
+        with patch("services.doctor_svc.doctor_fix") as doctor_fix:
+            result = runner.invoke(app, ["--dry-run", "doctor", "--fix"])
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+        doctor_fix.assert_not_called()
 
     def test_config_set_missing_value_errors(self):
         result = runner.invoke(app, ["config", "set", "some.key"], input="")

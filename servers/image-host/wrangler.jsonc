@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "image-host",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageHostMCP"] }],
+  "durable_objects": {
+    "bindings": [{ "class_name": "ImageHostMCP", "name": "MCP_OBJECT" }]
+  },
+  "r2_buckets": [{ "binding": "IMAGE_BUCKET", "bucket_name": "edison-image-host" }],
+  // Company-owned hostname (zone must live in the same Cloudflare account).
+  // Cloudflare applies non-tunable bot protections to *.workers.dev that
+  // intermittently 403 legitimate server-to-server callers (observed from the
+  // Railway gateway), which a custom domain on our own zone avoids.
+  "routes": [{ "pattern": "image-host.sealgate.ai", "custom_domain": true }],
+  // Explicitly off (wrangler already disables it when custom-domain routes
+  // exist): the custom domain image-host.sealgate.ai is the only intended
+  // endpoint.
+  "workers_dev": false,
+  "vars": {
+    // AUTH_TOKEN is a SECRET - set it with `wrangler secret put AUTH_TOKEN`, never here.
+    // (Unused in edison-jwt mode; safe to leave set as a rollback path to "bearer".)
+    "AUTH_MODE": "edison-jwt",
+    // Edison/SealGate-minted JWT verify config (see src/jwt.ts). None are secrets -
+    // they're public config. ISSUER must byte-match the SEALGATE_MCP_JWT_ISSUER value
+    // set on the issuing deploy (currently the demo trust domain).
+    "EDISON_JWKS_URL": "https://demo-dashboard.sealgate.ai/.well-known/jwks.json",
+    "EDISON_JWT_ISSUER": "https://demo-dashboard.sealgate.ai",
+    "EDISON_JWT_AUDIENCE": "image-host",
+    "KEY_PREFIX": "img",
+    // Base for returned image URLs. Pinned to the custom domain so uploads get
+    // stable company-domain URLs even when the request arrived via the
+    // workers.dev fallback hostname. (Integration tests override this to ""
+    // in vitest.config.ts to exercise the request-origin fallback.)
+    "PUBLIC_BASE_URL": "https://image-host.sealgate.ai"
+  },
+  "observability": { "enabled": true }
+}

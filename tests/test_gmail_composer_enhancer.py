@@ -143,7 +143,7 @@ class TestGmailComposerAppTools(TestTemplate):
             "gmail_composer.refresh",
         ):
             tool = mcp._tool_manager._tools[tool_name]
-            # FastMCP stores the meta dict on the Tool record under `meta`.
+            # MCPServer stores the meta dict on the Tool record under `meta`.
             meta = getattr(tool, "meta", None) or {}
             ui_meta = meta.get("ui") if isinstance(meta, dict) else None
             assert ui_meta and ui_meta.get("visibility") == ["app"], (

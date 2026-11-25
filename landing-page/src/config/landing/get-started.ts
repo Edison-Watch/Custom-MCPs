@@ -149,17 +149,17 @@ cd Custom-MCPs && make all`,
       icon: "/logos/api.svg",
       setupTitle: "Point at the endpoint",
       setupBody:
-        "No install required: the HTTP API is live at its own host. Authenticate with a bearer token and call it from anything.",
+        "No install required: the HTTP API is live at its own host. Authenticate with an API key and call it from anything.",
       setupKind: "code",
       setupLang: "bash",
       setupCode: `export GMAILMCP_API_URL=${site.apiUrl}
-export TOKEN=sk-...   # OAuth 2.1 bearer`,
+export API_KEY=sk_...   # API key (X-API-KEY header)`,
       callTitle: "Call a tool",
       callBody:
         "Hit the same service over plain HTTP: identical inputs and outputs as the CLI and MCP.",
       callLang: "bash",
       callCode: `$ curl -s $GMAILMCP_API_URL/api/v1/services/gmail_curate_inbox \\
-    -H "Authorization: Bearer $TOKEN" \\
+    -H "X-API-KEY: $API_KEY" \\
     -H "Content-Type: application/json" \\
     -d '{ "limit": 3 }'
 
