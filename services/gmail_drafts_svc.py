@@ -6,7 +6,7 @@ input model and return a Pydantic output model. UI/enhancer affordances
 touch this module.
 
 ``GmailNotConnectedError`` propagates from ``_get_gmail_client`` when the
-user has no active token row; the FastMCP factory surfaces it as
+user has no active token row; the MCP tool factory surfaces it as
 ``isError: true`` automatically.
 """
 
@@ -39,7 +39,7 @@ from models.gmail import (
 from models.gmail import (
     GmailDraftSummary as _DraftSummary,
 )
-from services import service
+from services import InvalidArgument, service
 from services.curation_ledger import mark_state_best_effort
 from services.gmail_draft_helpers import (
     _draft_resource_to_model,
@@ -267,6 +267,7 @@ def gmail_update_draft(input: GmailUpdateDraftInput) -> GmailDraft:
     ),
     input_model=GmailComposeInput,
     output_model=GmailDraft,
+    mutating=True,
 )
 def gmail_compose(input: GmailComposeInput) -> GmailDraft:
     svc = _get_gmail_client(input.user_id)
@@ -310,6 +311,7 @@ def gmail_send(input: GmailSendInput) -> GmailSendResult:
     description="Delete a Gmail draft by id",
     input_model=GmailDiscardDraftInput,
     output_model=GmailDiscardDraftResult,
+    mutating=True,
 )
 def gmail_discard_draft(input: GmailDiscardDraftInput) -> GmailDiscardDraftResult:
     """Delete a draft. Gmail's ``drafts().delete`` returns no body on success."""
@@ -390,7 +392,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
     account owner did NOT send, so a bare reply reaches the other party rather
     than the owner's own address. If ``to`` is omitted and the thread has no
     other participant to derive one from (every message is the owner's), raises
-    ``ValueError`` rather than creating a blank-``To`` draft - pass ``to``
+    ``InvalidArgument`` rather than creating a blank-``To`` draft - pass ``to``
     explicitly for such threads. Prefixes the subject with ``Re:`` unless the
     originating subject already starts with ``Re:``. Propagates the parent's
     ``Message-ID`` as ``In-Reply-To`` and appends to ``References`` so non-Gmail
@@ -406,7 +408,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
     )
     messages = thread.get("messages") or []
     if not messages:
-        raise ValueError(f"Thread {input.thread_id!r} has no messages to reply to")
+        raise InvalidArgument(f"Thread {input.thread_id!r} has no messages to reply to")
     last_msg = messages[-1]
     headers = _headers_to_dict((last_msg.get("payload") or {}).get("headers"))
     # Caller-supplied recipients win; only compute the default (and pay the
@@ -419,7 +421,7 @@ def gmail_reply_to_thread(input: GmailReplyInput) -> GmailDraft:
             # Every message is from the owner and the thread names no other
             # participant, so there is nobody to reply to. Fail clearly instead
             # of creating a draft with a blank (malformed) To header.
-            raise ValueError(
+            raise InvalidArgument(
                 f"Cannot determine a reply recipient for thread "
                 f"{input.thread_id!r}: every message is from you and the thread "
                 "has no other participants. Pass 'to' explicitly."

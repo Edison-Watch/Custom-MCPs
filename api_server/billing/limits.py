@@ -123,6 +123,13 @@ def ensure_daily_limit(user_id: str) -> LimitStatus:
             reset_at = reset_at.replace(tzinfo=UTC)
         if now.date() > reset_at.date():
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            # synchronize_session=False on both day-reset updates: the default
+            # "evaluate" strategy re-runs the datetime WHERE clause in Python
+            # against the in-session `sub`, whose SQLite-loaded reset_at is
+            # tz-naive - comparing it to the aware `day_start` raises
+            # TypeError and 500s EVERY authenticated call after midnight UTC.
+            # No sync is needed: every path out of here either returns/raises
+            # without reading `sub` again, or refreshes `sub` before using it.
             # Zero-quota tiers: reset the clock without claiming a slot
             if daily_limit == 0:
                 session.execute(
@@ -136,6 +143,7 @@ def ensure_daily_limit(user_id: str) -> LimitStatus:
                         daily_quota_reset_at=day_start,
                         updated_at=now,
                     )
+                    .execution_options(synchronize_session=False)
                 )
                 session.commit()
                 next_reset = day_start + timedelta(days=1)
@@ -163,6 +171,7 @@ def ensure_daily_limit(user_id: str) -> LimitStatus:
                     daily_quota_reset_at=day_start,
                     updated_at=now,
                 )
+                .execution_options(synchronize_session=False)
             )
             session.commit()
             if result.rowcount > 0:  # ty: ignore[unresolved-attribute]

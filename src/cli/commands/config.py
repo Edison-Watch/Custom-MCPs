@@ -46,11 +46,12 @@ def get(
     """Get a single configuration value by dot-separated key."""
     # Lazy by design: keep model/service imports off the CLI startup path.
     from models.config import ConfigGetInput  # noqa: PLC0415
+    from services import InvalidArgument  # noqa: PLC0415
     from services.config_svc import config_get  # noqa: PLC0415
 
     try:
         result = config_get(ConfigGetInput(key=key))
-    except KeyError:
+    except InvalidArgument:
         console.print(f"[red]Error:[/red] config key not found: {key}")
         console.print("  List available keys: [bold]edisonmcps config show[/bold]")
         raise typer.Exit(code=1) from None

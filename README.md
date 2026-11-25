@@ -70,12 +70,26 @@ The skill's source of truth lives in [`skills/gmail-mcp/SKILL.md`](skills/gmail-
 - A dashboard that uses the same MCP layer
 - Open source
 
+## Direction
+
+This repo is being refactored in place from a single Gmail MCP into a **polyglot
+monorepo of small, utilitarian, streamable-HTTP MCP servers** that Edison hosts
+as first-party, open-source connectors - commodity capabilities (image preview &
+hosting, PDF, and more) wired cleanly for the AI era. New servers default to
+**TypeScript on Cloudflare Workers** (under `servers/`), while Python (MCP python-sdk 2.x)
+stays first-class for Gmail and heavy-dependency servers. Everything can be
+self-hosted or Edison-hosted with per-user auth.
+
+Full plan - topology, runtime choice, MCP-UI, and the Edison auth/catalog
+integration - lives in
+[`docs/mcp_commodity_fleet_strategy.md`](docs/mcp_commodity_fleet_strategy.md).
+
 ## Key Features
 
 | Feature | Stack |
 |---|---|
 | CLI (auto-discovery commands, global flags, shell completions, self-update) | Typer |
-| MCP server (streamable HTTP at `/mcp`, services auto-registered as tools; stdio supported for local dev) | FastMCP |
+| MCP server (streamable HTTP at `/mcp`, services auto-registered as tools; stdio supported for local dev) | MCP Python SDK 2.x (`MCPServer`) |
 | HTTP API server (also hosts `/mcp`) | FastAPI + Uvicorn |
 | Auth | WorkOS + API keys |
 | Payments | Stripe |
@@ -94,7 +108,7 @@ One codebase, three interfaces. Write business logic once in `services/` and it 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
 │ src/cli/app  │  │ mcp_server/  │  │ api_server/  │   transport / interface
-│  (Typer)     │  │ (FastMCP)    │  │ (FastAPI)    │
+│  (Typer)     │  │ (MCPServer)  │  │ (FastAPI)    │
 └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
        │                 │                 │
        └─────────────────┼─────────────────┘

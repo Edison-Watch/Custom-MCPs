@@ -217,3 +217,14 @@ async def attachment_too_large_handler(request: Request, exc: Exception) -> Resp
     """
     request_id = getattr(request.state, "request_id", uuid.uuid4().hex)
     return _build_error_response(413, str(exc), request_id)
+
+
+async def invalid_argument_handler(request: Request, exc: Exception) -> Response:
+    """Map a service's ``InvalidArgument`` to 400 Bad Request.
+
+    The message is first-party text written for the caller (a
+    ``ModelFacingError``), so it is returned as-is in the standard envelope
+    instead of the generic 500 the middleware would produce.
+    """
+    request_id = getattr(request.state, "request_id", uuid.uuid4().hex)
+    return _build_error_response(400, str(exc), request_id)

@@ -17,6 +17,7 @@ from email import message_from_bytes
 from unittest.mock import MagicMock, patch
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -882,9 +883,7 @@ class TestGmailGetAttachment(TestTemplate):
             try:
                 with (
                     patch.object(global_config.gmail, "max_attachment_bytes", 5),
-                    pytest.raises(
-                        GmailAttachmentTooLargeError, match="over the 5-byte limit"
-                    ),
+                    pytest.raises(GmailAttachmentTooLargeError, match="5-byte limit"),
                 ):
                     gmail_get_attachment(
                         GmailGetAttachmentInput(
@@ -1576,12 +1575,12 @@ class TestGmailReplyToThread(TestTemplate):
 
 
 # ---------------------------------------------------------------------------
-# MCP-transport regression: omit vs null must survive FastMCP default-filling
+# MCP-transport regression: omit vs null must survive MCPServer default-filling
 # ---------------------------------------------------------------------------
 
 
 def _mcp_kwargs(model_cls, provided: dict) -> dict:
-    """Reproduce how FastMCP hands arguments to a tool.
+    """Reproduce how MCPServer hands arguments to a tool.
 
     ``func_metadata.model_dump_one_level`` does ``getattr`` over *every*
     declared field, so an omitted parameter reaches the service filled with its
@@ -2301,7 +2300,9 @@ class TestAppToolAttachmentCoercion(TestTemplate):
         assert isinstance(out[1], AttachmentInput)
 
     def test_empty_attachment_dict_raises(self):
-        with pytest.raises(ValueError, match="data_base64"):
+        # ToolError so the composer iframe reads the reason; a bare ValueError
+        # would be sanitized by the MCP layer.
+        with pytest.raises(ToolError, match="data_base64"):
             _coerce_attachments([{}])
 
     def test_unset_passes_through_to_preserve(self):
@@ -2586,3 +2587,17 @@ class TestInlineImageAlternativeStructure(TestTemplate):
         img = _parts_by_type(raw, "image/png")[0]
         assert img.get("Content-ID") == "<img1>"
         assert img.get_payload(decode=True) == b"PNGDATA"
+
+
+class TestBuildRawMessageBadBase64(TestTemplate):
+    def test_malformed_attachment_base64_is_a_correctable_error(self):
+        from models.gmail import AttachmentUpload  # noqa: PLC0415
+        from services import InvalidArgument  # noqa: PLC0415
+
+        bad = AttachmentUpload.model_construct(
+            filename="a.txt", mime_type="text/plain", data_base64="a"
+        )
+        with pytest.raises(InvalidArgument, match="attachment 'a.txt'"):
+            _build_raw_message(
+                to="b@example.com", subject="s", body="b", attachments=[bad]
+            )
