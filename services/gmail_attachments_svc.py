@@ -91,6 +91,7 @@ def _rebuild_preserving_content(
     ),
     input_model=GmailAddAttachmentInput,
     output_model=GmailDraftAttachmentsResult,
+    mutating=True,
 )
 def gmail_add_attachment(
     input: GmailAddAttachmentInput,
@@ -128,6 +129,7 @@ def gmail_add_attachment(
     ),
     input_model=GmailRemoveAttachmentInput,
     output_model=GmailDraftAttachmentsResult,
+    mutating=True,
 )
 def gmail_remove_attachment(
     input: GmailRemoveAttachmentInput,

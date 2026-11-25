@@ -208,6 +208,13 @@ class Config(BaseSettings):
     PERPLEXITY_API_KEY: str | None = None
     GEMINI_API_KEY: str | None = None
 
+    # Apify (Reddit scraper and any future Actor-backed services)
+    APIFY_API_KEY: str | None = None
+    # Optional override of the Reddit Actor slug (tilde form). When unset the
+    # service uses its default; a mapped Actor id makes engagement counts flow
+    # through with no code change (see services/reddit_svc.py).
+    APIFY_ACTOR_ID: str | None = None
+
     # Agentic payments (observability only - the protocol reads these
     # via os.getenv() using the env var name from payments.yaml config,
     # not from these fields directly)
@@ -233,6 +240,11 @@ class Config(BaseSettings):
     # publishes the matching public key as a JWK Set; unset -> the route 404s.
     WEB_BOT_AUTH_PRIVATE_KEY: str | None = None
     SESSION_SECRET_KEY: str = "change-me-in-production"
+    # Explicit opt-in for the unsigned ``{"sub": ...}`` test-mode auth token
+    # (see api_server/auth/workos_auth.py). Defaults OFF so the bypass is never
+    # live just because DEV_ENV is left at its "dev" default; a dev must both set
+    # this AND keep DEV_ENV in {local,dev}. Never set in a networked deployment.
+    ALLOW_TEST_TOKENS: bool = False
 
     # Stripe & billing
     STRIPE_SECRET_KEY: str | None = None
@@ -284,6 +296,17 @@ class Config(BaseSettings):
             "🖥️  local" if os.getenv("GITHUB_ACTIONS") != "true" else "☁️  CI"
         )
     )
+
+    @property
+    def is_dev(self) -> bool:
+        """True only for the two explicit development values.
+
+        Fails secure: anything else - unset, ``staging``, ``prod``, or a typo -
+        is treated as production, so a misspelled ``DEV_ENV`` can never relax a
+        security control. This is the single owner of that predicate; callers
+        must not re-derive it from ``DEV_ENV``.
+        """
+        return (self.DEV_ENV or "").lower() in {"local", "dev"}
 
     @model_validator(mode="after")
     def _require_secret_in_prod(self) -> "Config":
@@ -339,16 +362,34 @@ class Config(BaseSettings):
         3. YAML files (custom .global_config.yaml > production_config.yaml > global_config.yaml)
         4. Init settings (passed to constructor)
         """
+        yaml_source = YamlSettingsSource(settings_cls)
         return (
             env_settings,
             dotenv_settings,
-            YamlSettingsSource(settings_cls),
+            yaml_source,
             init_settings,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert config to dictionary."""
+        """Convert config to dictionary.
+
+        Includes environment-sourced fields (secrets). Internal use only - do
+        NOT expose the result to any transport. Anything user-facing must use
+        :meth:`to_public_dict`.
+        """
         return self.model_dump()
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the *effective* config with every secret removed.
+
+        The view behind ``config_show`` / ``config_get``; see
+        :func:`common.public_config.public_dict` for the rules.
+        """
+        # Call-time import: public_config derives its secret-name set from
+        # this class, so it imports this module.
+        from common.public_config import public_dict  # noqa: PLC0415
+
+        return public_dict(self)
 
     def _identify_provider(self, model_name: str) -> str:
         """Identify the LLM provider from a model name string."""

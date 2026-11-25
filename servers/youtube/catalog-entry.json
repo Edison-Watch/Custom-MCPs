@@ -1,0 +1,28 @@
+{
+  "id": "youtube",
+  "displayName": "YouTube Scraper",
+  "description": "Scrape YouTube search results and video comments. Query by term (with optional sort and recency filters) or point it at video/channel/playlist URLs; returns the matched videos and, when requested, their comments.",
+  "author": "SealGate",
+  "edison_hosted": true,
+  "category": "data",
+  "tags": [
+    "youtube",
+    "video",
+    "social",
+    "web-scraping",
+    "search",
+    "comments",
+    "apify"
+  ],
+  "url": "https://youtube.sealgate.ai/mcp",
+  "auth": "edison-jwt",
+  "icon": "youtube.svg",
+  "tools_configurations": {
+    "youtube_scrape": {
+      "write_operation": false,
+      "read_private_data": false,
+      "read_untrusted_public_data": true,
+      "acl": "PUBLIC"
+    }
+  }
+}

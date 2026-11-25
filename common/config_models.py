@@ -121,6 +121,9 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
     allowed_origins: list[str] = ["http://localhost:3000"]
+    # Add `includeSubDomains` to HSTS. Off by default: it pins every subdomain
+    # of the serving domain to HTTPS for two years (see global_config.yaml).
+    hsts_include_subdomains: bool = False
 
 
 class IconConfig(BaseModel):

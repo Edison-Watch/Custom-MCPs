@@ -1,0 +1,169 @@
+"""config_show / config_get expose the effective config, never a secret.
+
+The public view (``Config.to_public_dict``) keeps nested YAML-backed models and
+only those UPPERCASE env fields on ``PUBLIC_ENV_FIELDS``. These tests pin the
+classification so a new env field cannot ship unclassified.
+"""
+
+from unittest.mock import patch
+
+import pytest
+
+from common import global_config
+from common.public_config import PUBLIC_ENV_FIELDS, SECRET_FIELD_NAMES, public_dict
+from models.config import ConfigGetInput, ConfigShowInput
+from services import InvalidArgument, config_svc
+from services.config_svc import config_get, config_show
+from tests.test_template import TestTemplate
+
+_CONFIG_CLS = type(global_config)
+_UPPER_FIELDS = {name for name in _CONFIG_CLS.model_fields if name.isupper()}
+
+
+def _keys(obj):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _keys(v)
+
+
+# The credential-bearing Config fields, pinned literally so the derived
+# SECRET_FIELD_NAMES (uppercase fields minus the allowlist) is checked against
+# an independent list: moving a secret onto PUBLIC_ENV_FIELDS fails here.
+_KNOWN_SECRETS = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "GEMINI_API_KEY",
+        "APIFY_API_KEY",
+        "X402_PRIVATE_KEY",
+        "BACKEND_DB_URI",
+        "REDIS_URL",
+        "WORKOS_API_KEY",
+        "WEB_BOT_AUTH_PRIVATE_KEY",
+        "SESSION_SECRET_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_TEST_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_TEST_WEBHOOK_SECRET",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_TOKEN_ENC_KEY",
+        "WEBHOOK_RUNNER_TOKEN",
+    }
+)
+_SECRET_FIELDS = SECRET_FIELD_NAMES & _UPPER_FIELDS
+
+
+class TestFieldClassification(TestTemplate):
+    def test_secret_set_is_every_non_public_env_field(self):
+        assert _SECRET_FIELDS == _UPPER_FIELDS - PUBLIC_ENV_FIELDS
+        assert not (PUBLIC_ENV_FIELDS & SECRET_FIELD_NAMES)
+
+    def test_derived_secrets_match_the_pinned_list(self):
+        assert _SECRET_FIELDS == _KNOWN_SECRETS
+
+    def test_allowlist_names_only_real_fields(self):
+        assert PUBLIC_ENV_FIELDS <= _UPPER_FIELDS
+
+    def test_env_only_secret_names_are_included(self):
+        # Read from os.environ outside Config, so not derivable from fields.
+        assert "LANGFUSE_SECRET_KEY" in SECRET_FIELD_NAMES
+
+    def test_config_keeps_its_public_dict_delegate(self):
+        assert global_config.to_public_dict() == public_dict(global_config)
+
+
+class TestPublicView(TestTemplate):
+    def _with_secrets(self):
+        """A Config whose every secret field holds a recognisable value."""
+        values = {name: f"sekrit-{name.lower()}" for name in _SECRET_FIELDS}
+        return global_config.model_copy(update=values)
+
+    def test_no_secret_names_or_values(self):
+        cfg = self._with_secrets()
+        with patch.object(config_svc, "global_config", cfg):
+            shown = config_show(ConfigShowInput()).config
+        assert not (set(_keys(shown)) & SECRET_FIELD_NAMES)
+        assert "sekrit-" not in repr(shown)
+
+    def test_unlisted_env_field_is_omitted(self):
+        # Fail closed: an uppercase field on neither list never shows up.
+        cfg = self._with_secrets()
+        with (
+            patch.object(config_svc, "global_config", cfg),
+            patch("common.public_config.PUBLIC_ENV_FIELDS", frozenset()),
+        ):
+            shown = config_show(ConfigShowInput()).config
+        assert not any(k.isupper() for k in shown)
+        assert "llm_config" in shown  # nested YAML models survive
+
+    def test_public_env_fields_and_nested_models_present(self):
+        shown = config_show(ConfigShowInput()).config
+        assert "DEV_ENV" in shown
+        assert "FRONTEND_URL" in shown
+        assert "llm_config" in shown
+
+    def test_nested_secret_named_key_is_dropped(self):
+        dumped = {
+            "DEV_ENV": "dev",
+            "OPENAI_API_KEY": "leaked",
+            "llm_config": {
+                "SESSION_SECRET_KEY": "leaked",
+                "openai_api_key": "x",
+                "k": 1,
+            },
+        }
+        with patch.object(_CONFIG_CLS, "model_dump", return_value=dumped):
+            shown = global_config.to_public_dict()
+        assert shown == {"DEV_ENV": "dev", "llm_config": {"k": 1}}
+
+    def test_config_get_returns_effective_env_override(self, monkeypatch):
+        # The YAML-only view used to answer "dev" here regardless of env.
+        monkeypatch.setenv("DEV_ENV", "staging")
+        cfg = _CONFIG_CLS()  # ty: ignore[missing-argument]
+        assert cfg.DEV_ENV == "staging"
+        with patch.object(config_svc, "global_config", cfg):
+            assert config_get(ConfigGetInput(key="DEV_ENV")).value == "staging"
+
+    @pytest.mark.parametrize("secret", sorted(_SECRET_FIELDS))
+    def test_config_get_refuses_every_secret(self, secret):
+        cfg = self._with_secrets()
+        with (
+            patch.object(config_svc, "global_config", cfg),
+            pytest.raises(InvalidArgument),
+        ):
+            config_get(ConfigGetInput(key=secret))
+
+
+class TestUndeclaredExtras(TestTemplate):
+    def test_undeclared_env_extra_never_shown(self):
+        # extra="allow" + case_sensitive=False turns an undeclared .env key
+        # (e.g. LANGFUSE_SECRET_KEY) into a lowercase extra; it must not pass
+        # as a nested model.
+        cfg = global_config.model_copy(
+            update={"langfuse_secret_key": "sk-lf-leak", "made_up_token": "tok-leak"}
+        )
+        shown = cfg.to_public_dict()
+        assert "langfuse_secret_key" not in shown
+        assert "made_up_token" not in shown
+        assert "leak" not in str(shown)
+
+    def test_features_extra_from_env_is_not_shown(self, monkeypatch):
+        # FeaturesConfig is extra="allow": any FEATURES__<NAME> env var lands in
+        # features. Only boolean flags may appear in the public view.
+        monkeypatch.setenv("FEATURES__LANGFUSE_SECRET_KEY", "sk-lf-leak")
+        monkeypatch.setenv("FEATURES__NEW_UI", "true")
+        cfg = _CONFIG_CLS()  # ty: ignore[missing-argument]
+        assert cfg.features.model_dump()["langfuse_secret_key"] == "sk-lf-leak"
+        shown = cfg.to_public_dict()
+        assert "langfuse_secret_key" not in shown["features"]
+        assert "leak" not in str(shown)
+        # A real env-sourced flag still shows, as a boolean.
+        assert shown["features"]["new_ui"] is True
+        with patch.object(config_svc, "global_config", cfg):
+            assert "leak" not in str(config_show(ConfigShowInput()).config)

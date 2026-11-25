@@ -87,6 +87,7 @@ def _apply_watch_response(row: GoogleToken, resp: dict[str, Any]) -> None:
     description="Subscribe the user's Gmail inbox to push notifications",
     input_model=GmailWatchStartInput,
     output_model=GmailWatchStartResult,
+    mutating=True,
 )
 def gmail_watch_start(input: GmailWatchStartInput) -> GmailWatchStartResult:
     if not global_config.GMAIL_PUBSUB_TOPIC:
@@ -111,6 +112,7 @@ def gmail_watch_start(input: GmailWatchStartInput) -> GmailWatchStartResult:
     description="Cancel the user's Gmail push-notification watch",
     input_model=GmailWatchStopInput,
     output_model=GmailWatchStopResult,
+    mutating=True,
 )
 def gmail_watch_stop(input: GmailWatchStopInput) -> GmailWatchStopResult:
     client = _get_gmail_client(input.user_id)
