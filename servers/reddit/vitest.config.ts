@@ -1,31 +1,17 @@
 import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
 // Integration tier: runs the real Worker inside workerd (via Miniflare) with
-// the Durable Object binding read from wrangler.jsonc. It exercises routing and
-// the auth gate only - the reddit_scrape tool makes a live Apify call, which is
-// out of scope offline; its pure logic is covered by `bun test test/unit`.
+// the config read from wrangler.jsonc. It exercises routing, the auth gate and
+// both MCP protocol eras through a real SDK client - the reddit_scrape tools make live Apify calls, which are
+// out of scope offline; their pure logic is covered by `bun test test/unit`.
 export default defineWorkersConfig({
   test: {
     include: ["test/integration/**/*.spec.ts"],
-    // The MCP initialize response is a long-lived SSE stream that holds a
-    // connection open for the session's lifetime; give tool calls headroom.
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    // The MCP SDK pulls in ajv (outputSchema validation), whose CJS
-    // `require('./refs/data.json')` the workerd module loader can't resolve on
-    // its own. Pre-bundle the SDK graph with esbuild so the JSON is inlined.
-    deps: {
-      optimizer: {
-        ssr: {
-          enabled: true,
-          include: ["ajv", "ajv-formats"],
-        },
-      },
-    },
     poolOptions: {
       workers: {
-        // One MCP session is established in beforeAll and reused, so state must
-        // persist across tests in the file rather than reset per-test.
+        // The server is stateless (no Durable Object), so no storage to isolate.
         isolatedStorage: false,
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {

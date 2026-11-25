@@ -7,8 +7,11 @@ outlast a single call. Give any of them a search term (optionally scoped to a su
 list of Reddit URLs, and they return the matched items in a stable, normalized
 shape.
 
-- **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
-- **Transport:** streamable HTTP at `/mcp`.
+- **Runtime:** TypeScript on a Cloudflare Worker, MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`), stateless.
+- **Transport:** streamable HTTP at `/mcp` via `createMcpHandler`
+  (`agents/mcp/server`): 2026-07-28 per-request traffic plus 2025-era
+  `initialize` clients (stateless legacy fallback) on the same route.
 - **Backing:** the [`fatihtahta/reddit-scraper-search-fast`](https://apify.com/fatihtahta/reddit-scraper-search-fast)
   Apify Actor by default (chosen for cost: in production it ran ~2.5x cheaper per
   run than `trudax/reddit-scraper-lite` and, unlike lite, never timed out on
@@ -117,8 +120,9 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 # AUTH_TOKEN only needed as a rollback path to bearer mode
 ```
 
-`compatibility_flags: ["nodejs_compat"]` and the `RedditMCP` Durable Object hold
-the MCP session; no other bindings (no storage). Production auth (`edison-jwt`)
+`compatibility_flags: ["nodejs_compat"]`; no bindings (no storage, no Durable
+Object: the server is stateless, and migration `v2` deletes the old McpAgent
+session class; the async pair's run id round-trips through the client). Production auth (`edison-jwt`)
 is configured in `wrangler.jsonc` `vars`; `EDISON_JWT_AUDIENCE` must equal this
 server's catalog id, `reddit`.
 

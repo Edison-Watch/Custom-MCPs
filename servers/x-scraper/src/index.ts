@@ -13,15 +13,18 @@
  * authenticates *callers* separately via the fleet auth contract; no per-user
  * Apify credentials.
  *
- * Transport: streamable HTTP at `/mcp` (McpAgent / Durable Object).
+ * Transport: stateless streamable HTTP at `/mcp` via the MCP TS SDK 2.x
+ * `createMcpHandler` (agents/mcp/server). One route serves both 2026-07-28
+ * per-request traffic and 2025-era `initialize` clients (stateless legacy
+ * fallback); no Durable Object or session state.
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
-import { McpAgent } from "agents/mcp";
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   DEFAULT_PROFILE_ACTOR_ID,
@@ -66,12 +69,12 @@ import {
   type XEngagersArgs,
 } from "./engagers";
 
-// Bound on an /mcp POST body (CVE-2026-111768). agents' McpAgent.serve only checks a
-// declared Content-Length, so the body is read here, bounded, before it reaches it.
+// Bound on an /mcp POST body (CVE-2026-111768), enforced on the bytes actually
+// read by shared/mcp/ts/body.ts for both protocol eras (the handler's own
+// maxRequestBodySize only covers the 2026-07-28 lane).
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 export interface Env {
-  MCP_OBJECT: DurableObjectNamespace;
   // Apify API token for the server's own account. SECRET - set with
   // `wrangler secret put APIFY_TOKEN`, never in wrangler.jsonc vars.
   APIFY_TOKEN?: string;
@@ -157,303 +160,302 @@ async function runActor(env: Env, actorId: string, body: Record<string, unknown>
   return { ok: true, items: parsed.items };
 }
 
-export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
-  server = new McpServer({ name: "x", version: "0.1.0" });
+/** Build the per-request MCP server (stateless: one instance per request). */
+export function buildServer(env: Env): McpServer {
+  const server = new McpServer({ name: "x", version: "0.2.0" });
+  registerScrapeTool(server, env);
+  registerProfileTool(server, env);
+  registerEngagersTool(server, env);
+  return server;
+}
 
-  async init(): Promise<void> {
-    this.registerScrapeTool();
-    this.registerProfileTool();
-    this.registerEngagersTool();
-  }
+function registerScrapeTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "x_scrape",
+    {
+      description:
+        "Search and scrape X (formerly Twitter) TWEETS. Provide `search` (X advanced-search " +
+        "operators like from:, to:, filter:, since:, until:, min_faves: are supported) and/or " +
+        "`from_user` to restrict to one account's tweets. Returns the matched tweets.",
+      inputSchema: z.object({
+        search: z
+          .string()
+          .optional()
+          .describe("Search query for X. Advanced-search operators (from:, filter:media, etc.) are allowed."),
+        from_user: z
+          .string()
+          .optional()
+          .describe("Restrict results to tweets from this X handle (with or without a leading @)."),
+        sort: z
+          .enum(["Latest", "Top", "Photos", "Videos"])
+          .optional()
+          .describe("Kind/ordering of results (default: Latest)."),
+        since: z
+          .string()
+          .optional()
+          .describe("Only tweets on/after this date, e.g. '2024-01-01'."),
+        until: z
+          .string()
+          .optional()
+          .describe("Only tweets on/before this date, e.g. '2024-12-31'."),
+        max_items: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Approximate maximum number of tweets to return (default: 10; the Actor pages in batches)."),
+        only_verified: z
+          .boolean()
+          .optional()
+          .describe("Only return tweets by Twitter Blue (verified) accounts (default: false)."),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of items returned."),
+        items: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Raw dataset items (tweets) from the Apify Actor run."),
+      }),
+    },
+    async (args: XScrapeArgs) => {
+      // Validate the caller's request before touching server config, so a bad
+      // call gets an actionable error regardless of deploy state.
+      if (!hasTarget(args)) {
+        return textError("provide either 'search' or a 'from_user' handle");
+      }
+      // Reject an unparseable date up front rather than silently dropping the
+      // filter and running a paid scrape wider than the caller asked for.
+      const badBound = invalidDateBound(args);
+      if (badBound) {
+        return textError(`invalid '${badBound}' date: use YYYY-MM-DD`);
+      }
+      if (!env.APIFY_TOKEN?.trim()) {
+        return textError("server misconfigured: APIFY_TOKEN not set");
+      }
 
-  private registerScrapeTool(): void {
-    this.server.registerTool(
-      "x_scrape",
-      {
-        description:
-          "Search and scrape X (formerly Twitter) TWEETS. Provide `search` (X advanced-search " +
-          "operators like from:, to:, filter:, since:, until:, min_faves: are supported) and/or " +
-          "`from_user` to restrict to one account's tweets. Returns the matched tweets.",
-        inputSchema: {
-          search: z
-            .string()
-            .optional()
-            .describe("Search query for X. Advanced-search operators (from:, filter:media, etc.) are allowed."),
-          from_user: z
-            .string()
-            .optional()
-            .describe("Restrict results to tweets from this X handle (with or without a leading @)."),
-          sort: z
-            .enum(["Latest", "Top", "Photos", "Videos"])
-            .optional()
-            .describe("Kind/ordering of results (default: Latest)."),
-          since: z
-            .string()
-            .optional()
-            .describe("Only tweets on/after this date, e.g. '2024-01-01'."),
-          until: z
-            .string()
-            .optional()
-            .describe("Only tweets on/before this date, e.g. '2024-12-31'."),
-          max_items: z
-            .number()
-            .int()
-            .min(1)
-            .max(1000)
-            .optional()
-            .describe("Approximate maximum number of tweets to return (default: 10; the Actor pages in batches)."),
-          only_verified: z
-            .boolean()
-            .optional()
-            .describe("Only return tweets by Twitter Blue (verified) accounts (default: false)."),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of items returned."),
-          items: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Raw dataset items (tweets) from the Apify Actor run."),
-        },
-      },
-      async (args: XScrapeArgs) => {
-        // Validate the caller's request before touching server config, so a bad
-        // call gets an actionable error regardless of deploy state.
-        if (!hasTarget(args)) {
-          return textError("provide either 'search' or a 'from_user' handle");
-        }
-        // Reject an unparseable date up front rather than silently dropping the
-        // filter and running a paid scrape wider than the caller asked for.
-        const badBound = invalidDateBound(args);
-        if (badBound) {
-          return textError(`invalid '${badBound}' date: use YYYY-MM-DD`);
-        }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
+      const actorId = env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
+      const run = await runActor(env, actorId, buildActorInput(args));
+      if (!run.ok) return textError(run.message);
 
-        const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildActorInput(args));
-        if (!run.ok) return textError(run.message);
+      // Drop KaitoEasyAPI billing-floor filler before it reaches the caller.
+      const items = stripFillerItems(run.items);
+      return {
+        content: [{ type: "text" as const, text: `X scrape returned ${items.length} item(s)` }],
+        structuredContent: { count: items.length, items },
+      };
+    },
+  );
+}
 
-        // Drop KaitoEasyAPI billing-floor filler before it reaches the caller.
-        const items = stripFillerItems(run.items);
+function registerProfileTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "x_profile",
+    {
+      description:
+        "Look up X (formerly Twitter) user PROFILES: bio, follower/following counts, verified " +
+        "status, tweet count, join date and location. Provide `handles` and/or `profile_urls`. " +
+        "Returns one profile object per requested account; any requested handle with no profile " +
+        "(malformed, nonexistent, suspended, or not returned) is listed in `not_found`. Note: the " +
+        "upstream source sometimes reports `isVerified: false` for verified accounts, so do not " +
+        "treat a false `isVerified` as proof an account is unverified.",
+      inputSchema: z.object({
+        handles: z
+          .array(z.string().max(100))
+          .max(MAX_PROFILE_TARGETS)
+          .optional()
+          .describe('X handles to look up (with or without a leading @), e.g. ["openai", "sama"].'),
+        profile_urls: z
+          .array(z.string().max(2048))
+          .max(MAX_PROFILE_TARGETS)
+          .optional()
+          .describe('Full X profile URLs to look up, e.g. ["https://x.com/openai"].'),
+        include_about: z
+          .boolean()
+          .optional()
+          .describe("Include account metadata (join date, location, username-change history). Default: true."),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of profiles returned."),
+        profiles: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Matched X user/profile objects."),
+        not_found: z
+          .array(z.string())
+          .describe("Requested handles with no profile in the result (malformed, nonexistent, suspended, or not returned)."),
+      }),
+    },
+    async (args: XProfileArgs) => {
+      // Only malformed targets (e.g. a 16+ char handle, x.com/foo.bar): none can
+      // match an account, so answer without a paid run, listing them as
+      // not_found instead of failing with a generic "no target" error.
+      const malformed = malformedTargets(args);
+      if (malformed.length && profileTargets(args).names.size === 0) {
         return {
-          content: [{ type: "text" as const, text: `X scrape returned ${items.length} item(s)` }],
-          structuredContent: { count: items.length, items },
+          content: [{ type: "text" as const, text: `X profile lookup returned 0 profile(s); not found: ${malformed.join(", ")}` }],
+          structuredContent: { count: 0, profiles: [], not_found: malformed },
         };
-      },
-    );
-  }
+      }
+      if (!hasProfileTarget(args)) {
+        return textError("provide at least one 'handles' entry or 'profile_urls' entry");
+      }
+      // Every target must resolve to a handle we can match results against;
+      // an input that only carries tweet/route/malformed URLs would otherwise
+      // pay for a run whose output we can't attribute to a requested account.
+      if (profileTargets(args).names.size === 0) {
+        return textError("no resolvable X handle: pass a handle or a profile URL like https://x.com/<handle>");
+      }
+      // Combined cap across both target fields (the per-field schema limits
+      // would otherwise allow twice this many, doubling the paid run).
+      if (uniqueTargetCount(args) > MAX_PROFILE_TARGETS) {
+        return textError(`too many targets: at most ${MAX_PROFILE_TARGETS} accounts per call`);
+      }
+      if (!env.APIFY_TOKEN?.trim()) {
+        return textError("server misconfigured: APIFY_TOKEN not set");
+      }
 
-  private registerProfileTool(): void {
-    this.server.registerTool(
-      "x_profile",
-      {
-        description:
-          "Look up X (formerly Twitter) user PROFILES: bio, follower/following counts, verified " +
-          "status, tweet count, join date and location. Provide `handles` and/or `profile_urls`. " +
-          "Returns one profile object per requested account; any requested handle with no profile " +
-          "(malformed, nonexistent, suspended, or not returned) is listed in `not_found`. Note: the " +
-          "upstream source sometimes reports `isVerified: false` for verified accounts, so do not " +
-          "treat a false `isVerified` as proof an account is unverified.",
-        inputSchema: {
-          handles: z
-            .array(z.string().max(100))
-            .max(MAX_PROFILE_TARGETS)
-            .optional()
-            .describe('X handles to look up (with or without a leading @), e.g. ["openai", "sama"].'),
-          profile_urls: z
-            .array(z.string().max(2048))
-            .max(MAX_PROFILE_TARGETS)
-            .optional()
-            .describe('Full X profile URLs to look up, e.g. ["https://x.com/openai"].'),
-          include_about: z
-            .boolean()
-            .optional()
-            .describe("Include account metadata (join date, location, username-change history). Default: true."),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of profiles returned."),
-          profiles: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Matched X user/profile objects."),
-          not_found: z
-            .array(z.string())
-            .describe("Requested handles with no profile in the result (malformed, nonexistent, suspended, or not returned)."),
-        },
-      },
-      async (args: XProfileArgs) => {
-        // Only malformed targets (e.g. a 16+ char handle, x.com/foo.bar): none can
-        // match an account, so answer without a paid run, listing them as
-        // not_found instead of failing with a generic "no target" error.
-        const malformed = malformedTargets(args);
-        if (malformed.length && profileTargets(args).names.size === 0) {
-          return {
-            content: [{ type: "text" as const, text: `X profile lookup returned 0 profile(s); not found: ${malformed.join(", ")}` }],
-            structuredContent: { count: 0, profiles: [], not_found: malformed },
-          };
-        }
-        if (!hasProfileTarget(args)) {
-          return textError("provide at least one 'handles' entry or 'profile_urls' entry");
-        }
-        // Every target must resolve to a handle we can match results against;
-        // an input that only carries tweet/route/malformed URLs would otherwise
-        // pay for a run whose output we can't attribute to a requested account.
-        if (profileTargets(args).names.size === 0) {
-          return textError("no resolvable X handle: pass a handle or a profile URL like https://x.com/<handle>");
-        }
-        // Combined cap across both target fields (the per-field schema limits
-        // would otherwise allow twice this many, doubling the paid run).
-        if (uniqueTargetCount(args) > MAX_PROFILE_TARGETS) {
-          return textError(`too many targets: at most ${MAX_PROFILE_TARGETS} accounts per call`);
-        }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
+      const actorId = env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
+      const run = await runActor(env, actorId, buildProfileInput(args));
+      if (!run.ok) return textError(run.message);
 
-        const actorId = this.env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildProfileInput(args));
-        if (!run.ok) return textError(run.message);
+      // Keep only the requested profiles (defensive: buildProfileInput already
+      // turns off the Actor's follower/following scraping) and name any
+      // requested account that did not come back.
+      const profiles = selectProfiles(run.items, args);
+      const notFound = missingTargets(profiles, args);
+      const summary =
+        `X profile lookup returned ${profiles.length} profile(s)` +
+        (notFound.length ? `; not found: ${notFound.join(", ")}` : "");
+      return {
+        content: [{ type: "text" as const, text: summary }],
+        structuredContent: { count: profiles.length, profiles, not_found: notFound },
+      };
+    },
+  );
+}
 
-        // Keep only the requested profiles (defensive: buildProfileInput already
-        // turns off the Actor's follower/following scraping) and name any
-        // requested account that did not come back.
-        const profiles = selectProfiles(run.items, args);
-        const notFound = missingTargets(profiles, args);
-        const summary =
-          `X profile lookup returned ${profiles.length} profile(s)` +
-          (notFound.length ? `; not found: ${notFound.join(", ")}` : "");
-        return {
-          content: [{ type: "text" as const, text: summary }],
-          structuredContent: { count: profiles.length, profiles, not_found: notFound },
-        };
-      },
-    );
-  }
+function registerEngagersTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "x_engagers",
+    {
+      description:
+        "List the accounts that ENGAGED with one X (formerly Twitter) tweet, as profile records " +
+        "(handle, name, followers, verified, can_dm). Provide `tweet_id` or `tweet_url`. Replies " +
+        "and quotes are returned by default; set `include_retweeters` to also list who reposted it " +
+        "(a second, extra-cost Actor run - off by default). Likers are not available: X removed the " +
+        "public who-liked list, so no source can return them.",
+      inputSchema: z.object({
+        tweet_id: z
+          .string()
+          .optional()
+          .describe("Numeric tweet id, e.g. '1934468786985501089'. Provide this or `tweet_url`."),
+        tweet_url: z
+          .string()
+          .max(2048)
+          .optional()
+          .describe("Full tweet URL, e.g. 'https://x.com/user/status/1934468786985501089'."),
+        include_replies: z
+          .boolean()
+          .optional()
+          .describe("Include accounts that replied to the tweet (default: true)."),
+        include_quotes: z
+          .boolean()
+          .optional()
+          .describe("Include accounts that quote-tweeted the tweet (default: true)."),
+        include_retweeters: z
+          .boolean()
+          .optional()
+          .describe("Include accounts that retweeted the tweet. Extra paid Actor run (default: false)."),
+        max_items: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Approximate max accounts per engagement kind (default: 50); each kind is a separate run."),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of unique engagers returned."),
+        engagers: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Deduped engager profiles; each carries `engaged_via` naming its engagement kind(s)."),
+        errors: z
+          .array(z.object({ kind: z.string(), message: z.string() }))
+          .describe("Per-kind Actor failures, when a partial result was still returned."),
+      }),
+    },
+    async (args: XEngagersArgs) => {
+      const tweetId = resolveTweetId(args);
+      if (!tweetId) {
+        return textError("provide a 'tweet_id' or a 'tweet_url' (an x.com/<user>/status/<id> link)");
+      }
+      if (!hasEnabledKind(args)) {
+        return textError("enable at least one of include_replies, include_quotes, include_retweeters");
+      }
+      if (!env.APIFY_TOKEN?.trim()) {
+        return textError("server misconfigured: APIFY_TOKEN not set");
+      }
 
-  private registerEngagersTool(): void {
-    this.server.registerTool(
-      "x_engagers",
-      {
-        description:
-          "List the accounts that ENGAGED with one X (formerly Twitter) tweet, as profile records " +
-          "(handle, name, followers, verified, can_dm). Provide `tweet_id` or `tweet_url`. Replies " +
-          "and quotes are returned by default; set `include_retweeters` to also list who reposted it " +
-          "(a second, extra-cost Actor run - off by default). Likers are not available: X removed the " +
-          "public who-liked list, so no source can return them.",
-        inputSchema: {
-          tweet_id: z
-            .string()
-            .optional()
-            .describe("Numeric tweet id, e.g. '1934468786985501089'. Provide this or `tweet_url`."),
-          tweet_url: z
-            .string()
-            .max(2048)
-            .optional()
-            .describe("Full tweet URL, e.g. 'https://x.com/user/status/1934468786985501089'."),
-          include_replies: z
-            .boolean()
-            .optional()
-            .describe("Include accounts that replied to the tweet (default: true)."),
-          include_quotes: z
-            .boolean()
-            .optional()
-            .describe("Include accounts that quote-tweeted the tweet (default: true)."),
-          include_retweeters: z
-            .boolean()
-            .optional()
-            .describe("Include accounts that retweeted the tweet. Extra paid Actor run (default: false)."),
-          max_items: z
-            .number()
-            .int()
-            .min(1)
-            .max(1000)
-            .optional()
-            .describe("Approximate max accounts per engagement kind (default: 50); each kind is a separate run."),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of unique engagers returned."),
-          engagers: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Deduped engager profiles; each carries `engaged_via` naming its engagement kind(s)."),
-          errors: z
-            .array(z.object({ kind: z.string(), message: z.string() }))
-            .describe("Per-kind Actor failures, when a partial result was still returned."),
-        },
-      },
-      async (args: XEngagersArgs) => {
-        const tweetId = resolveTweetId(args);
-        if (!tweetId) {
-          return textError("provide a 'tweet_id' or a 'tweet_url' (an x.com/<user>/status/<id> link)");
-        }
-        if (!hasEnabledKind(args)) {
-          return textError("enable at least one of include_replies, include_quotes, include_retweeters");
-        }
-        if (!this.env.APIFY_TOKEN?.trim()) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
+      const kinds = enabledKinds(args);
+      const maxItems = engagerMaxItems(args);
+      const tweetActorId = env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
+      const retweetersActorId = env.APIFY_RETWEETERS_ACTOR_ID?.trim() || DEFAULT_RETWEETERS_ACTOR_ID;
 
-        const kinds = enabledKinds(args);
-        const maxItems = engagerMaxItems(args);
-        const tweetActorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const retweetersActorId = this.env.APIFY_RETWEETERS_ACTOR_ID?.trim() || DEFAULT_RETWEETERS_ACTOR_ID;
+      // One job per enabled kind: its Actor + input, and how to turn that
+      // Actor's raw items into engagers. Kept in replies->quotes->retweeters
+      // order so dedupeEngagers' first-seen wins stay deterministic.
+      type Job = {
+        kind: EngagementKind;
+        actorId: string;
+        input: Record<string, unknown>;
+        extract: (items: Record<string, unknown>[]) => Engager[];
+      };
+      const jobs: Job[] = [];
+      if (kinds.replies) {
+        jobs.push({
+          kind: "reply",
+          actorId: tweetActorId,
+          input: buildRepliesInput(tweetId, maxItems),
+          extract: (items) =>
+            stripRootTweet(stripFillerItems(items), tweetId).flatMap((it) => engagerFromKaitoTweet(it, "reply") ?? []),
+        });
+      }
+      if (kinds.quotes) {
+        jobs.push({
+          kind: "quote",
+          actorId: tweetActorId,
+          input: buildQuotesInput(tweetId, maxItems),
+          extract: (items) => stripFillerItems(items).flatMap((it) => engagerFromKaitoTweet(it, "quote") ?? []),
+        });
+      }
+      if (kinds.retweeters) {
+        jobs.push({
+          kind: "retweet",
+          actorId: retweetersActorId,
+          input: buildRetweetersInput(tweetId, maxItems),
+          extract: (items) => items.flatMap((it) => engagerFromBadgerUser(it) ?? []),
+        });
+      }
 
-        // One job per enabled kind: its Actor + input, and how to turn that
-        // Actor's raw items into engagers. Kept in replies->quotes->retweeters
-        // order so dedupeEngagers' first-seen wins stay deterministic.
-        type Job = {
-          kind: EngagementKind;
-          actorId: string;
-          input: Record<string, unknown>;
-          extract: (items: Record<string, unknown>[]) => Engager[];
-        };
-        const jobs: Job[] = [];
-        if (kinds.replies) {
-          jobs.push({
-            kind: "reply",
-            actorId: tweetActorId,
-            input: buildRepliesInput(tweetId, maxItems),
-            extract: (items) =>
-              stripRootTweet(stripFillerItems(items), tweetId).flatMap((it) => engagerFromKaitoTweet(it, "reply") ?? []),
-          });
-        }
-        if (kinds.quotes) {
-          jobs.push({
-            kind: "quote",
-            actorId: tweetActorId,
-            input: buildQuotesInput(tweetId, maxItems),
-            extract: (items) => stripFillerItems(items).flatMap((it) => engagerFromKaitoTweet(it, "quote") ?? []),
-          });
-        }
-        if (kinds.retweeters) {
-          jobs.push({
-            kind: "retweet",
-            actorId: retweetersActorId,
-            input: buildRetweetersInput(tweetId, maxItems),
-            extract: (items) => items.flatMap((it) => engagerFromBadgerUser(it) ?? []),
-          });
-        }
+      // The runs are independent, so fetch them concurrently rather than
+      // stacking each Actor's wall-clock against the Worker subrequest budget.
+      const runs = await Promise.all(jobs.map((j) => runActor(env, j.actorId, j.input)));
+      const { collected, errors } = collectEngagerRuns(
+        jobs.map((j, i) => ({ kind: j.kind, extract: j.extract, run: runs[i] })),
+      );
 
-        // The runs are independent, so fetch them concurrently rather than
-        // stacking each Actor's wall-clock against the Worker subrequest budget.
-        const runs = await Promise.all(jobs.map((j) => runActor(this.env, j.actorId, j.input)));
-        const { collected, errors } = collectEngagerRuns(
-          jobs.map((j, i) => ({ kind: j.kind, extract: j.extract, run: runs[i] })),
-        );
+      // Only a total wipeout (every enabled kind's Actor run failed) is a hard
+      // error; otherwise return what came back and surface partial failures.
+      if (jobs.length > 0 && errors.length === jobs.length) {
+        return textError(errors.map((e) => `${e.kind}: ${e.message}`).join("; "));
+      }
 
-        // Only a total wipeout (every enabled kind's Actor run failed) is a hard
-        // error; otherwise return what came back and surface partial failures.
-        if (jobs.length > 0 && errors.length === jobs.length) {
-          return textError(errors.map((e) => `${e.kind}: ${e.message}`).join("; "));
-        }
-
-        const engagers = dedupeEngagers(collected);
-        return {
-          content: [{ type: "text" as const, text: `X engagers returned ${engagers.length} unique account(s)` }],
-          structuredContent: { count: engagers.length, engagers, errors },
-        };
-      },
-    );
-  }
+      const engagers = dedupeEngagers(collected);
+      return {
+        content: [{ type: "text" as const, text: `X engagers returned ${engagers.length} unique account(s)` }],
+        structuredContent: { count: engagers.length, engagers, errors },
+      };
+    },
+  );
 }
 
 export default {
@@ -471,14 +473,17 @@ export default {
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="x"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
-      if (request.method === "POST") {
-        const body = await readRequestBody(request, MAX_MCP_BODY_BYTES);
-        if (body.tooLarge) return new Response(requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES), { status: 413 });
-        const headers = new Headers(request.headers);
-        headers.delete("content-length");
-        request = new Request(request, { headers, body: body.text });
-      }
-      return XMCP.serve("/mcp").fetch(request, env, ctx);
+      // Bound the body for BOTH protocol eras before the SDK sees it: the
+      // handler's maxRequestBodySize only covers the 2026-07-28 lane (see
+      // shared/mcp/ts/body.ts).
+      const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+      if (bounded instanceof Response) return bounded;
+      request = bounded;
+      const handler = createMcpHandler(() => buildServer(env), {
+        route: "/mcp",
+        maxRequestBodySize: MAX_MCP_BODY_BYTES,
+      });
+      return handler(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404 });

@@ -3,7 +3,12 @@
 An Edison first-party **MCP server** that turns an image into a public,
 non-expiring URL. Send the image as base64; get back a URL you can paste into a
 GitHub issue, Markdown, or a chat message. Runs as a **Cloudflare Worker** with
-**R2** for storage and **streamable HTTP** transport at `/mcp`.
+**R2** for storage and **streamable HTTP** transport at `/mcp`, on the MCP TS
+SDK 2.x (`@modelcontextprotocol/server`), stateless: `createMcpHandler`
+(`agents/mcp/server`) serves 2026-07-28 per-request traffic plus 2025-era
+`initialize` clients (stateless legacy fallback) on the same route. No Durable
+Object: migration `v2` in `wrangler.jsonc` deletes the old McpAgent session
+class; R2 is the only binding.
 
 > Why base64 in / URL out? The server is remote, so it can't read a caller's
 > local filesystem (base64 in), and consumers like GitHub's Camo proxy fetch the
@@ -87,10 +92,12 @@ Two test tiers:
 - **Unit** (`bun test test/unit`) - the pure logic (validation, key generation,
   auth). Zero network, no `node_modules` needed for the runner.
 - **Integration** (`vitest run`, `test/integration/`) - the real Worker running
-  in **workerd** (via `@cloudflare/vitest-pool-workers`) with real R2 + Durable
-  Object bindings from `wrangler.jsonc`. Drives the full MCP streamable-HTTP
-  handshake over `SELF.fetch` and asserts the wire format, the origin-derived
-  URL, R2 round-trip, `nosniff`, and the auth gate.
+  in **workerd** (via `@cloudflare/vitest-pool-workers`) with the real R2
+  binding from `wrangler.jsonc`. Drives a real SDK 2.x client over
+  `SELF.fetch` in both protocol eras (pinned 2026-07-28 and legacy
+  `initialize`) and asserts the tool schemas, the origin-derived URL, R2
+  round-trip, ownership checks, `nosniff`, the auth gate and the 413 body
+  bound.
 
 `PUBLIC_BASE_URL` is blanked in the test env (a binding override in
 `vitest.config.ts`) so the integration tier exercises the request-origin
@@ -127,7 +134,7 @@ fallback even though production pins a custom domain.
 
 ```
 src/
-  index.ts    McpAgent (Durable Object) + fetch handler (auth, /i/ serving)
+  index.ts    buildServer(env, props) factory + fetch handler (auth, /mcp, /i/ serving)
   images.ts   pure: base64 decode, format sniff, validation, key generation
   auth.ts     pure: pluggable auth modes (open | bearer | edison-jwt)
 test/

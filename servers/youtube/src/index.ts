@@ -21,6 +21,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
@@ -39,8 +40,9 @@ import {
   type YoutubeScrapeArgs,
 } from "./youtube";
 
-// Bound on an /mcp POST body (CVE-2026-111768). The SDK handler enforces it on the
-// bytes actually read (413 over the bound), not just a declared Content-Length.
+// Bound on an /mcp POST body (CVE-2026-111768), enforced on the bytes actually
+// read by shared/mcp/ts/body.ts for both protocol eras (the handler's own
+// maxRequestBodySize only covers the 2026-07-28 lane).
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 export interface Env {
@@ -241,6 +243,12 @@ export default {
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="youtube"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
+      // Bound the body for BOTH protocol eras before the SDK sees it: the
+      // handler's maxRequestBodySize only covers the 2026-07-28 lane (see
+      // shared/mcp/ts/body.ts).
+      const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+      if (bounded instanceof Response) return bounded;
+      request = bounded;
       const handler = createMcpHandler(() => buildServer(env), {
         route: "/mcp",
         maxRequestBodySize: MAX_MCP_BODY_BYTES,

@@ -1,4 +1,5 @@
 import { SELF } from "cloudflare:test";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
@@ -9,71 +10,29 @@ const MCP_HEADERS = {
   authorization: AUTH,
 };
 
-// Streamable-HTTP replies are SSE (`data: {json}\n\n`). Pull the first JSON-RPC
-// message carrying a result/error out of the buffered stream so far.
-function extractMessage(buffer: string): Record<string, any> | null {
-  for (const line of buffer.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const json = trimmed.slice("data:".length).trim();
-    if (!json) continue;
-    try {
-      const msg = JSON.parse(json);
-      if (msg && (msg.result !== undefined || msg.error !== undefined)) return msg;
-    } catch {
-      // JSON split across chunks - wait for the next read.
-    }
-  }
-  return null;
+type Era = "legacy" | "modern";
+
+// A real SDK 2.x client driven through the Worker (SELF.fetch). "modern" pins
+// the 2026-07-28 per-request protocol (server/discover, no handshake);
+// "legacy" is the plain 2025 `initialize` sequence served statelessly.
+async function connect(era: Era): Promise<Client> {
+  const client = new Client(
+    { name: "test", version: "1.0" },
+    era === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
+  );
+  const transport = new StreamableHTTPClientTransport(new URL(`${ORIGIN}/mcp`), {
+    requestInit: { headers: { authorization: AUTH } },
+    fetch: (input, init) => SELF.fetch(input as string, init),
+  });
+  await client.connect(transport);
+  return client;
 }
 
-async function initSession(): Promise<string> {
-  const res = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: MCP_HEADERS,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
-    }),
-  });
-  expect(res.status).toBe(200);
-  const sessionId = res.headers.get("mcp-session-id");
-  expect(sessionId).toBeTruthy();
-  // NB: the initialize response is a long-lived SSE stream - do not read it to
-  // completion (it never ends) and do not cancel it (that aborts the session).
-  const notif = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: { ...MCP_HEADERS, "mcp-session-id": sessionId! },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-  });
-  await notif.text();
-  return sessionId!;
-}
-
-async function callTool(sessionId: string, name: string, args: Record<string, unknown>) {
-  const res = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: { ...MCP_HEADERS, "mcp-session-id": sessionId },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } }),
-  });
-  expect(res.status).toBe(200);
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: true });
-      const msg = extractMessage(buffer);
-      if (msg) return (msg.result ?? {}) as Record<string, any>;
-      if (done) break;
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  throw new Error("no JSON-RPC result found in SSE response");
+async function callTool(client: Client, name: string, args: Record<string, unknown>) {
+  return (await client.callTool({ name, arguments: args })) as {
+    isError?: boolean;
+    content?: { type: string; text?: string }[];
+  };
 }
 
 describe("routing", () => {
@@ -114,7 +73,7 @@ describe("auth gate on /mcp", () => {
     expect(res.status).toBe(401);
   });
 
-  it("413s an oversized body before it reaches the MCP agent", async () => {
+  it("413s an oversized body before it reaches the MCP handler", async () => {
     const res = await SELF.fetch(`${ORIGIN}/mcp`, {
       method: "POST",
       headers: MCP_HEADERS,
@@ -122,66 +81,107 @@ describe("auth gate on /mcp", () => {
     });
     expect(res.status).toBe(413);
   });
+
+  // The handler's own maxRequestBodySize only bounds the 2026-07-28 lane; a
+  // 2025-era body above our 1 MiB (but under the SDK's 4 MiB default) must
+  // still be refused, on both the modern-classified and legacy-classified paths.
+  for (const [label, extra, body] of [
+    ["modern lane", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
+    [
+      "legacy lane",
+      { "mcp-protocol-version": "2025-06-18" },
+      { jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "x".repeat(1024 * 1024 + 1) } },
+    ],
+  ] as const) {
+    it(`413s a just-over-bound body on the ${label}`, async () => {
+      const res = await SELF.fetch(`${ORIGIN}/mcp`, {
+        method: "POST",
+        headers: { ...MCP_HEADERS, ...extra },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(413);
+    });
+  }
 });
 
-describe("reddit_scrape tool", () => {
-  let sessionId: string;
-  beforeAll(async () => {
-    sessionId = await initSession();
+for (const era of ["modern", "legacy"] as const) {
+  describe(`tool listing (${era} protocol)`, () => {
+    let client: Client;
+    beforeAll(async () => {
+      client = await connect(era);
+    });
+
+    it("lists all three tools with input and output schemas", async () => {
+      const { tools } = await client.listTools();
+      const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+      expect(byName.reddit_scrape?.inputSchema.properties).toHaveProperty("search");
+      expect(byName.reddit_scrape?.outputSchema?.properties).toHaveProperty("items");
+      expect(byName.reddit_scrape_start?.inputSchema.properties).toHaveProperty("search");
+      expect(byName.reddit_scrape_start?.outputSchema?.properties).toHaveProperty("run_id");
+      expect(byName.reddit_scrape_fetch?.inputSchema.properties).toHaveProperty("run_id");
+      expect(byName.reddit_scrape_fetch?.outputSchema?.properties).toHaveProperty("status");
+    });
   });
 
-  // The test env sets no APIFY_TOKEN, so the tool fails closed at the misconfig
-  // guard - exercising the full MCP transport + tool registration + guard with
-  // no live Apify call (the live scrape path is covered by the Python service's
-  // e2e and the pure mapping logic by test/unit/reddit.test.ts).
-  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
-    const result = await callTool(sessionId, "reddit_scrape", { search: "rust" });
-    expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+  describe(`reddit_scrape tool (${era} protocol)`, () => {
+    let client: Client;
+    beforeAll(async () => {
+      client = await connect(era);
+    });
+
+    // The test env sets no APIFY_TOKEN, so the tool fails closed at the misconfig
+    // guard - exercising the full MCP transport + tool registration + guard with
+    // no live Apify call (the live scrape path is covered by the Python service's
+    // e2e and the pure mapping logic by test/unit/reddit.test.ts).
+    it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+      const result = await callTool(client, "reddit_scrape", { search: "rust" });
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+    });
+
+    it("rejects a call with no search and no start_urls", async () => {
+      const result = await callTool(client, "reddit_scrape", {});
+      expect(result.isError).toBe(true);
+    });
   });
 
-  it("rejects a call with no search and no start_urls", async () => {
-    const result = await callTool(sessionId, "reddit_scrape", {});
-    expect(result.isError).toBe(true);
-  });
-});
+  describe(`reddit_scrape_start tool (${era} protocol)`, () => {
+    let client: Client;
+    beforeAll(async () => {
+      client = await connect(era);
+    });
 
-describe("reddit_scrape_start tool", () => {
-  let sessionId: string;
-  beforeAll(async () => {
-    sessionId = await initSession();
-  });
+    // No APIFY_TOKEN in the test env, so the async start also fails closed at the
+    // misconfig guard - exercising registration + guard over the full transport
+    // with no live Apify call (the run-parse logic is covered by the unit tests).
+    it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+      const result = await callTool(client, "reddit_scrape_start", { search: "rust" });
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+    });
 
-  // No APIFY_TOKEN in the test env, so the async start also fails closed at the
-  // misconfig guard - exercising registration + guard over the full transport
-  // with no live Apify call (the run-parse logic is covered by the unit tests).
-  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
-    const result = await callTool(sessionId, "reddit_scrape_start", { search: "rust" });
-    expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
-  });
-
-  it("rejects a call with no search and no start_urls", async () => {
-    const result = await callTool(sessionId, "reddit_scrape_start", {});
-    expect(result.isError).toBe(true);
-  });
-});
-
-describe("reddit_scrape_fetch tool", () => {
-  let sessionId: string;
-  beforeAll(async () => {
-    sessionId = await initSession();
+    it("rejects a call with no search and no start_urls", async () => {
+      const result = await callTool(client, "reddit_scrape_start", {});
+      expect(result.isError).toBe(true);
+    });
   });
 
-  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
-    const result = await callTool(sessionId, "reddit_scrape_fetch", { run_id: "RUN123" });
-    expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
-  });
+  describe(`reddit_scrape_fetch tool (${era} protocol)`, () => {
+    let client: Client;
+    beforeAll(async () => {
+      client = await connect(era);
+    });
 
-  it("rejects a call with no run_id", async () => {
-    const result = await callTool(sessionId, "reddit_scrape_fetch", {});
-    expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toContain("run_id");
+    it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+      const result = await callTool(client, "reddit_scrape_fetch", { run_id: "RUN123" });
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
+    });
+
+    it("rejects a call with no run_id", async () => {
+      const result = await callTool(client, "reddit_scrape_fetch", {});
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("run_id");
+    });
   });
-});
+}

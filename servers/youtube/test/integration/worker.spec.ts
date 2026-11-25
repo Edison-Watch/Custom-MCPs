@@ -63,14 +63,30 @@ describe("auth gate on /mcp", () => {
 });
 
 describe("request body bound", () => {
-  it("rejects an oversized /mcp POST with 413", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: AUTH },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }),
+  // The SDK handler's maxRequestBodySize only bounds the 2026-07-28 lane, so a
+  // 2025-era (legacy-classified) body must be refused by our own bound too.
+  for (const [label, extra, body] of [
+    ["modern lane", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
+    [
+      "legacy lane",
+      { "mcp-protocol-version": "2025-06-18" },
+      { jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "x".repeat(1024 * 1024 + 1) } },
+    ],
+  ] as const) {
+    it(`413s a just-over-bound body on the ${label}`, async () => {
+      const res = await SELF.fetch(`${ORIGIN}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: AUTH,
+          ...extra,
+        },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(413);
     });
-    expect(res.status).toBe(413);
-  });
+  }
 });
 
 for (const era of ["modern", "legacy"] as const) {

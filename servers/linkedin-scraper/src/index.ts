@@ -13,15 +13,18 @@
  * authenticates *callers* separately via the fleet auth contract; no per-user
  * Apify credentials.
  *
- * Transport: streamable HTTP at `/mcp` (McpAgent / Durable Object).
+ * Transport: stateless streamable HTTP at `/mcp` via the MCP TS SDK 2.x
+ * `createMcpHandler` (agents/mcp/server). One route serves both 2026-07-28
+ * per-request traffic and 2025-era `initialize` clients (stateless legacy
+ * fallback); no Durable Object or session state.
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
-import { McpAgent } from "agents/mcp";
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   DEFAULT_COMPANY_ACTOR_ID,
@@ -57,12 +60,12 @@ import {
   type LinkedinProfileArgs,
 } from "./profile_hydrate";
 
-// Bound on an /mcp POST body (CVE-2026-111768). agents' McpAgent.serve only checks a
-// declared Content-Length, so the body is read here, bounded, before it reaches it.
+// Bound on an /mcp POST body (CVE-2026-111768), enforced on the bytes actually
+// read by shared/mcp/ts/body.ts for both protocol eras (the handler's own
+// maxRequestBodySize only covers the 2026-07-28 lane).
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 export interface Env {
-  MCP_OBJECT: DurableObjectNamespace;
   // Apify API token for the server's own account. SECRET - set with
   // `wrangler secret put APIFY_TOKEN`, never in wrangler.jsonc vars.
   APIFY_TOKEN?: string;
@@ -149,252 +152,251 @@ async function runActor(env: Env, actorId: string, body: Record<string, unknown>
   return { ok: true, items: parsed.items };
 }
 
-export class LinkedinMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
-  server = new McpServer({ name: "linkedin", version: "0.1.0" });
+function registerScrapeTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "linkedin_scrape",
+    {
+      description:
+        "Search and scrape public LinkedIn POSTS. Provide `search` (the same query you would type " +
+        "in the LinkedIn search bar) or one or more `start_urls` pointing at LinkedIn profiles or " +
+        "companies whose posts to fetch. Returns the matched dataset items (posts).",
+      inputSchema: z.object({
+        search: z.string().optional().describe("Search query to look up LinkedIn posts."),
+        start_urls: z
+          .array(z.string())
+          .optional()
+          .describe("LinkedIn profile or company URLs whose posts (and reposts) to scrape."),
+        sort: z
+          .enum(["relevance", "date"])
+          .optional()
+          .describe("Ordering applied to a search (default: date)."),
+        posted_within: z
+          .enum(["1h", "24h", "week", "month", "3months", "6months", "year"])
+          .optional()
+          .describe("Restrict to posts no older than this window."),
+        max_items: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Maximum number of posts to return per query (default: 10)."),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of items returned."),
+        items: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Raw dataset items (posts) from the Apify Actor run."),
+      }),
+    },
+    async (args: LinkedinScrapeArgs) => {
+      // Validate the caller's request first, so a bad call gets an actionable
+      // error before we attempt a run (runActor enforces server config).
+      if (!hasTarget(args)) {
+        return textError("provide either 'search' or at least one valid LinkedIn URL in 'start_urls'");
+      }
+      const actorId = env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
+      const run = await runActor(env, actorId, buildActorInput(args));
+      if (!run.ok) return textError(run.message);
 
-  async init(): Promise<void> {
-    this.registerScrapeTool();
-    this.registerProfileSearchTool();
-    this.registerProfileTool();
-    this.registerCompanyTool();
-  }
+      return {
+        content: [{ type: "text" as const, text: `LinkedIn scrape returned ${run.items.length} item(s)` }],
+        structuredContent: { count: run.items.length, items: run.items },
+      };
+    },
+  );
+}
 
-  private registerScrapeTool(): void {
-    this.server.registerTool(
-      "linkedin_scrape",
-      {
-        description:
-          "Search and scrape public LinkedIn POSTS. Provide `search` (the same query you would type " +
-          "in the LinkedIn search bar) or one or more `start_urls` pointing at LinkedIn profiles or " +
-          "companies whose posts to fetch. Returns the matched dataset items (posts).",
-        inputSchema: {
-          search: z.string().optional().describe("Search query to look up LinkedIn posts."),
-          start_urls: z
-            .array(z.string())
-            .optional()
-            .describe("LinkedIn profile or company URLs whose posts (and reposts) to scrape."),
-          sort: z
-            .enum(["relevance", "date"])
-            .optional()
-            .describe("Ordering applied to a search (default: date)."),
-          posted_within: z
-            .enum(["1h", "24h", "week", "month", "3months", "6months", "year"])
-            .optional()
-            .describe("Restrict to posts no older than this window."),
-          max_items: z
-            .number()
-            .int()
-            .min(1)
-            .max(1000)
-            .optional()
-            .describe("Maximum number of posts to return per query (default: 10)."),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of items returned."),
-          items: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Raw dataset items (posts) from the Apify Actor run."),
-        },
-      },
-      async (args: LinkedinScrapeArgs) => {
-        // Validate the caller's request first, so a bad call gets an actionable
-        // error before we attempt a run (runActor enforces server config).
-        if (!hasTarget(args)) {
-          return textError("provide either 'search' or at least one valid LinkedIn URL in 'start_urls'");
-        }
-        const actorId = this.env.APIFY_ACTOR_ID?.trim() || DEFAULT_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildActorInput(args));
-        if (!run.ok) return textError(run.message);
+function registerProfileSearchTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "linkedin_profile_search",
+    {
+      description:
+        "Find PEOPLE on LinkedIn: search public profiles by a fuzzy query and/or structured " +
+        "filters (job title, company, location, school, name). Returns matching people profiles " +
+        "(name, headline, current role, location...). At least a `search` query or one filter is " +
+        "required. Use `linkedin_company` for company pages and `linkedin_scrape` for posts.",
+      inputSchema: z.object({
+        search: z
+          .string()
+          .optional()
+          .describe("Fuzzy search query, e.g. 'head of growth fintech london'."),
+        mode: z
+          .enum(["Short", "Full"])
+          .optional()
+          .describe("Detail per profile: 'Short' summary (default) or 'Full' rich profile."),
+        max_items: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            `Maximum profiles to return (default: 10; values above ${MAX_PROFILE_MAX_ITEMS} are clamped down to it).`,
+          ),
+        locations: z.array(z.string().max(100)).max(50).optional().describe("Filter by location."),
+        current_companies: z
+          .array(z.string().max(200))
+          .max(50)
+          .optional()
+          .describe("Filter by current company name."),
+        past_companies: z
+          .array(z.string().max(200))
+          .max(50)
+          .optional()
+          .describe("Filter by a past (former) company name."),
+        schools: z.array(z.string().max(200)).max(50).optional().describe("Filter by school/university."),
+        current_job_titles: z
+          .array(z.string().max(200))
+          .max(50)
+          .optional()
+          .describe("Filter by current job title, e.g. ['Software Engineer']."),
+        past_job_titles: z
+          .array(z.string().max(200))
+          .max(50)
+          .optional()
+          .describe("Filter by a past job title."),
+        first_names: z.array(z.string().max(100)).max(50).optional().describe("Filter by first name."),
+        last_names: z.array(z.string().max(100)).max(50).optional().describe("Filter by last name."),
+        recently_changed_jobs: z
+          .boolean()
+          .optional()
+          .describe("Only people who recently changed jobs (refines a query; can't be the only target)."),
+        recently_posted: z
+          .boolean()
+          .optional()
+          .describe("Only people who recently posted on LinkedIn (refines a query; can't be the only target)."),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of profiles returned."),
+        profiles: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Matched LinkedIn people-profile objects from the Apify Actor run."),
+      }),
+    },
+    async (args: LinkedinProfileSearchArgs) => {
+      if (!hasProfileSearchTarget(args)) {
+        return textError(
+          "provide a 'search' query or at least one filter (job title, company, location, school, name)",
+        );
+      }
+      const actorId = env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
+      const run = await runActor(env, actorId, buildProfileSearchInput(args));
+      if (!run.ok) return textError(run.message);
 
-        return {
-          content: [{ type: "text" as const, text: `LinkedIn scrape returned ${run.items.length} item(s)` }],
-          structuredContent: { count: run.items.length, items: run.items },
-        };
-      },
-    );
-  }
+      return {
+        content: [
+          { type: "text" as const, text: `LinkedIn profile search returned ${run.items.length} profile(s)` },
+        ],
+        structuredContent: { count: run.items.length, profiles: run.items },
+      };
+    },
+  );
+}
 
-  private registerProfileSearchTool(): void {
-    this.server.registerTool(
-      "linkedin_profile_search",
-      {
-        description:
-          "Find PEOPLE on LinkedIn: search public profiles by a fuzzy query and/or structured " +
-          "filters (job title, company, location, school, name). Returns matching people profiles " +
-          "(name, headline, current role, location...). At least a `search` query or one filter is " +
-          "required. Use `linkedin_company` for company pages and `linkedin_scrape` for posts.",
-        inputSchema: {
-          search: z
-            .string()
-            .optional()
-            .describe("Fuzzy search query, e.g. 'head of growth fintech london'."),
-          mode: z
-            .enum(["Short", "Full"])
-            .optional()
-            .describe("Detail per profile: 'Short' summary (default) or 'Full' rich profile."),
-          max_items: z
-            .number()
-            .int()
-            .min(1)
-            .optional()
-            .describe(
-              `Maximum profiles to return (default: 10; values above ${MAX_PROFILE_MAX_ITEMS} are clamped down to it).`,
-            ),
-          locations: z.array(z.string().max(100)).max(50).optional().describe("Filter by location."),
-          current_companies: z
-            .array(z.string().max(200))
-            .max(50)
-            .optional()
-            .describe("Filter by current company name."),
-          past_companies: z
-            .array(z.string().max(200))
-            .max(50)
-            .optional()
-            .describe("Filter by a past (former) company name."),
-          schools: z.array(z.string().max(200)).max(50).optional().describe("Filter by school/university."),
-          current_job_titles: z
-            .array(z.string().max(200))
-            .max(50)
-            .optional()
-            .describe("Filter by current job title, e.g. ['Software Engineer']."),
-          past_job_titles: z
-            .array(z.string().max(200))
-            .max(50)
-            .optional()
-            .describe("Filter by a past job title."),
-          first_names: z.array(z.string().max(100)).max(50).optional().describe("Filter by first name."),
-          last_names: z.array(z.string().max(100)).max(50).optional().describe("Filter by last name."),
-          recently_changed_jobs: z
-            .boolean()
-            .optional()
-            .describe("Only people who recently changed jobs (refines a query; can't be the only target)."),
-          recently_posted: z
-            .boolean()
-            .optional()
-            .describe("Only people who recently posted on LinkedIn (refines a query; can't be the only target)."),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of profiles returned."),
-          profiles: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Matched LinkedIn people-profile objects from the Apify Actor run."),
-        },
-      },
-      async (args: LinkedinProfileSearchArgs) => {
-        if (!hasProfileSearchTarget(args)) {
-          return textError(
-            "provide a 'search' query or at least one filter (job title, company, location, school, name)",
-          );
-        }
-        const actorId = this.env.APIFY_PROFILE_ACTOR_ID?.trim() || DEFAULT_PROFILE_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildProfileSearchInput(args));
-        if (!run.ok) return textError(run.message);
+function registerProfileTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "linkedin_profile",
+    {
+      description:
+        "Hydrate KNOWN LinkedIn profile URLs into full public profiles: name, headline, current " +
+        "position, location, education, skills, follower counts... Provide `profile_urls` (LinkedIn " +
+        "profile URLs you already have, e.g. from a post author or a search result). Returns one " +
+        "profile object per URL. Use `linkedin_profile_search` to FIND people from a query instead.",
+      inputSchema: z.object({
+        profile_urls: z
+          .array(z.string().max(2048))
+          .max(MAX_PROFILE_URLS)
+          .describe('LinkedIn profile URLs to scrape, e.g. ["https://www.linkedin.com/in/williamhgates"].'),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of profiles returned."),
+        profiles: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Hydrated LinkedIn people-profile objects from the Apify Actor run."),
+      }),
+    },
+    async (args: LinkedinProfileArgs) => {
+      if (!hasProfileTarget(args)) {
+        return textError("provide at least one valid LinkedIn profile URL in 'profile_urls'");
+      }
+      // Combined cap (the per-field schema limit and this check agree, but keep
+      // it explicit so a future schema loosening still fails closed).
+      if (profileTargetCount(args) > MAX_PROFILE_URLS) {
+        return textError(`too many targets: at most ${MAX_PROFILE_URLS} profiles per call`);
+      }
+      const actorId = env.APIFY_PROFILE_HYDRATE_ACTOR_ID?.trim() || DEFAULT_PROFILE_HYDRATE_ACTOR_ID;
+      const run = await runActor(env, actorId, buildProfileInput(args));
+      if (!run.ok) return textError(run.message);
 
-        return {
-          content: [
-            { type: "text" as const, text: `LinkedIn profile search returned ${run.items.length} profile(s)` },
-          ],
-          structuredContent: { count: run.items.length, profiles: run.items },
-        };
-      },
-    );
-  }
+      return {
+        content: [
+          { type: "text" as const, text: `LinkedIn profile lookup returned ${run.items.length} profile(s)` },
+        ],
+        structuredContent: { count: run.items.length, profiles: run.items },
+      };
+    },
+  );
+}
 
-  private registerProfileTool(): void {
-    this.server.registerTool(
-      "linkedin_profile",
-      {
-        description:
-          "Hydrate KNOWN LinkedIn profile URLs into full public profiles: name, headline, current " +
-          "position, location, education, skills, follower counts... Provide `profile_urls` (LinkedIn " +
-          "profile URLs you already have, e.g. from a post author or a search result). Returns one " +
-          "profile object per URL. Use `linkedin_profile_search` to FIND people from a query instead.",
-        inputSchema: {
-          profile_urls: z
-            .array(z.string().max(2048))
-            .max(MAX_PROFILE_URLS)
-            .describe('LinkedIn profile URLs to scrape, e.g. ["https://www.linkedin.com/in/williamhgates"].'),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of profiles returned."),
-          profiles: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Hydrated LinkedIn people-profile objects from the Apify Actor run."),
-        },
-      },
-      async (args: LinkedinProfileArgs) => {
-        if (!hasProfileTarget(args)) {
-          return textError("provide at least one valid LinkedIn profile URL in 'profile_urls'");
-        }
-        // Combined cap (the per-field schema limit and this check agree, but keep
-        // it explicit so a future schema loosening still fails closed).
-        if (profileTargetCount(args) > MAX_PROFILE_URLS) {
-          return textError(`too many targets: at most ${MAX_PROFILE_URLS} profiles per call`);
-        }
-        const actorId = this.env.APIFY_PROFILE_HYDRATE_ACTOR_ID?.trim() || DEFAULT_PROFILE_HYDRATE_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildProfileInput(args));
-        if (!run.ok) return textError(run.message);
+function registerCompanyTool(server: McpServer, env: Env): void {
+  server.registerTool(
+    "linkedin_company",
+    {
+      description:
+        "Look up LinkedIn COMPANY pages: industry, headcount, headquarters, about, and recent " +
+        "activity. Provide `company_urls` (LinkedIn company URLs) and/or `names` (company names " +
+        "to search). Returns one company object per resolved target. Use `linkedin_profile_search` " +
+        "for people and `linkedin_scrape` for posts.",
+      inputSchema: z.object({
+        company_urls: z
+          .array(z.string().max(2048))
+          .max(MAX_COMPANY_TARGETS)
+          .optional()
+          .describe('LinkedIn company URLs, e.g. ["https://www.linkedin.com/company/openai"].'),
+        names: z
+          .array(z.string().max(200))
+          .max(MAX_COMPANY_TARGETS)
+          .optional()
+          .describe('Company names to search, e.g. ["OpenAI", "Anthropic"].'),
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Number of companies returned."),
+        companies: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Matched LinkedIn company objects from the Apify Actor run."),
+      }),
+    },
+    async (args: LinkedinCompanyArgs) => {
+      if (!hasCompanyTarget(args)) {
+        return textError("provide at least one LinkedIn company URL in 'company_urls' or a company name in 'names'");
+      }
+      // Combined cap across both target fields (the per-field schema limits
+      // would otherwise allow twice this many, doubling the paid run).
+      if (companyTargetCount(args) > MAX_COMPANY_TARGETS) {
+        return textError(`too many targets: at most ${MAX_COMPANY_TARGETS} companies per call`);
+      }
+      const actorId = env.APIFY_COMPANY_ACTOR_ID?.trim() || DEFAULT_COMPANY_ACTOR_ID;
+      const run = await runActor(env, actorId, buildCompanyInput(args));
+      if (!run.ok) return textError(run.message);
 
-        return {
-          content: [
-            { type: "text" as const, text: `LinkedIn profile lookup returned ${run.items.length} profile(s)` },
-          ],
-          structuredContent: { count: run.items.length, profiles: run.items },
-        };
-      },
-    );
-  }
+      return {
+        content: [
+          { type: "text" as const, text: `LinkedIn company lookup returned ${run.items.length} company(ies)` },
+        ],
+        structuredContent: { count: run.items.length, companies: run.items },
+      };
+    },
+  );
+}
 
-  private registerCompanyTool(): void {
-    this.server.registerTool(
-      "linkedin_company",
-      {
-        description:
-          "Look up LinkedIn COMPANY pages: industry, headcount, headquarters, about, and recent " +
-          "activity. Provide `company_urls` (LinkedIn company URLs) and/or `names` (company names " +
-          "to search). Returns one company object per resolved target. Use `linkedin_profile_search` " +
-          "for people and `linkedin_scrape` for posts.",
-        inputSchema: {
-          company_urls: z
-            .array(z.string().max(2048))
-            .max(MAX_COMPANY_TARGETS)
-            .optional()
-            .describe('LinkedIn company URLs, e.g. ["https://www.linkedin.com/company/openai"].'),
-          names: z
-            .array(z.string().max(200))
-            .max(MAX_COMPANY_TARGETS)
-            .optional()
-            .describe('Company names to search, e.g. ["OpenAI", "Anthropic"].'),
-        },
-        outputSchema: {
-          count: z.number().describe("Number of companies returned."),
-          companies: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Matched LinkedIn company objects from the Apify Actor run."),
-        },
-      },
-      async (args: LinkedinCompanyArgs) => {
-        if (!hasCompanyTarget(args)) {
-          return textError("provide at least one LinkedIn company URL in 'company_urls' or a company name in 'names'");
-        }
-        // Combined cap across both target fields (the per-field schema limits
-        // would otherwise allow twice this many, doubling the paid run).
-        if (companyTargetCount(args) > MAX_COMPANY_TARGETS) {
-          return textError(`too many targets: at most ${MAX_COMPANY_TARGETS} companies per call`);
-        }
-        const actorId = this.env.APIFY_COMPANY_ACTOR_ID?.trim() || DEFAULT_COMPANY_ACTOR_ID;
-        const run = await runActor(this.env, actorId, buildCompanyInput(args));
-        if (!run.ok) return textError(run.message);
-
-        return {
-          content: [
-            { type: "text" as const, text: `LinkedIn company lookup returned ${run.items.length} company(ies)` },
-          ],
-          structuredContent: { count: run.items.length, companies: run.items },
-        };
-      },
-    );
-  }
+/** Build the per-request MCP server (stateless: one instance per request). */
+export function buildServer(env: Env): McpServer {
+  const server = new McpServer({ name: "linkedin", version: "0.2.0" });
+  registerScrapeTool(server, env);
+  registerProfileSearchTool(server, env);
+  registerProfileTool(server, env);
+  registerCompanyTool(server, env);
+  return server;
 }
 
 export default {
@@ -412,14 +414,17 @@ export default {
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="linkedin"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
-      if (request.method === "POST") {
-        const body = await readRequestBody(request, MAX_MCP_BODY_BYTES);
-        if (body.tooLarge) return new Response(requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES), { status: 413 });
-        const headers = new Headers(request.headers);
-        headers.delete("content-length");
-        request = new Request(request, { headers, body: body.text });
-      }
-      return LinkedinMCP.serve("/mcp").fetch(request, env, ctx);
+      // Bound the body for BOTH protocol eras before the SDK sees it: the
+      // handler's maxRequestBodySize only covers the 2026-07-28 lane (see
+      // shared/mcp/ts/body.ts).
+      const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+      if (bounded instanceof Response) return bounded;
+      request = bounded;
+      const handler = createMcpHandler(() => buildServer(env), {
+        route: "/mcp",
+        maxRequestBodySize: MAX_MCP_BODY_BYTES,
+      });
+      return handler(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404 });

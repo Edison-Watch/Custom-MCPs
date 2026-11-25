@@ -5,7 +5,7 @@
  * and so the published bin starts reliably under npx's symlink.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 import {
   checkAllowlist,
@@ -76,7 +76,7 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
         `Run a shell command with ${resolveShell(undefined)} and return its exit code, ` +
         'stdout, and stderr. Full bash is available (pipes, redirects, globs, env, &&/||). ' +
         'The command runs to completion, then the combined result is returned.',
-      inputSchema: {
+      inputSchema: z.object({
         command: z
           .string()
           .min(1)
@@ -99,9 +99,9 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
           .describe(
             'Per-call timeout in milliseconds. Overrides the server default (BASH_MCP_TIMEOUT_MS).'
           )
-      }
+      })
     },
-    async ({ command, cwd, stdin, timeout_ms }, extra) => {
+    async ({ command, cwd, stdin, timeout_ms }, ctx) => {
       // Working-directory precedence: a valid per-call `cwd` wins; otherwise the
       // launch default; otherwise the server's own cwd. A bad cwd fails loudly.
       // Prefer the path exactly as given (a directory may legitimately have
@@ -127,13 +127,15 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
       // look hung. Emit a progress notification for every output line plus a
       // periodic heartbeat, so clients that reset their request timeout on
       // progress keep the call alive. Only sent when a progressToken was given.
-      const progressToken = extra._meta?.progressToken
+      // `ctx.mcpReq.notify` ties the notification to this request (the v2
+      // equivalent of v1's `extra.sendNotification`), on both protocol eras.
+      const progressToken = ctx.mcpReq._meta?.progressToken
       let ticks = 0
       let latest = ''
       const sendProgress = (message: string): void => {
         if (progressToken === undefined) return
-        void extra
-          .sendNotification({
+        void ctx.mcpReq
+          .notify({
             method: 'notifications/progress',
             params: { progressToken, progress: ++ticks, message }
           })

@@ -4,10 +4,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
   "compatibility_flags": ["nodejs_compat"],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ImageHostMCP"] }],
-  "durable_objects": {
-    "bindings": [{ "class_name": "ImageHostMCP", "name": "MCP_OBJECT" }]
-  },
+  // Stateless since the MCP SDK 2.x move: v2 deletes the old McpAgent session
+  // Durable Object (it only held MCP session state). Migrations are append-only.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ImageHostMCP"] },
+    { "tag": "v2", "deleted_classes": ["ImageHostMCP"] }
+  ],
   "r2_buckets": [{ "binding": "IMAGE_BUCKET", "bucket_name": "edison-image-host" }],
   // Company-owned hostname (zone must live in the same Cloudflare account).
   // Cloudflare applies non-tunable bot protections to *.workers.dev that

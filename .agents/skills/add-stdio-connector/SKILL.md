@@ -36,8 +36,8 @@ Writes `servers/<id>/catalog-entry.json` (a stdio skeleton with TODOs, no
 
 The scaffold covers the **catalog entry only**. Write the actual MCP server as a
 small, publishable package co-located in `servers/<id>/`, mirroring
-`servers/adb` (TypeScript, `@modelcontextprotocol/sdk` over
-`StdioServerTransport`, built with `tsc`, unit-tested with `vitest`):
+`servers/adb` (TypeScript, `@modelcontextprotocol/server` 2.x over
+`serveStdio`, built with `tsc`, unit-tested with `vitest`):
 
 - `package.json` - published name `@sealgate/<id>-mcp`, a `bin` pointing at
   `dist/index.js`, `publishConfig.access: public`, and a `prepublishOnly` build.

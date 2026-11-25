@@ -9,10 +9,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
   "compatibility_flags": ["nodejs_compat"],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["XMCP"] }],
-  "durable_objects": {
-    "bindings": [{ "class_name": "XMCP", "name": "MCP_OBJECT" }]
-  },
+  // Stateless since the MCP SDK 2.x move: v2 deletes the old McpAgent session
+  // Durable Object (it only held MCP session state). Migrations are append-only.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["XMCP"] },
+    { "tag": "v2", "deleted_classes": ["XMCP"] }
+  ],
   // Company-owned hostname (zone must live in the same Cloudflare account).
   // Cloudflare applies non-tunable bot protections to *.workers.dev that
   // intermittently 403 legitimate server-to-server callers (observed from the
