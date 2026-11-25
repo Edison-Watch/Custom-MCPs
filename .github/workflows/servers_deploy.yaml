@@ -35,10 +35,10 @@ on:
 
 concurrency:
   # Serialize deploys; never cancel one mid-flight. GitHub still keeps only ONE
-  # pending run per group, so a newer push replaces (cancels) a queued one. That
-  # is safe only because the select job diffs against the last SUCCESSFUL
-  # deploy, not this push's own `before`: the surviving run picks up whatever
-  # the cancelled one would have shipped.
+  # pending run per group, so a newer run replaces (cancels) a queued one. That
+  # is safe only because the select job ships everything changed since the last
+  # SUCCESSFUL push deploy, not just this run's own push: the surviving run picks
+  # up whatever the cancelled one would have shipped.
   group: deploy-fleet
   cancel-in-progress: false
 
@@ -90,55 +90,70 @@ jobs:
           mapfile -t ALL < <(for d in servers/*/; do [ -f "${d}wrangler.jsonc" ] && basename "$d"; done)
           all_json=$(printf '%s\n' "${ALL[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
 
+          # Servers with changes not yet known to be deployed: every file touched
+          # by ANY first-parent commit since the last SUCCESSFUL push deploy.
+          #   - Not this push's own `before`: runs in the deploy-fleet group
+          #     serialize and a newer run cancels a still-pending one, so a
+          #     per-push range would drop the cancelled push's servers.
+          #   - Not a failed run: a failed matrix may have published some Workers
+          #     and not others, so its servers retry on the next deploy.
+          #   - Per-commit file lists, not the net diff: if a failed run published
+          #     a change and a later push reverts it, the net diff from the base
+          #     is empty but production is not; both commits name the Worker.
+          #   - --no-renames: a copy in one push plus a delete in another would
+          #     otherwise collapse into a rename that names only the destination.
+          # Dispatch runs are never a base (they deploy a hand-picked subset).
+          base=$(gh api "repos/${REPO}/actions/workflows/servers_deploy.yaml/runs?branch=main&event=push&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
+          if [ -n "$base" ] && git merge-base --is-ancestor "$base" "$SHA" 2>/dev/null; then
+            echo "Pending base: last successful deploy $base"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            base=""
+            echo "::warning::no usable last-successful-deploy base; deploying only the dispatched server(s)"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # No usable deploy history (first run, API error, rewritten main):
+            # fall back to this push's own range.
+            base="$BEFORE"
+            echo "::warning::no usable last-successful-deploy base; using push before ($base)"
+          else
+            base="${SHA}^"
+            echo "::warning::no usable base; using the merge commit's first parent"
+          fi
+          changed=""
+          if [ -n "$base" ]; then
+            changed=$(git log --first-parent -m --no-renames --name-only --format= "${base}..${SHA}")
+          fi
+
+          mapfile -t CH < <(printf '%s\n' "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
+          # Workers bundle shared/ (auth, apify logging), so a non-markdown
+          # change there redeploys every Worker; otherwise a shared-only fix
+          # would merge and never ship. Deliberately coarse: a shared/ui or
+          # shared/catalog change also redeploys all, rather than tracing
+          # imports per server. awk, not `grep -q` in a pipe: grep -q exits on
+          # the first match, SIGPIPEs the upstream stage, and under pipefail
+          # turns a large shared diff into "no shared change".
+          if printf '%s\n' "$changed" | awk '/^shared\// && !/\.md$/ { found = 1 } END { exit !found }'; then
+            CH=("${ALL[@]}")
+          fi
+          sel='[]'
+          for s in "${CH[@]:-}"; do
+            [ -n "$s" ] || continue
+            # A server deleted since the base has nothing left to deploy.
+            if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
+              sel=$(echo "$sel" | jq -c --arg s "$s" '. + [$s] | unique')
+            fi
+          done
+
           if [ "$EVENT" = "workflow_dispatch" ]; then
+            # A dispatch can replace a queued push run in the group, so it ships
+            # that pending work too, plus whatever was asked for.
             inp=$(echo "${DISPATCH_SERVER:-}" | tr -d '[:space:]')
             if [ "$inp" = "all" ]; then
               sel="$all_json"
             else
-              sel=$(jq -nc --arg s "$inp" '[$s]')
+              sel=$(echo "$sel" | jq -c --arg s "$inp" '. + [$s] | unique')
             fi
-          else
-            # Diff since the last SUCCESSFUL push deploy, not since this push's
-            # `before`. Runs in the deploy-fleet group serialize, and a newer push
-            # cancels a still-pending one; diffing from `before` would then drop
-            # the cancelled push's servers, which stay on old code until touched
-            # again. A failed run is not a base either, so its servers retry on the
-            # next deploy. Every successful run covers everything up to its head,
-            # so its head_sha is a sound base. Dispatch runs are excluded: they
-            # deploy a hand-picked subset.
-            base=$(gh api "repos/${REPO}/actions/workflows/servers_deploy.yaml/runs?branch=main&event=push&status=success&per_page=1" \
-              --jq '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
-            if [ -n "$base" ] && git merge-base --is-ancestor "$base" "$SHA" 2>/dev/null; then
-              echo "Diff base: last successful deploy $base"
-            elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
-              # No usable deploy history (first run, API error, rewritten main):
-              # fall back to this push's own range.
-              base="$BEFORE"
-              echo "::warning::no usable last-successful-deploy base; diffing from push before ($base)"
-            else
-              base="${SHA}^"
-              echo "::warning::no usable base; diffing the merge commit against its first parent"
-            fi
-            changed=$(git diff --name-only "$base" "$SHA" || true)
-
-            mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
-            sel='[]'
-            # Workers bundle shared/ (auth, apify logging), so a non-markdown
-            # change there redeploys every Worker; otherwise a shared-only fix
-            # would merge and never ship. Deliberately coarse: a shared/ui or
-            # shared/catalog change also redeploys all, rather than tracing
-            # imports per server. awk, not `grep -q` in a pipe: grep -q exits on
-            # the first match, SIGPIPEs the upstream stage, and under pipefail
-            # turns a large shared diff into "no shared change".
-            if printf '%s\n' "$changed" | awk '/^shared\// && !/\.md$/ { found = 1 } END { exit !found }'; then
-              CH=("${ALL[@]}")
-            fi
-            for s in "${CH[@]:-}"; do
-              [ -n "$s" ] || continue
-              if printf '%s\n' "${ALL[@]}" | grep -qx "$s"; then
-                sel=$(echo "$sel" | jq -c --arg s "$s" '. + [$s] | unique')
-              fi
-            done
           fi
 
           # Every selected server must be a real deployable server, so a mistyped
