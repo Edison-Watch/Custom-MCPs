@@ -151,7 +151,8 @@ describe('bash-mcp e2e progress notifications', () => {
 
 describe('bash-mcp e2e across protocol eras', () => {
   beforeAll(() => {
-    if (!existsSync(entry)) execSync('bun run build', { cwd: pkgDir, stdio: 'inherit' })
+    execSync('bun run build', { cwd: pkgDir, stdio: 'inherit' })
+    expect(existsSync(entry)).toBe(true)
   }, 60_000)
 
   for (const [label, pin] of [

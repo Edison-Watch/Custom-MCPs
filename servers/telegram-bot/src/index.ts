@@ -24,10 +24,11 @@
  * is a 401 without an OAuth challenge, which SealGate reports as rejected
  * credentials rather than starting OAuth.
  */
-import { McpServer, readRequestBody } from "@modelcontextprotocol/server";
+import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   ALLOWED_UPDATE_KINDS,
@@ -197,7 +198,7 @@ export function buildServer(call: TelegramCall): McpServer {
           .max(ALLOWED_UPDATE_KINDS.length)
           .optional()
           .describe("Only return these update kinds. Omit for the bot's current setting."),
-      }),
+      }).meta({ additionalProperties: false }),
     },
     // timeout 0 = short poll: a Worker request must not hang waiting for new messages.
     (args) =>
@@ -216,7 +217,7 @@ export function buildServer(call: TelegramCall): McpServer {
       description:
         "Look up a chat the bot can see: type, title, username, description, member count, pinned message. " +
         "Private chats are only visible after that user has messaged the bot.",
-      inputSchema: z.object({ chat_id: chatId }),
+      inputSchema: z.object({ chat_id: chatId }).meta({ additionalProperties: false }),
     },
     async ({ chat_id }) => {
       const [chat, count] = await Promise.all([
@@ -237,7 +238,7 @@ export function buildServer(call: TelegramCall): McpServer {
         text,
         parse_mode: parseMode,
         disable_link_preview: z.boolean().optional().describe("Do not render a preview for links in the text."),
-      }),
+      }).meta({ additionalProperties: false }),
     },
     ({ text, parse_mode, disable_link_preview, ...send }) =>
       run(
@@ -254,14 +255,14 @@ export function buildServer(call: TelegramCall): McpServer {
 
   server.registerTool(
     "telegram_send_photo",
-    { description: "Send a photo to a chat.", inputSchema: z.object({ ...fileFields, photo: fileRef("photo") }) },
+    { description: "Send a photo to a chat.", inputSchema: z.object({ ...fileFields, photo: fileRef("photo") }).meta({ additionalProperties: false }) },
     ({ photo, caption, parse_mode, ...send }) =>
       run("sendPhoto", { ...sendParams(send), photo, caption, parse_mode }, sentMessage("photo")),
   );
 
   server.registerTool(
     "telegram_send_document",
-    { description: "Send a file to a chat.", inputSchema: z.object({ ...fileFields, document: fileRef("document") }) },
+    { description: "Send a file to a chat.", inputSchema: z.object({ ...fileFields, document: fileRef("document") }).meta({ additionalProperties: false }) },
     ({ document, caption, parse_mode, ...send }) =>
       run("sendDocument", { ...sendParams(send), document, caption, parse_mode }, sentMessage("document")),
   );
@@ -275,7 +276,7 @@ export function buildServer(call: TelegramCall): McpServer {
         from_chat_id: chatId.describe("Source chat id or '@username'."),
         message_id: messageId,
         disable_notification: disableNotification,
-      }),
+      }).meta({ additionalProperties: false }),
     },
     (args) => run("forwardMessage", args, sentMessage("forward")),
   );
@@ -284,7 +285,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_edit_message_text",
     {
       description: "Replace the text of a message the bot sent earlier.",
-      inputSchema: z.object({ chat_id: chatId, message_id: messageId, text, parse_mode: parseMode }),
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId, text, parse_mode: parseMode }).meta({ additionalProperties: false }),
     },
     (args) =>
       run("editMessageText", args, (raw) => [
@@ -299,7 +300,7 @@ export function buildServer(call: TelegramCall): McpServer {
       description:
         "Delete a message. Bots can delete their own messages, and others' in groups where they are an admin " +
         "with delete rights (within 48 hours).",
-      inputSchema: z.object({ chat_id: chatId, message_id: messageId }),
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId }).meta({ additionalProperties: false }),
     },
     (args) => run("deleteMessage", args, () => [`Deleted message ${args.message_id}`, { deleted: true }]),
   );
@@ -317,7 +318,7 @@ export function buildServer(call: TelegramCall): McpServer {
           .max(16)
           .optional()
           .describe("One emoji from Telegram's allowed reaction set, e.g. '👍'. Omit to remove the reaction."),
-      }),
+      }).meta({ additionalProperties: false }),
     },
     ({ emoji, ...target }) =>
       run("setMessageReaction", { ...target, reaction: emoji ? [{ type: "emoji", emoji }] : [] }, () => [
@@ -330,7 +331,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_pin_message",
     {
       description: "Pin a message in a chat. Needs pin rights in groups.",
-      inputSchema: z.object({ chat_id: chatId, message_id: messageId, disable_notification: disableNotification }),
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId, disable_notification: disableNotification }).meta({ additionalProperties: false }),
     },
     (args) => run("pinChatMessage", args, () => [`Pinned message ${args.message_id}`, { pinned: true }]),
   );
@@ -339,7 +340,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_unpin_message",
     {
       description: "Unpin a pinned message in a chat. Needs pin rights in groups.",
-      inputSchema: z.object({ chat_id: chatId, message_id: messageId }),
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId }).meta({ additionalProperties: false }),
     },
     (args) => run("unpinChatMessage", args, () => [`Unpinned message ${args.message_id}`, { pinned: false }]),
   );
@@ -382,14 +383,13 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
 
   // Bound the body before parsing (CVE-2026-111768): the SDK's own
   // maxRequestBodySize is skipped when we hand it parsedBody.
-  const raw = await readRequestBody(request, MAX_MCP_BODY_BYTES);
-  if (raw.tooLarge) {
-    return jsonError(413, `Payload Too Large: Request body must not exceed ${MAX_MCP_BODY_BYTES} bytes`);
-  }
+  // Same fleet-wide bound and JSON-RPC 413 as every other Worker.
+  const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+  if (bounded instanceof Response) return bounded;
 
   let body: unknown;
   try {
-    body = JSON.parse(raw.text);
+    body = JSON.parse(await bounded.text());
   } catch {
     return jsonError(400, "request body must be JSON-RPC");
   }

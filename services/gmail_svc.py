@@ -383,8 +383,11 @@ _CLIENT_TTL_S = 50 * 60  # 50 min; access tokens live ~60 min
 _CLIENT_CACHE_MAX = 256  # LRU bound: one entry per recently active user
 # user_id -> (expires_at, refresh_token_enc the client was minted from, client).
 # Insertion order doubles as LRU order (move_to_end on hit, popitem(last=False)
-# evicts the coldest). Guarded by _client_cache_lock: services run in a thread
-# pool, and OrderedDict reordering is not atomic.
+# evicts the coldest). Guarded by _client_cache_lock: headless tools run services
+# in a worker thread, so calls for different users can interleave, and OrderedDict
+# reordering is not atomic. NB: async MCP enhancers call the sync service on the
+# event loop, so the per-call token-row lookup (one primary-key read) blocks it
+# briefly, as the Gmail API request in that same call already does.
 _client_cache: OrderedDict[str, tuple[float, bytes, Any]] = OrderedDict()
 _client_cache_lock = threading.Lock()
 

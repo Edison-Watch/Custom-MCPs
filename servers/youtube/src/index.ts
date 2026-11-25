@@ -18,6 +18,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
@@ -163,7 +164,7 @@ export function buildServer(env: Env): McpServer {
           .optional()
           .describe("Comments to scrape per video. 0 skips comment scraping (default: 0)."),
         comment_sort: z.enum(["top", "new"]).optional().describe("Ordering for scraped comments (default: top)."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         video_count: z.number().describe("Number of videos returned."),
         comment_count: z.number().describe("Number of comments returned."),
@@ -227,6 +228,14 @@ export function buildServer(env: Env): McpServer {
   );
   return server;
 }
+
+/**
+ * Retired McpAgent session Durable Object, kept as an unbound empty stub so a
+ * rollback to the pre-SDK-2.x Worker (which binds it) still deploys. Never
+ * instantiated. Remove together with a `deleted_classes` migration once 2.x is
+ * verified live (see wrangler.jsonc).
+ */
+export class YoutubeMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

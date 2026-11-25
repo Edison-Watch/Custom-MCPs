@@ -1,6 +1,6 @@
 import { fetchMock, SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
 const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawE";
@@ -240,6 +240,9 @@ for (const era of ERAS) {
       mockTelegram("getMe", 200, GET_ME_OK);
       ({ client, transport } = await connect(era));
     });
+    afterAll(async () => {
+      await client.close();
+    });
 
     it("connects with a valid token and issues no session id", () => {
       expect(transport.sessionId).toBeUndefined();
@@ -248,6 +251,11 @@ for (const era of ERAS) {
 
     it("lists every tool", async () => {
       const { tools } = await client.listTools();
+      // Input schemas stay closed, as under SDK 1.x (zod 4 omits it by default).
+      // telegram_get_me takes no arguments and declares no schema (as under 1.x).
+      for (const t of tools.filter((t) => t.name !== "telegram_get_me")) {
+        expect(t.inputSchema.additionalProperties).toBe(false);
+      }
       expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
     });
 

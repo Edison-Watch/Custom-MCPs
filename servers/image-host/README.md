@@ -7,8 +7,8 @@ GitHub issue, Markdown, or a chat message. Runs as a **Cloudflare Worker** with
 SDK 2.x (`@modelcontextprotocol/server`), stateless: `createMcpHandler`
 (`agents/mcp/server`) serves 2026-07-28 per-request traffic plus 2025-era
 `initialize` clients (stateless legacy fallback) on the same route. No Durable
-Object: migration `v2` in `wrangler.jsonc` deletes the old McpAgent session
-class; R2 is the only binding.
+Object: the old McpAgent session
+class stays as an unbound stub for rollback, to be deleted once 2.x is verified live; R2 is the only binding.
 
 > Why base64 in / URL out? The server is remote, so it can't read a caller's
 > local filesystem (base64 in), and consumers like GitHub's Camo proxy fetch the

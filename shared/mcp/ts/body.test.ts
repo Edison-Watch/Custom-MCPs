@@ -34,6 +34,30 @@ describe("boundRequestBody", () => {
     expect(((await (out as Response).json()) as { error: { message: string } }).error.message).toContain("10 bytes");
   });
 
+  it("413s on a declared Content-Length over the bound without reading the body", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++;
+        controller.enqueue(new Uint8Array(1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const req = new Request(URL_, {
+      method: "POST",
+      headers: { "content-length": "5000" },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    const out = await boundRequestBody(req, 4096);
+    expect((out as Response).status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(1); // the stream may prime one chunk; the bound never reads it
+  });
+
   it("413s a streamed body with no Content-Length on the bytes read", async () => {
     const out = await boundRequestBody(streamed(5000), 4096);
     expect((out as Response).status).toBe(413);

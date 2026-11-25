@@ -61,8 +61,8 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 ```
 
 `compatibility_flags: ["nodejs_compat"]`; no bindings (no storage, no Durable
-Object: the server is stateless, and migration `v2` deletes the old McpAgent
-session class). Production auth
+Object: the server is stateless, and the old McpAgent session
+class stays as an unbound stub for rollback, to be deleted once 2.x is verified live). Production auth
 (`edison-jwt`) is configured in `wrangler.jsonc` `vars`; `EDISON_JWT_AUDIENCE`
 must equal this server's catalog id, `youtube`.
 

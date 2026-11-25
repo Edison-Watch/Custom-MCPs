@@ -21,6 +21,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
@@ -181,7 +182,7 @@ function registerScrapeTool(server: McpServer, env: Env): void {
           .max(1000)
           .optional()
           .describe("Maximum number of posts to return per query (default: 10)."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of items returned."),
         items: z
@@ -265,7 +266,7 @@ function registerProfileSearchTool(server: McpServer, env: Env): void {
           .boolean()
           .optional()
           .describe("Only people who recently posted on LinkedIn (refines a query; can't be the only target)."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of profiles returned."),
         profiles: z
@@ -307,7 +308,7 @@ function registerProfileTool(server: McpServer, env: Env): void {
           .array(z.string().max(2048))
           .max(MAX_PROFILE_URLS)
           .describe('LinkedIn profile URLs to scrape, e.g. ["https://www.linkedin.com/in/williamhgates"].'),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of profiles returned."),
         profiles: z
@@ -358,7 +359,7 @@ function registerCompanyTool(server: McpServer, env: Env): void {
           .max(MAX_COMPANY_TARGETS)
           .optional()
           .describe('Company names to search, e.g. ["OpenAI", "Anthropic"].'),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of companies returned."),
         companies: z
@@ -398,6 +399,14 @@ export function buildServer(env: Env): McpServer {
   registerCompanyTool(server, env);
   return server;
 }
+
+/**
+ * Retired McpAgent session Durable Object, kept as an unbound empty stub so a
+ * rollback to the pre-SDK-2.x Worker (which binds it) still deploys. Never
+ * instantiated. Remove together with a `deleted_classes` migration once 2.x is
+ * verified live (see wrangler.jsonc).
+ */
+export class LinkedinMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

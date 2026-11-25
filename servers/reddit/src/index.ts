@@ -22,6 +22,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { buildActorInput } from "./adapters";
@@ -458,6 +459,9 @@ export function buildServer(env: Env): McpServer {
   );
   return server;
 }
+
+/** Retired McpAgent session DO: unbound stub kept for rollback (see wrangler.jsonc). */
+export class RedditMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

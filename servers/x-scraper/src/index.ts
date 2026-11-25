@@ -21,6 +21,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
@@ -209,7 +210,7 @@ function registerScrapeTool(server: McpServer, env: Env): void {
           .boolean()
           .optional()
           .describe("Only return tweets by Twitter Blue (verified) accounts (default: false)."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of items returned."),
         items: z
@@ -273,7 +274,7 @@ function registerProfileTool(server: McpServer, env: Env): void {
           .boolean()
           .optional()
           .describe("Include account metadata (join date, location, username-change history). Default: true."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of profiles returned."),
         profiles: z
@@ -372,7 +373,7 @@ function registerEngagersTool(server: McpServer, env: Env): void {
           .max(1000)
           .optional()
           .describe("Approximate max accounts per engagement kind (default: 50); each kind is a separate run."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         count: z.number().describe("Number of unique engagers returned."),
         engagers: z
@@ -457,6 +458,14 @@ function registerEngagersTool(server: McpServer, env: Env): void {
     },
   );
 }
+
+/**
+ * Retired McpAgent session Durable Object, kept as an unbound empty stub so a
+ * rollback to the pre-SDK-2.x Worker (which binds it) still deploys. Never
+ * instantiated. Remove together with a `deleted_classes` migration once 2.x is
+ * verified live (see wrangler.jsonc).
+ */
+export class XMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

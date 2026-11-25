@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
 const AUTH = "Bearer test-token";
@@ -86,9 +86,9 @@ describe("auth gate on /mcp", () => {
   // 2025-era body above our 1 MiB (but under the SDK's 4 MiB default) must
   // still be refused, on both the modern-classified and legacy-classified paths.
   for (const [label, extra, body] of [
-    ["modern lane", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
+    ["no protocol header", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
     [
-      "legacy lane",
+      "2025-era protocol header",
       { "mcp-protocol-version": "2025-06-18" },
       { jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "x".repeat(1024 * 1024 + 1) } },
     ],
@@ -110,9 +110,14 @@ for (const era of ["modern", "legacy"] as const) {
     beforeAll(async () => {
       client = await connect(era);
     });
+    afterAll(async () => {
+      await client.close();
+    });
 
     it("lists all three tools with input and output schemas", async () => {
       const { tools } = await client.listTools();
+      // Input schemas stay closed, as under SDK 1.x (zod 4 omits it by default).
+      for (const t of tools) expect(t.inputSchema.additionalProperties).toBe(false);
       const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
       expect(byName.reddit_scrape?.inputSchema.properties).toHaveProperty("search");
       expect(byName.reddit_scrape?.outputSchema?.properties).toHaveProperty("items");
@@ -127,6 +132,9 @@ for (const era of ["modern", "legacy"] as const) {
     let client: Client;
     beforeAll(async () => {
       client = await connect(era);
+    });
+    afterAll(async () => {
+      await client.close();
     });
 
     // The test env sets no APIFY_TOKEN, so the tool fails closed at the misconfig
@@ -150,6 +158,9 @@ for (const era of ["modern", "legacy"] as const) {
     beforeAll(async () => {
       client = await connect(era);
     });
+    afterAll(async () => {
+      await client.close();
+    });
 
     // No APIFY_TOKEN in the test env, so the async start also fails closed at the
     // misconfig guard - exercising registration + guard over the full transport
@@ -170,6 +181,9 @@ for (const era of ["modern", "legacy"] as const) {
     let client: Client;
     beforeAll(async () => {
       client = await connect(era);
+    });
+    afterAll(async () => {
+      await client.close();
     });
 
     it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {

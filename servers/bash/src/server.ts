@@ -99,7 +99,7 @@ function registerRunTool(server: McpServer, defaults: ServerDefaults): void {
           .describe(
             'Per-call timeout in milliseconds. Overrides the server default (BASH_MCP_TIMEOUT_MS).'
           )
-      })
+      }).meta({ additionalProperties: false })
     },
     async ({ command, cwd, stdin, timeout_ms }, ctx) => {
       // Working-directory precedence: a valid per-call `cwd` wins; otherwise the

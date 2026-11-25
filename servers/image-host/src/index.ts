@@ -15,6 +15,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { boundRequestBody } from "../../../shared/mcp/ts/body";
@@ -102,7 +103,7 @@ export function buildServer(env: Env, props: Props): McpServer {
           .optional()
           .describe("MIME type such as image/png. Verified against the actual bytes."),
         prefix: z.string().optional().describe("Optional key prefix / folder, e.g. 'screenshots'."),
-      }),
+      }).meta({ additionalProperties: false }),
       outputSchema: z.object({
         url: z.string().describe("Public URL of the uploaded image."),
         key: z.string().describe("Storage key; pass to delete_image to remove it."),
@@ -178,7 +179,7 @@ export function buildServer(env: Env, props: Props): McpServer {
       description:
         "Delete a previously uploaded image by the key returned from upload_image. " +
         "You can only delete images you uploaded.",
-      inputSchema: z.object({ key: z.string().describe("The storage key returned by upload_image.") }),
+      inputSchema: z.object({ key: z.string().describe("The storage key returned by upload_image.") }).meta({ additionalProperties: false }),
       outputSchema: z.object({ deleted: z.boolean(), key: z.string() }),
     },
     async ({ key }) => {
@@ -236,6 +237,14 @@ async function serveImage(rawKey: string, env: Env): Promise<Response> {
   headers.set("x-content-type-options", "nosniff");
   return new Response(object.body, { headers });
 }
+
+/**
+ * Retired McpAgent session Durable Object, kept as an unbound empty stub so a
+ * rollback to the pre-SDK-2.x Worker (which binds it) still deploys. Never
+ * instantiated. Remove together with a `deleted_classes` migration once 2.x is
+ * verified live (see wrangler.jsonc).
+ */
+export class ImageHostMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

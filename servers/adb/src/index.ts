@@ -75,7 +75,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
     {
       title: 'List installed packages',
       description: 'List all packages installed on the connected Android device.',
-      inputSchema: z.object({})
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -99,7 +99,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
           .string()
           .min(1)
           .describe('The adb command to run, without the leading `adb` (e.g. "shell ls /sdcard").')
-      })
+      }).meta({ additionalProperties: false })
     },
     async ({ command }) => {
       const args = tokenizeCommand(command)
@@ -125,7 +125,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
       description:
         'Dump the current screen UI hierarchy and return the clickable/labelled elements with ' +
         'their text, content description, class, bounds, and centre tap coordinates.',
-      inputSchema: z.object({})
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -151,7 +151,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
     {
       title: 'Take a screenshot',
       description: 'Capture a PNG screenshot of the connected device screen.',
-      inputSchema: z.object({})
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -179,7 +179,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
           .string()
           .min(1)
           .describe('The package name to inspect, e.g. "com.android.settings".')
-      })
+      }).meta({ additionalProperties: false })
     },
     async ({ package_name }) => {
       if (!PACKAGE_NAME.test(package_name)) {

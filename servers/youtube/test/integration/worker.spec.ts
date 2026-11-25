@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
 const AUTH = "Bearer test-token";
@@ -66,9 +66,9 @@ describe("request body bound", () => {
   // The SDK handler's maxRequestBodySize only bounds the 2026-07-28 lane, so a
   // 2025-era (legacy-classified) body must be refused by our own bound too.
   for (const [label, extra, body] of [
-    ["modern lane", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
+    ["no protocol header", {}, { jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }],
     [
-      "legacy lane",
+      "2025-era protocol header",
       { "mcp-protocol-version": "2025-06-18" },
       { jsonrpc: "2.0", id: 1, method: "tools/list", params: { pad: "x".repeat(1024 * 1024 + 1) } },
     ],
@@ -95,9 +95,14 @@ for (const era of ["modern", "legacy"] as const) {
     beforeAll(async () => {
       client = await connect(era);
     });
+    afterAll(async () => {
+      await client.close();
+    });
 
     it("lists the tool with input and output schemas", async () => {
       const { tools } = await client.listTools();
+      // Input schemas stay closed, as under SDK 1.x (zod 4 omits it by default).
+      for (const t of tools) expect(t.inputSchema.additionalProperties).toBe(false);
       const tool = tools.find((t) => t.name === "youtube_scrape");
       expect(tool?.inputSchema.properties).toHaveProperty("search");
       expect(tool?.outputSchema?.properties).toHaveProperty("videos");
