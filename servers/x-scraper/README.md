@@ -62,12 +62,13 @@ tweets (an all-filler run comes back as `count: 0`).
 
 At least one `handles` or `profile_urls` entry is required.
 
-**Suggestion filtering:** the `apidojo` Actor returns the requested profiles first
-and then pads the run with "who to follow" suggestions, and at a tight item cap its
-ordering is unstable (asking for `sama` at `maxItems: 1` can return `paulg`). The
-Worker over-fetches by a fixed buffer and then filters the dataset back down to
-exactly the requested accounts, so callers only ever see profiles they asked for.
-Follower/following *lists* (the Actor's expensive per-query events) are not exposed.
+**Profiles only:** the `apidojo` Actor's `getFollowers`, `getFollowing` and
+`getRetweeters` inputs default to `true`, which also scrapes (and bills) each
+account's follower/following lists into the same `maxItems` window, so a
+requested profile could be crowded out. The Worker turns all three off and asks
+for exactly one item per target, then filters the dataset to the requested
+accounts. Any requested handle that did not come back (nonexistent, suspended, or
+dropped upstream) is listed in the result's `not_found`.
 
 ## `x_engagers` input
 

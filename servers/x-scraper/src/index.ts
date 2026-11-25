@@ -28,6 +28,7 @@ import {
   MAX_PROFILE_TARGETS,
   buildProfileInput,
   hasProfileTarget,
+  missingTargets,
   profileTargets,
   selectProfiles,
   uniqueTargetCount,
@@ -271,6 +272,9 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
           profiles: z
             .array(z.record(z.string(), z.any()))
             .describe("Matched X user/profile objects."),
+          not_found: z
+            .array(z.string())
+            .describe("Requested handles with no profile in the result (nonexistent, suspended, or not returned)."),
         },
       },
       async (args: XProfileArgs) => {
@@ -296,12 +300,17 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         const run = await runActor(this.env, actorId, buildProfileInput(args));
         if (!run.ok) return textError(run.message);
 
-        // The Actor pads runs with "who to follow" suggestions; keep only the
-        // profiles that were actually requested.
+        // Keep only the requested profiles (defensive: buildProfileInput already
+        // turns off the Actor's follower/following scraping) and name any
+        // requested account that did not come back.
         const profiles = selectProfiles(run.items, args);
+        const notFound = missingTargets(profiles, args);
+        const summary =
+          `X profile lookup returned ${profiles.length} profile(s)` +
+          (notFound.length ? `; not found: ${notFound.join(", ")}` : "");
         return {
-          content: [{ type: "text" as const, text: `X profile lookup returned ${profiles.length} profile(s)` }],
-          structuredContent: { count: profiles.length, profiles },
+          content: [{ type: "text" as const, text: summary }],
+          structuredContent: { count: profiles.length, profiles, not_found: notFound },
         };
       },
     );
