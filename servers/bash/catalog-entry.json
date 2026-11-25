@@ -7,7 +7,7 @@
   "tags": ["bash", "shell", "terminal", "command", "cli", "local", "stdio"],
   "transport": "stdio",
   "command": "npx",
-  "args": ["-y", "@sealgate/bash-mcp@0.1.0"],
+  "args": ["-y", "@sealgate/bash-mcp@0.2.0"],
   "auth": "none",
   "icon": "bash.svg",
   "tools_configurations": {

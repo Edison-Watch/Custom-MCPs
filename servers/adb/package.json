@@ -1,6 +1,6 @@
 {
   "name": "@sealgate/android-adb-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SealGate stdio MCP server that exposes Android Debug Bridge (adb) on the local machine: packages, UI layout, screenshots, action intents, and raw adb commands.",
   "keywords": [
     "mcp",
