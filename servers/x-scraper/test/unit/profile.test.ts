@@ -109,6 +109,12 @@ describe("missingTargets", () => {
       missingTargets([openai], { handles: ["SAMA"], profile_urls: ["https://x.com/sama", "https://x.com/openai"] }),
     ).toEqual(["SAMA"]);
   });
+  test("reports malformed handles (never sent to the Actor) as not found", () => {
+    // 29 chars: over X's 15-char limit, so normalizeHandle drops it before the run.
+    expect(missingTargets([openai], { handles: ["openai", " this_handle_does_not_exist_zz ", "", "@"] })).toEqual([
+      "this_handle_does_not_exist_zz",
+    ]);
+  });
   test("is empty when everything came back", () => {
     expect(missingTargets([openai], { handles: ["@openai"] })).toEqual([]);
   });

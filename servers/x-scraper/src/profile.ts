@@ -198,7 +198,9 @@ export function selectProfiles(
 /**
  * Requested handles (as the caller spelled them, URL targets resolved to their
  * handle) with no matching profile in `profiles`, so a dropped or nonexistent
- * account is reported instead of silently missing from the result.
+ * account is reported instead of silently missing from the result. Handles that
+ * fail X's handle grammar (see normalizeHandle: 1-15 of `[A-Za-z0-9_]`) are never
+ * sent to the Actor, so they are reported here too rather than vanishing.
  */
 export function missingTargets(profiles: Record<string, unknown>[], args: XProfileArgs): string[] {
   const found = new Set(
@@ -213,6 +215,16 @@ export function missingTargets(profiles: Record<string, unknown>[], args: XProfi
     if (found.has(key) || seen.has(key)) continue;
     seen.add(key);
     out.push(h);
+  }
+  for (const raw of args.handles ?? []) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    // Blank entries are not targets; valid ones were handled above.
+    if (!trimmed || trimmed === "@" || normalizeHandle(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
   }
   return out;
 }
