@@ -6,6 +6,8 @@ LLM. ``user_id`` arrives on the wire but is overridden by the authenticated
 principal when one is bound; see ``mcp_server/app_tools/_auth_guard.py``.
 """
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from mcp_server.app_tools._auth_guard import guard_user_id
 from mcp_server.server import mcp
 from models.gmail import (
@@ -65,7 +67,7 @@ def _coerce_attachments(
         elif a.get("attachment_id"):
             out.append(AttachmentReference(attachment_id=a["attachment_id"]))
         else:
-            raise ValueError(
+            raise ToolError(
                 "attachment must have either 'data_base64' (new upload) or "
                 "'attachment_id' (existing file reference)"
             )

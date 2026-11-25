@@ -1,7 +1,7 @@
 """Tests for billing: LimitStatus, ensure_daily_limit, subscription model, Stripe graceful degradation."""
 
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +17,7 @@ from api_server.billing.stripe_config import (
     get_stripe_price_id,
     get_webhook_secret,
 )
+from common import global_config
 from db.base import Base
 from db.models.subscription_types import SubscriptionTier
 from db.models.user_subscriptions import UserSubscription
@@ -85,6 +86,68 @@ class TestEnsureDailyLimit(TestTemplate):
         ):
             ensure_daily_limit("limit-user")
         assert exc_info.value.status_code == 402
+
+    def test_day_rollover_with_naive_reset_at(self):
+        # Regression: SQLite stores daily_quota_reset_at tz-naive; the
+        # day-reset update's default "evaluate" sync strategy re-ran the
+        # datetime WHERE clause in Python (naive vs aware -> TypeError),
+        # 500ing every authenticated call after midnight UTC.
+        session = _make_session()
+        yesterday = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+        sub = UserSubscription(
+            user_id="rollover-user",
+            subscription_tier=SubscriptionTier.FREE.value,
+            current_period_usage=9999,
+            current_period_start=datetime.now(UTC),
+            daily_quota_reset_at=yesterday,
+        )
+        session.add(sub)
+        session.commit()
+
+        with patch(
+            "api_server.billing.limits.use_db_session",
+            return_value=_mock_use_db_session(session),
+        ):
+            status = ensure_daily_limit("rollover-user")
+        assert status.allowed is True
+        assert status.current_usage == 1  # fresh day, counter reset
+
+    def test_day_rollover_with_naive_reset_at_on_zero_quota_tier(self):
+        # Same regression on the zero-quota branch: its day-reset UPDATE must
+        # not 500 on a tz-naive reset_at; it resets the clock and returns 402.
+        session = _make_session()
+        yesterday = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=1)
+        sub = UserSubscription(
+            user_id="zero-quota-user",
+            subscription_tier=SubscriptionTier.FREE.value,
+            current_period_usage=3,
+            current_period_start=datetime.now(UTC),
+            daily_quota_reset_at=yesterday,
+        )
+        session.add(sub)
+        session.commit()
+
+        cfg = global_config.subscription_config
+        zero_tier = cfg.tier_limits[SubscriptionTier.FREE.value].model_copy(
+            update={"daily_requests": 0}
+        )
+        with (
+            patch(
+                "api_server.billing.limits.use_db_session",
+                return_value=_mock_use_db_session(session),
+            ),
+            patch.dict(cfg.tier_limits, {SubscriptionTier.FREE.value: zero_tier}),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            ensure_daily_limit("zero-quota-user")
+        assert exc_info.value.status_code == 402
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail["code"] == "quota_exceeded"
+        session.refresh(sub)
+        assert sub.current_period_usage == 0
+        assert sub.daily_quota_reset_at is not None
+        assert sub.daily_quota_reset_at.date() == datetime.now(UTC).date()
 
     def test_allows_under_limit(self):
         session = _make_session()
