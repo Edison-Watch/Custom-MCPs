@@ -7,6 +7,7 @@ import {
   normalizeHandles,
   profileTargets,
   missingTargets,
+  PROFILE_HEADROOM,
   selectProfiles,
   uniqueTargetCount,
 } from "../../src/profile";
@@ -62,12 +63,12 @@ describe("profileTargets / hasProfileTarget", () => {
 });
 
 describe("buildProfileInput", () => {
-  test("maps handles, asks for exactly one item per target, profiles only", () => {
+  test("maps handles, asks for one item per target plus headroom, profiles only", () => {
     const input = buildProfileInput({ handles: ["openai", "sama"] });
     expect(input).toMatchObject({
       twitterHandles: ["openai", "sama"],
       getAbout: true,
-      maxItems: 2,
+      maxItems: 2 + PROFILE_HEADROOM,
     });
     expect(input.startUrls).toBeUndefined();
   });
@@ -77,7 +78,7 @@ describe("buildProfileInput", () => {
     expect(input).toMatchObject({
       startUrls: ["https://x.com/nasa"],
       getAbout: false,
-      maxItems: 1,
+      maxItems: 1 + PROFILE_HEADROOM,
     });
   });
 
@@ -88,7 +89,7 @@ describe("buildProfileInput", () => {
       handles: ["openai", "OpenAI"],
       profile_urls: ["https://x.com/openai", "https://x.com/sama"],
     });
-    expect(input.maxItems).toBe(2);
+    expect(input.maxItems).toBe(2 + PROFILE_HEADROOM);
   });
 
   test("turns off the Actor's follower/following/retweeter scraping (all default to true)", () => {

@@ -65,8 +65,9 @@ At least one `handles` or `profile_urls` entry is required.
 **Profiles only:** the `apidojo` Actor's `getFollowers`, `getFollowing` and
 `getRetweeters` inputs default to `true`, which also scrapes (and bills) each
 account's follower/following lists into the same `maxItems` window, so a
-requested profile could be crowded out. The Worker turns all three off and asks
-for exactly one item per target, then filters the dataset to the requested
+requested profile could be crowded out. The Worker turns all three off, asks for
+one item per target plus a small headroom (unused headroom is not billed: the
+Actor charges per item returned), then filters the dataset to the requested
 accounts. Any requested handle that did not come back (nonexistent, suspended, or
 dropped upstream) is listed in the result's `not_found`.
 

@@ -14,7 +14,8 @@
  * requested profile could be crowded out and silently dropped (observed:
  * `["openai","sama"]` at maxItems 12 returned OpenAI plus 10 of its
  * following/followers; `sama` at maxItems 1 returned `paulg`, one of sama's
- * follows). We turn all three off and ask for exactly one item per target;
+ * follows). We turn all three off and ask for one item per target plus
+ * {@link PROFILE_HEADROOM};
  * {@link selectProfiles} still filters to the requested set as a defensive floor,
  * and {@link missingTargets} names any requested account that did not come back.
  */
@@ -22,6 +23,16 @@
 import { normalizeHandle } from "./x";
 
 export const DEFAULT_PROFILE_ACTOR_ID = "apidojo~twitter-user-scraper";
+
+/**
+ * Small headroom over the target count. With follower/following scraping off
+ * the Actor returns only the requested profiles (measured: 2 handles at
+ * maxItems 4 returned exactly 2), and it bills per item actually returned, so
+ * unused headroom costs nothing. It only matters if the Actor ever starts
+ * emitting an extra non-requested row again: then that row cannot crowd a
+ * requested profile out of the window, and selectProfiles drops it.
+ */
+export const PROFILE_HEADROOM = 2;
 
 /**
  * Hard cap on how many accounts one call may request. Each requested account is
@@ -147,7 +158,7 @@ export function buildProfileInput(args: XProfileArgs): Record<string, unknown> {
     getFollowers: false,
     getFollowing: false,
     getRetweeters: false,
-    maxItems: targetCount,
+    maxItems: targetCount + PROFILE_HEADROOM,
   };
   if (handles.length) input.twitterHandles = handles;
   if (urls.length) input.startUrls = urls;
