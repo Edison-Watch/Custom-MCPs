@@ -16,7 +16,7 @@ import {
   validateCwd
 } from './exec.js'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 
 /** How often to emit a progress heartbeat while a command is running (ms). */
 const DEFAULT_HEARTBEAT_MS = 10_000

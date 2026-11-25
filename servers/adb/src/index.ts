@@ -31,7 +31,7 @@ import {
 } from './adb.js'
 import { parseServerConfig, type ServerConfig } from './config.js'
 
-const VERSION = '0.1.0'
+const VERSION = '0.2.0'
 
 /** A validated Android package name (also guards the dumpsys shell argument). */
 const PACKAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.]*$/

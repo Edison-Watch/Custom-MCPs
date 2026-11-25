@@ -1,6 +1,6 @@
 {
   "name": "@sealgate/bash-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SealGate stdio MCP server that exposes full bash command execution on the local machine as a single `run` tool.",
   "keywords": [
     "mcp",

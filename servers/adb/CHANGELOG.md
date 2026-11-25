@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Moved from `@modelcontextprotocol/sdk` 1.x to MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`). The server now speaks the 2026-07-28
+  protocol and still serves 2025-era clients that send `initialize`.
+- Every tool's input schema now declares `additionalProperties: false`.
+- Requires Node 20 or newer (`engines.node`).
+
 ## 0.1.0
 
 Initial release.
