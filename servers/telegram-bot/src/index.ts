@@ -8,8 +8,10 @@
  * `X-Telegram-Bot-Token` header (catalog `headers` + `template_fields`, beside
  * the `edison-jwt` gate).
  *
- * Transport: streamable HTTP at `/mcp`, **stateless**. Unlike the Durable
- * Object connectors, every request builds its own McpServer closed over that
+ * Transport: streamable HTTP at `/mcp`, **stateless**, via the MCP TS SDK 2.x
+ * `createMcpHandler` (agents/mcp/server): one route serves both 2026-07-28
+ * per-request traffic and 2025-era `initialize` clients (stateless legacy
+ * fallback). Every request builds its own McpServer closed over that
  * request's token and discards it after responding. That keeps the token out
  * of any storage: McpAgent persists its `props` into Durable Object storage,
  * which is fine for a JWT subject and not for a live bot credential. The Bot
@@ -22,11 +24,11 @@
  * is a 401 without an OAuth challenge, which SealGate reports as rejected
  * credentials rather than starting OAuth.
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   ALLOWED_UPDATE_KINDS,
@@ -157,7 +159,7 @@ const sentMessage =
 
 /** Build one request's MCP server over that request's Telegram client. */
 export function buildServer(call: TelegramCall): McpServer {
-  const server = new McpServer({ name: SERVICE, version: "0.1.0" });
+  const server = new McpServer({ name: SERVICE, version: "0.2.0" });
   const run = runner(call);
 
   server.registerTool(
@@ -178,7 +180,7 @@ export function buildServer(call: TelegramCall): McpServer {
         "for 24 hours). Bots cannot read older chat history. Pass the returned `next_offset` as `offset` " +
         "on the next call to acknowledge what you have read, or updates will be returned again. Fails if " +
         "the bot has a webhook set.",
-      inputSchema: {
+      inputSchema: z.object({
         offset: z
           .number()
           .int()
@@ -196,7 +198,7 @@ export function buildServer(call: TelegramCall): McpServer {
           .max(ALLOWED_UPDATE_KINDS.length)
           .optional()
           .describe("Only return these update kinds. Omit for the bot's current setting."),
-      },
+      }).meta({ additionalProperties: false }),
     },
     // timeout 0 = short poll: a Worker request must not hang waiting for new messages.
     (args) =>
@@ -215,7 +217,7 @@ export function buildServer(call: TelegramCall): McpServer {
       description:
         "Look up a chat the bot can see: type, title, username, description, member count, pinned message. " +
         "Private chats are only visible after that user has messaged the bot.",
-      inputSchema: { chat_id: chatId },
+      inputSchema: z.object({ chat_id: chatId }).meta({ additionalProperties: false }),
     },
     async ({ chat_id }) => {
       const [chat, count] = await Promise.all([
@@ -231,12 +233,12 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_send_message",
     {
       description: "Send a text message from the bot to a chat, optionally as a reply or into a forum topic.",
-      inputSchema: {
+      inputSchema: z.object({
         ...sendFields,
         text,
         parse_mode: parseMode,
         disable_link_preview: z.boolean().optional().describe("Do not render a preview for links in the text."),
-      },
+      }).meta({ additionalProperties: false }),
     },
     ({ text, parse_mode, disable_link_preview, ...send }) =>
       run(
@@ -253,14 +255,14 @@ export function buildServer(call: TelegramCall): McpServer {
 
   server.registerTool(
     "telegram_send_photo",
-    { description: "Send a photo to a chat.", inputSchema: { ...fileFields, photo: fileRef("photo") } },
+    { description: "Send a photo to a chat.", inputSchema: z.object({ ...fileFields, photo: fileRef("photo") }).meta({ additionalProperties: false }) },
     ({ photo, caption, parse_mode, ...send }) =>
       run("sendPhoto", { ...sendParams(send), photo, caption, parse_mode }, sentMessage("photo")),
   );
 
   server.registerTool(
     "telegram_send_document",
-    { description: "Send a file to a chat.", inputSchema: { ...fileFields, document: fileRef("document") } },
+    { description: "Send a file to a chat.", inputSchema: z.object({ ...fileFields, document: fileRef("document") }).meta({ additionalProperties: false }) },
     ({ document, caption, parse_mode, ...send }) =>
       run("sendDocument", { ...sendParams(send), document, caption, parse_mode }, sentMessage("document")),
   );
@@ -269,12 +271,12 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_forward_message",
     {
       description: "Forward a message from one chat the bot can see into another.",
-      inputSchema: {
+      inputSchema: z.object({
         chat_id: chatId.describe("Destination chat id or '@username'."),
         from_chat_id: chatId.describe("Source chat id or '@username'."),
         message_id: messageId,
         disable_notification: disableNotification,
-      },
+      }).meta({ additionalProperties: false }),
     },
     (args) => run("forwardMessage", args, sentMessage("forward")),
   );
@@ -283,7 +285,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_edit_message_text",
     {
       description: "Replace the text of a message the bot sent earlier.",
-      inputSchema: { chat_id: chatId, message_id: messageId, text, parse_mode: parseMode },
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId, text, parse_mode: parseMode }).meta({ additionalProperties: false }),
     },
     (args) =>
       run("editMessageText", args, (raw) => [
@@ -298,7 +300,7 @@ export function buildServer(call: TelegramCall): McpServer {
       description:
         "Delete a message. Bots can delete their own messages, and others' in groups where they are an admin " +
         "with delete rights (within 48 hours).",
-      inputSchema: { chat_id: chatId, message_id: messageId },
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId }).meta({ additionalProperties: false }),
     },
     (args) => run("deleteMessage", args, () => [`Deleted message ${args.message_id}`, { deleted: true }]),
   );
@@ -307,7 +309,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_set_reaction",
     {
       description: "Set the bot's emoji reaction on a message, or clear it by omitting `emoji`.",
-      inputSchema: {
+      inputSchema: z.object({
         chat_id: chatId,
         message_id: messageId,
         emoji: z
@@ -316,7 +318,7 @@ export function buildServer(call: TelegramCall): McpServer {
           .max(16)
           .optional()
           .describe("One emoji from Telegram's allowed reaction set, e.g. '👍'. Omit to remove the reaction."),
-      },
+      }).meta({ additionalProperties: false }),
     },
     ({ emoji, ...target }) =>
       run("setMessageReaction", { ...target, reaction: emoji ? [{ type: "emoji", emoji }] : [] }, () => [
@@ -329,7 +331,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_pin_message",
     {
       description: "Pin a message in a chat. Needs pin rights in groups.",
-      inputSchema: { chat_id: chatId, message_id: messageId, disable_notification: disableNotification },
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId, disable_notification: disableNotification }).meta({ additionalProperties: false }),
     },
     (args) => run("pinChatMessage", args, () => [`Pinned message ${args.message_id}`, { pinned: true }]),
   );
@@ -338,7 +340,7 @@ export function buildServer(call: TelegramCall): McpServer {
     "telegram_unpin_message",
     {
       description: "Unpin a pinned message in a chat. Needs pin rights in groups.",
-      inputSchema: { chat_id: chatId, message_id: messageId },
+      inputSchema: z.object({ chat_id: chatId, message_id: messageId }).meta({ additionalProperties: false }),
     },
     (args) => run("unpinChatMessage", args, () => [`Unpinned message ${args.message_id}`, { pinned: false }]),
   );
@@ -355,8 +357,11 @@ function jsonError(status: number, message: string, extra: Record<string, string
   });
 }
 
+/** A connection's opening request: 2025-era `initialize`, or the 2026-07-28 `server/discover` probe. */
 function isInitialize(body: unknown): boolean {
-  return (Array.isArray(body) ? body : [body]).some((m) => isRecord(m) && m.method === "initialize");
+  return (Array.isArray(body) ? body : [body]).some(
+    (m) => isRecord(m) && (m.method === "initialize" || m.method === "server/discover"),
+  );
 }
 
 async function handleMcp(request: Request, env: Env): Promise<Response> {
@@ -378,39 +383,33 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
 
   // Bound the body before parsing (CVE-2026-111768): the SDK's own
   // maxRequestBodySize is skipped when we hand it parsedBody.
-  const raw = await readRequestBody(request, MAX_MCP_BODY_BYTES);
-  if (raw.tooLarge) return jsonError(413, requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES));
+  // Same fleet-wide bound and JSON-RPC 413 as every other Worker.
+  const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+  if (bounded instanceof Response) return bounded;
 
   let body: unknown;
   try {
-    body = JSON.parse(raw.text);
+    body = JSON.parse(await bounded.text());
   } catch {
     return jsonError(400, "request body must be JSON-RPC");
   }
 
   const call = telegramClient(token, { base: env.TELEGRAM_API_BASE?.trim() });
 
-  // Check the token once per connection, on initialize, so a wrong token fails
-  // at install time instead of on the first tool call.
+  // Check the token once per connection, on initialize (or the 2026-07-28
+  // server/discover probe), so a wrong token fails at install time instead of
+  // on the first tool call.
   if (isInitialize(body)) {
     const me = await call("getMe", {}, 10_000);
     if (!me.ok) return jsonError(me.status === 401 ? 401 : 502, me.error);
   }
 
-  const server = buildServer(call);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
+  // The handler builds (and tears down) one server per request from the factory.
+  const handler = createMcpHandler(() => buildServer(call), {
+    route: "/mcp",
     maxRequestBodySize: MAX_MCP_BODY_BYTES,
   });
-  await server.connect(transport);
-  try {
-    return await transport.handleRequest(request, { parsedBody: body });
-  } finally {
-    // JSON-response mode resolves only once every reply is ready, so the
-    // per-request server can be dropped straight away.
-    await server.close();
-  }
+  return handler.fetch(request, { parsedBody: body });
 }
 
 export default {

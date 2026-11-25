@@ -10,15 +10,19 @@
  * a secret) and authenticates *callers* separately via the fleet auth contract;
  * no per-user Apify credentials.
  *
- * Transport: streamable HTTP at `/mcp` (McpAgent / Durable Object).
+ * Transport: stateless streamable HTTP at `/mcp` via the MCP TS SDK 2.x
+ * `createMcpHandler` (agents/mcp/server). One route serves both 2026-07-28
+ * per-request traffic and 2025-era `initialize` clients (stateless legacy
+ * fallback); no Durable Object or session state.
  * Auth: pluggable (see ./auth); production runs `edison-jwt`.
  */
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
-import { McpAgent } from "agents/mcp";
+import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler } from "agents/mcp/server";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 import { logApifyFailure, type ApifyFailure } from "./apify_log";
+import { boundRequestBody } from "../../../shared/mcp/ts/body";
 import { checkAuth } from "./auth";
 import {
   APIFY_BASE,
@@ -37,12 +41,12 @@ import {
   type YoutubeScrapeArgs,
 } from "./youtube";
 
-// Bound on an /mcp POST body (CVE-2026-111768). agents' McpAgent.serve only checks a
-// declared Content-Length, so the body is read here, bounded, before it reaches it.
+// Bound on an /mcp POST body (CVE-2026-111768), enforced on the bytes actually
+// read by shared/mcp/ts/body.ts for both protocol eras (the handler's own
+// maxRequestBodySize only covers the 2026-07-28 lane).
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
 export interface Env {
-  MCP_OBJECT: DurableObjectNamespace;
   // Apify API token for the server's own account. SECRET - set with
   // `wrangler secret put APIFY_TOKEN`, never in wrangler.jsonc vars.
   APIFY_TOKEN?: string;
@@ -65,174 +69,173 @@ function textError(message: string) {
   return { isError: true as const, content: [{ type: "text" as const, text: `Error: ${message}` }] };
 }
 
-export class YoutubeMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
-  server = new McpServer({ name: "youtube", version: "0.1.0" });
+/** Run one Apify Actor synchronously and return its validated dataset items. */
+async function runActor(
+  env: Env,
+  actorId: string,
+  actorInput: Record<string, unknown>,
+  token: string,
+): Promise<Record<string, unknown>[] | { error: string }> {
+  // Every failure below is logged (see ./apify_log) before it becomes an
+  // isError result, so an Apify outage shows up in Workers Logs.
+  const fail = (f: Omit<ApifyFailure, "service" | "actor">) => ({
+    error: logApifyFailure({ service: SERVICE, actor: actorId, ...f }),
+  });
 
-  /** Run one Apify Actor synchronously and return its validated dataset items. */
-  private async runActor(
-    actorId: string,
-    actorInput: Record<string, unknown>,
-    token: string,
-  ): Promise<Record<string, unknown>[] | { error: string }> {
-    // Every failure below is logged (see ./apify_log) before it becomes an
-    // isError result, so an Apify outage shows up in Workers Logs.
-    const fail = (f: Omit<ApifyFailure, "service" | "actor">) => ({
-      error: logApifyFailure({ service: SERVICE, actor: actorId, ...f }),
+  const base = env.APIFY_BASE_URL?.trim() || APIFY_BASE;
+  const url = new URL(runSyncUrl(actorId, base));
+  url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
+  url.searchParams.set("format", "json");
+
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method: "POST",
+      // Bearer header rather than a ?token= query param: keeps the secret
+      // out of URLs that proxies and servers may log.
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(actorInput),
+      signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
     });
-
-    const base = this.env.APIFY_BASE_URL?.trim() || APIFY_BASE;
-    const url = new URL(runSyncUrl(actorId, base));
-    url.searchParams.set("timeout", String(RUN_TIMEOUT_S));
-    url.searchParams.set("format", "json");
-
-    let res: Response;
-    try {
-      res = await fetch(url.toString(), {
-        method: "POST",
-        // Bearer header rather than a ?token= query param: keeps the secret
-        // out of URLs that proxies and servers may log.
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(actorInput),
-        signal: AbortSignal.timeout((RUN_TIMEOUT_S + 15) * 1000),
-      });
-    } catch (err) {
-      const name = err instanceof Error ? err.constructor.name : "Error";
-      return fail({ stage: "network", message: `could not reach Apify: ${name}` });
-    }
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      return fail({
-        stage: "http",
-        status: res.status,
-        body,
-        message: `Apify returned ${res.status}: ${body.slice(0, 500)}`,
-      });
-    }
-
-    let json: unknown;
-    try {
-      json = await res.json();
-    } catch {
-      return fail({ stage: "json", message: "Apify returned invalid JSON" });
-    }
-
-    const parsed = validateDatasetItems(json);
-    if (!parsed.ok) return fail({ stage: "dataset", message: parsed.error });
-    return parsed.items;
+  } catch (err) {
+    const name = err instanceof Error ? err.constructor.name : "Error";
+    return fail({ stage: "network", message: `could not reach Apify: ${name}` });
   }
 
-  async init(): Promise<void> {
-    this.server.registerTool(
-      "youtube_scrape",
-      {
-        description:
-          "Scrape YouTube search results and video comments. Provide `search` or one or more " +
-          "`start_urls` pointing at YouTube videos/channels/playlists/search pages. Returns the " +
-          "matched videos and, when max_comments is raised above zero, comments on those videos.",
-        inputSchema: {
-          search: z.string().optional().describe("Search term to look up on YouTube."),
-          start_urls: z
-            .array(z.string())
-            .max(50)
-            .optional()
-            .describe("Explicit YouTube video/channel/playlist/search URLs to scrape (max 50)."),
-          sort: z
-            .enum(["relevance", "rating", "date", "views"])
-            .optional()
-            .describe("Ordering applied to a search (default: relevance)."),
-          date_filter: z
-            .enum(["hour", "today", "week", "month", "year"])
-            .optional()
-            .describe("Restrict search results to a recency window."),
-          max_results: z
-            .number()
-            .int()
-            .min(1)
-            .max(1000)
-            .optional()
-            .describe("Maximum number of videos to return (default: 10)."),
-          max_comments: z
-            .number()
-            .int()
-            .min(0)
-            .max(1000)
-            .optional()
-            .describe("Comments to scrape per video. 0 skips comment scraping (default: 0)."),
-          comment_sort: z
-            .enum(["top", "new"])
-            .optional()
-            .describe("Ordering for scraped comments (default: top)."),
-        },
-        outputSchema: {
-          video_count: z.number().describe("Number of videos returned."),
-          comment_count: z.number().describe("Number of comments returned."),
-          videos: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Raw video items from the search Actor run."),
-          comments: z
-            .array(z.record(z.string(), z.any()))
-            .describe("Raw comment items from the comments Actor run (empty unless max_comments > 0)."),
-        },
-      },
-      async (args: YoutubeScrapeArgs) => {
-        // Validate the caller's request before checking server config, so a bad
-        // call gets an actionable error regardless of deploy state.
-        if (!hasTarget(args)) {
-          return textError("provide either 'search' or at least one valid YouTube 'start_urls' entry");
-        }
-        // The search Actor silently drops `searchQueries` when `startUrls` is
-        // present, so a mixed request would lose the search - reject it loudly.
-        if (normalizeSearch(args.search) && validStartUrls(args.start_urls).length > 0) {
-          return textError(
-            "provide either 'search' or 'start_urls', not both (start URLs take precedence and the search term would be ignored)",
-          );
-        }
-        const token = this.env.APIFY_TOKEN?.trim();
-        if (!token) {
-          return textError("server misconfigured: APIFY_TOKEN not set");
-        }
-
-        const searchActor = this.env.APIFY_SEARCH_ACTOR_ID?.trim() || SEARCH_ACTOR_ID;
-        const videos = await this.runActor(searchActor, buildSearchInput(args), token);
-        if ("error" in videos) return textError(videos.error);
-
-        let comments: Record<string, unknown>[] = [];
-        const maxComments = args.max_comments ?? 0;
-        if (maxComments > 0) {
-          const urls = videoUrls(videos);
-          if (urls.length > 0) {
-            const commentsActor = this.env.APIFY_COMMENTS_ACTOR_ID?.trim() || COMMENTS_ACTOR_ID;
-            const commentSort: YoutubeCommentSort = args.comment_sort ?? "top";
-            const scraped = await this.runActor(
-              commentsActor,
-              buildCommentsInput(urls, maxComments, commentSort),
-              token,
-            );
-            if ("error" in scraped) return textError(scraped.error);
-            comments = scraped;
-          }
-        }
-
-        const structuredContent = {
-          video_count: videos.length,
-          comment_count: comments.length,
-          videos,
-          comments,
-        };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `YouTube scrape returned ${videos.length} video(s) and ${comments.length} comment(s)`,
-            },
-          ],
-          structuredContent,
-        };
-      },
-    );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return fail({
+      stage: "http",
+      status: res.status,
+      body,
+      message: `Apify returned ${res.status}: ${body.slice(0, 500)}`,
+    });
   }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    return fail({ stage: "json", message: "Apify returned invalid JSON" });
+  }
+
+  const parsed = validateDatasetItems(json);
+  if (!parsed.ok) return fail({ stage: "dataset", message: parsed.error });
+  return parsed.items;
 }
+
+/** Build the per-request MCP server (stateless: one instance per request). */
+export function buildServer(env: Env): McpServer {
+  const server = new McpServer({ name: "youtube", version: "0.2.0" });
+  server.registerTool(
+    "youtube_scrape",
+    {
+      description:
+        "Scrape YouTube search results and video comments. Provide `search` or one or more " +
+        "`start_urls` pointing at YouTube videos/channels/playlists/search pages. Returns the " +
+        "matched videos and, when max_comments is raised above zero, comments on those videos.",
+      inputSchema: z.object({
+        search: z.string().optional().describe("Search term to look up on YouTube."),
+        start_urls: z
+          .array(z.string())
+          .max(50)
+          .optional()
+          .describe("Explicit YouTube video/channel/playlist/search URLs to scrape (max 50)."),
+        sort: z
+          .enum(["relevance", "rating", "date", "views"])
+          .optional()
+          .describe("Ordering applied to a search (default: relevance)."),
+        date_filter: z
+          .enum(["hour", "today", "week", "month", "year"])
+          .optional()
+          .describe("Restrict search results to a recency window."),
+        max_results: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Maximum number of videos to return (default: 10)."),
+        max_comments: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000)
+          .optional()
+          .describe("Comments to scrape per video. 0 skips comment scraping (default: 0)."),
+        comment_sort: z.enum(["top", "new"]).optional().describe("Ordering for scraped comments (default: top)."),
+      }).meta({ additionalProperties: false }),
+      outputSchema: z.object({
+        video_count: z.number().describe("Number of videos returned."),
+        comment_count: z.number().describe("Number of comments returned."),
+        videos: z.array(z.record(z.string(), z.any())).describe("Raw video items from the search Actor run."),
+        comments: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Raw comment items from the comments Actor run (empty unless max_comments > 0)."),
+      }),
+    },
+    async (args: YoutubeScrapeArgs) => {
+      // Validate the caller's request before checking server config, so a bad
+      // call gets an actionable error regardless of deploy state.
+      if (!hasTarget(args)) {
+        return textError("provide either 'search' or at least one valid YouTube 'start_urls' entry");
+      }
+      // The search Actor silently drops `searchQueries` when `startUrls` is
+      // present, so a mixed request would lose the search - reject it loudly.
+      if (normalizeSearch(args.search) && validStartUrls(args.start_urls).length > 0) {
+        return textError(
+          "provide either 'search' or 'start_urls', not both (start URLs take precedence and the search term would be ignored)",
+        );
+      }
+      const token = env.APIFY_TOKEN?.trim();
+      if (!token) {
+        return textError("server misconfigured: APIFY_TOKEN not set");
+      }
+
+      const searchActor = env.APIFY_SEARCH_ACTOR_ID?.trim() || SEARCH_ACTOR_ID;
+      const videos = await runActor(env, searchActor, buildSearchInput(args), token);
+      if ("error" in videos) return textError(videos.error);
+
+      let comments: Record<string, unknown>[] = [];
+      const maxComments = args.max_comments ?? 0;
+      if (maxComments > 0) {
+        const urls = videoUrls(videos);
+        if (urls.length > 0) {
+          const commentsActor = env.APIFY_COMMENTS_ACTOR_ID?.trim() || COMMENTS_ACTOR_ID;
+          const commentSort: YoutubeCommentSort = args.comment_sort ?? "top";
+          const scraped = await runActor(env, commentsActor, buildCommentsInput(urls, maxComments, commentSort), token);
+          if ("error" in scraped) return textError(scraped.error);
+          comments = scraped;
+        }
+      }
+
+      const structuredContent = {
+        video_count: videos.length,
+        comment_count: comments.length,
+        videos,
+        comments,
+      };
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `YouTube scrape returned ${videos.length} video(s) and ${comments.length} comment(s)`,
+          },
+        ],
+        structuredContent,
+      };
+    },
+  );
+  return server;
+}
+
+/**
+ * Retired McpAgent session Durable Object, kept as an unbound empty stub so a
+ * rollback to the pre-SDK-2.x Worker (which binds it) still deploys. Never
+ * instantiated. Remove together with a `deleted_classes` migration once 2.x is
+ * verified live (see wrangler.jsonc).
+ */
+export class YoutubeMCP extends DurableObject {}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -249,14 +252,17 @@ export default {
         if (auth.status === 401) headers["www-authenticate"] = 'Bearer realm="youtube"';
         return new Response(JSON.stringify({ error: auth.message }), { status: auth.status, headers });
       }
-      if (request.method === "POST") {
-        const body = await readRequestBody(request, MAX_MCP_BODY_BYTES);
-        if (body.tooLarge) return new Response(requestBodyTooLargeMessage(MAX_MCP_BODY_BYTES), { status: 413 });
-        const headers = new Headers(request.headers);
-        headers.delete("content-length");
-        request = new Request(request, { headers, body: body.text });
-      }
-      return YoutubeMCP.serve("/mcp").fetch(request, env, ctx);
+      // Bound the body for BOTH protocol eras before the SDK sees it: the
+      // handler's maxRequestBodySize only covers the 2026-07-28 lane (see
+      // shared/mcp/ts/body.ts).
+      const bounded = await boundRequestBody(request, MAX_MCP_BODY_BYTES);
+      if (bounded instanceof Response) return bounded;
+      request = bounded;
+      const handler = createMcpHandler(() => buildServer(env), {
+        route: "/mcp",
+        maxRequestBodySize: MAX_MCP_BODY_BYTES,
+      });
+      return handler(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404 });

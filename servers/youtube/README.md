@@ -5,8 +5,11 @@ give it a search term (with optional sort/recency filters) or a list of YouTube
 URLs, and it returns the matched videos and, when asked, comments on those
 videos.
 
-- **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
-- **Transport:** streamable HTTP at `/mcp`.
+- **Runtime:** TypeScript on a Cloudflare Worker, MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`), stateless.
+- **Transport:** streamable HTTP at `/mcp` via `createMcpHandler`
+  (`agents/mcp/server`): 2026-07-28 per-request traffic plus 2025-era
+  `initialize` clients (stateless legacy fallback) on the same route.
 - **Backing:** two Apify Actors chained via their synchronous
   `run-sync-get-dataset-items` endpoint (one blocking call each, no polling) -
   [`streamers/youtube-scraper`](https://apify.com/streamers/youtube-scraper) for
@@ -57,8 +60,9 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 # AUTH_TOKEN only needed as a rollback path to bearer mode
 ```
 
-`compatibility_flags: ["nodejs_compat"]` and the `YoutubeMCP` Durable Object
-hold the MCP session; no other bindings (no storage). Production auth
+`compatibility_flags: ["nodejs_compat"]`; no bindings (no storage, no Durable
+Object: the server is stateless, and the old McpAgent session
+class stays as an unbound stub for rollback, to be deleted once 2.x is verified live). Production auth
 (`edison-jwt`) is configured in `wrangler.jsonc` `vars`; `EDISON_JWT_AUDIENCE`
 must equal this server's catalog id, `youtube`.
 

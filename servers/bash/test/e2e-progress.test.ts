@@ -11,9 +11,8 @@ import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { ProgressNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -25,14 +24,24 @@ interface Progress {
   message?: string
 }
 
-/** Connect a real client to a freshly spawned `dist/index.js` over stdio. */
-async function connect(env: Record<string, string> = {}): Promise<Client> {
+/** The 2026-07-28 revision, pinned to force the modern (server/discover) era. */
+const MODERN = '2026-07-28'
+
+/**
+ * Connect a real client to a freshly spawned `dist/index.js` over stdio. With no
+ * `pin` the client runs the plain 2025-era `initialize` handshake (the SDK's
+ * default 'legacy' negotiation); with a pin it must reach the modern era.
+ */
+async function connect(env: Record<string, string> = {}, pin?: string): Promise<Client> {
   const transport = new StdioClientTransport({
     command: process.execPath, // node
     args: [entry],
     env: { ...(process.env as Record<string, string>), ...env }
   })
-  const client = new Client({ name: 'e2e', version: '0' })
+  const client = new Client(
+    { name: 'e2e', version: '0' },
+    pin ? { versionNegotiation: { mode: { pin } } } : {}
+  )
   await client.connect(transport)
   return client
 }
@@ -43,9 +52,11 @@ async function runWithProgress(
   extra: Record<string, unknown> = {}
 ): Promise<{ text: string; isError: boolean; progress: Progress[] }> {
   const progress: Progress[] = []
-  const res = (await client.callTool({ name: 'run', arguments: { command, ...extra } }, undefined, {
-    onprogress: (p: Progress) => progress.push(p)
-  })) as { content: Array<{ text: string }>; isError?: boolean }
+  // v2: request options are callTool's second argument (v1 had a result schema there).
+  const res = (await client.callTool(
+    { name: 'run', arguments: { command, ...extra } },
+    { onprogress: (p: Progress) => progress.push(p) }
+  )) as { content: Array<{ text: string }>; isError?: boolean }
   return {
     text: res.content.map((c) => c.text).join('\n'),
     isError: res.isError === true,
@@ -121,7 +132,7 @@ describe('bash-mcp e2e progress notifications', () => {
     // Observe the wire: register a progress-notification handler so a spurious
     // notification (e.g. one sent with a fabricated token) would be caught.
     let progressCount = 0
-    client.setNotificationHandler(ProgressNotificationSchema, async () => {
+    client.setNotificationHandler('notifications/progress', async () => {
       progressCount++
     })
     // callTool without onprogress → SDK attaches no progressToken → server stays quiet.
@@ -136,4 +147,35 @@ describe('bash-mcp e2e progress notifications', () => {
     expect(res.content.map((c) => c.text).join('\n')).toContain('quiet')
     expect(progressCount).toBe(0)
   }, 30_000)
+})
+
+describe('bash-mcp e2e across protocol eras', () => {
+  beforeAll(() => {
+    execSync('bun run build', { cwd: pkgDir, stdio: 'inherit' })
+    expect(existsSync(entry)).toBe(true)
+  }, 60_000)
+
+  for (const [label, pin] of [
+    ['2025-era initialize (default)', undefined],
+    [`${MODERN} (pinned)`, MODERN]
+  ] as const) {
+    it(`lists tools and streams progress over ${label}`, async () => {
+      const client = await connect({}, pin)
+      try {
+        const negotiated = client.getNegotiatedProtocolVersion()
+        if (pin) expect(negotiated).toBe(pin)
+        else expect(negotiated).not.toBe(MODERN)
+
+        const { tools } = await client.listTools()
+        expect(tools.map((t) => t.name)).toEqual(['run'])
+
+        const { text, isError, progress } = await runWithProgress(client, 'echo era-ok')
+        expect(isError).toBe(false)
+        expect(text).toContain('era-ok')
+        expect(progress.some((p) => (p.message ?? '').includes('era-ok'))).toBe(true)
+      } finally {
+        await client.close()
+      }
+    }, 30_000)
+  }
 })

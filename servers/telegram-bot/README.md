@@ -3,8 +3,11 @@
 Drive your own Telegram bot through the Bot API: read the messages it receives,
 look up chats, and send, edit, forward, react to, pin, and delete messages.
 
-- **Runtime:** TypeScript on a Cloudflare Worker, **stateless** (no Durable Object).
-- **Transport:** streamable HTTP at `/mcp`, JSON responses, no session id.
+- **Runtime:** TypeScript on a Cloudflare Worker, MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`), **stateless** (no Durable Object).
+- **Transport:** streamable HTTP at `/mcp` via `createMcpHandler`
+  (`agents/mcp/server`), no session id: 2026-07-28 per-request traffic plus
+  2025-era `initialize` clients (stateless legacy fallback) on the same route.
 - **Credential:** each user's own bot token from [@BotFather](https://t.me/BotFather),
   sent as the `X-Telegram-Bot-Token` header. SealGate stores it in its
   zero-knowledge template values (catalog `headers` + `template_fields`, beside
@@ -33,8 +36,9 @@ token that way would write a live credential to disk. Instead each request
 builds its own `McpServer` closed over that request's token and discards it
 after responding. The Bot API is itself stateless, so nothing is lost. The token
 is checked for shape (`<bot id>:<secret>`, which also stops it reshaping the URL
-it is placed in), validated with `getMe` on `initialize` (a rejected token is a
-401 at install time), and never logged or echoed in an error.
+it is placed in), validated with `getMe` on `initialize` or the 2026-07-28
+`server/discover` probe (a rejected token is a 401 at install time), and never
+logged or echoed in an error.
 
 ## Tools
 

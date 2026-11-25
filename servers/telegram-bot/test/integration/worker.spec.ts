@@ -1,5 +1,6 @@
 import { fetchMock, SELF } from "cloudflare:test";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
 const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawE";
@@ -47,11 +48,31 @@ async function rpc(body: unknown, headers: Record<string, string> = HEADERS) {
   return SELF.fetch(`${ORIGIN}/mcp`, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-async function callTool(name: string, args: Record<string, unknown>) {
-  const res = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } });
-  expect(res.status).toBe(200);
-  const msg = (await res.json()) as { result: Record<string, any> };
-  return msg.result;
+type Era = "legacy" | "modern";
+const ERAS = ["modern", "legacy"] as const;
+
+const GET_ME_OK = { ok: true, result: { id: 123456789, is_bot: true, first_name: "B", username: "b_bot" } };
+
+// A real SDK 2.x client driven through the Worker (SELF.fetch). "modern" pins
+// the 2026-07-28 per-request protocol (server/discover, no handshake);
+// "legacy" is the plain 2025 `initialize` sequence served statelessly. Either
+// opening request validates the bot token with getMe, so mock it first.
+async function connect(era: Era): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
+  const client = new Client(
+    { name: "test", version: "1.0" },
+    era === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
+  );
+  const { "content-type": _ct, accept: _accept, ...headers } = HEADERS;
+  const transport = new StreamableHTTPClientTransport(new URL(`${ORIGIN}/mcp`), {
+    requestInit: { headers },
+    fetch: (input, init) => SELF.fetch(input as string, init),
+  });
+  await client.connect(transport);
+  return { client, transport };
+}
+
+async function callTool(client: Client, name: string, args: Record<string, unknown>) {
+  return (await client.callTool({ name, arguments: args })) as Record<string, any>;
 }
 
 beforeAll(() => {
@@ -120,68 +141,6 @@ describe("bot token gate on /mcp", () => {
     const { "x-telegram-bot-token": _, ...rest } = HEADERS;
     const res = await SELF.fetch(`${ORIGIN}/mcp`, { method: "GET", headers: rest });
     expect(res.status).toBe(405);
-  });
-});
-
-describe("MCP over the stateless transport", () => {
-  it("initializes with a valid token and issues no session id", async () => {
-    mockTelegram("getMe", 200, { ok: true, result: { id: 123456789, is_bot: true, first_name: "B", username: "b_bot" } });
-    const res = await rpc(INIT);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("mcp-session-id")).toBeNull();
-    const msg = (await res.json()) as { result: { serverInfo: { name: string } } };
-    expect(msg.result.serverInfo.name).toBe("telegram-bot");
-  });
-
-  it("lists every tool", async () => {
-    const res = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const msg = (await res.json()) as { result: { tools: { name: string }[] } };
-    expect(msg.result.tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
-  });
-
-  it("surfaces the webhook conflict on get_updates", async () => {
-    mockTelegram("getUpdates", 409, {
-      ok: false,
-      error_code: 409,
-      description: "Conflict: can't use getUpdates method while webhook is active",
-    });
-    const result = await callTool("telegram_get_updates", {});
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("deleteWebhook");
-  });
-
-  it("short-polls for updates and returns the offset that acknowledges them", async () => {
-    let sent: unknown;
-    mockTelegram("getUpdates", 200, {
-      ok: true,
-      result: [
-        { update_id: 100, message: { message_id: 1, date: 1_700_000_000, chat: { id: 5, type: "private" }, text: "a" } },
-        { update_id: 101, message: { message_id: 2, date: 1_700_000_001, chat: { id: 5, type: "private" }, text: "b" } },
-      ],
-    }, (b) => (sent = b));
-    const result = await callTool("telegram_get_updates", { limit: 10 });
-    expect(sent).toEqual({ limit: 10, timeout: 0 });
-    expect(result.structuredContent).toMatchObject({ count: 2, next_offset: 102 });
-  });
-
-  it("rejects a bad chat id in the schema, before calling Telegram", async () => {
-    const result = await callTool("telegram_send_message", { chat_id: "general", text: "hi" });
-    expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain("chat_id");
-  });
-
-  it("rejects a non-https photo in the schema, before calling Telegram", async () => {
-    const result = await callTool("telegram_send_photo", { chat_id: 5, photo: "http://example.com/a.png" });
-    expect(result.isError).toBe(true);
-    // The schema's own message, not the 502 a blocked Telegram call would produce.
-    expect(JSON.stringify(result.content)).toContain("photo must be an https:// URL");
-  });
-
-  it("returns chat info with a null member count when that call fails", async () => {
-    mockTelegram("getChat", 200, { ok: true, result: { id: -100, type: "supergroup", title: "T", description: "d" } });
-    mockTelegram("getChatMemberCount", 400, { ok: false, error_code: 400, description: "Bad Request" });
-    const result = await callTool("telegram_get_chat", { chat_id: -100 });
-    expect(result.structuredContent.chat).toMatchObject({ id: -100, title: "T", description: "d", member_count: null });
   });
 });
 
@@ -266,12 +225,91 @@ const TOOL_CASES: { tool: string; args: Record<string, unknown>; method: string;
   },
 ];
 
-describe("each tool sends the right Bot API call", () => {
-  it.each(TOOL_CASES)("$tool -> $method", async ({ tool, args, method, body, result }) => {
-    let sent: unknown;
-    mockTelegram(method, 200, { ok: true, result }, (b) => (sent = b));
-    const out = await callTool(tool, args);
-    expect(out.isError).toBeUndefined();
-    expect(sent).toEqual(body);
+describe("connect-time token check (modern protocol)", () => {
+  it("rejects the server/discover probe when Telegram rejects the token", async () => {
+    mockTelegram("getMe", 401, { ok: false, error_code: 401, description: "Unauthorized" });
+    await expect(connect("modern")).rejects.toThrow();
   });
 });
+
+for (const era of ERAS) {
+  describe(`MCP over the stateless transport (${era} protocol)`, () => {
+    let client: Client;
+    let transport: StreamableHTTPClientTransport;
+    beforeAll(async () => {
+      mockTelegram("getMe", 200, GET_ME_OK);
+      ({ client, transport } = await connect(era));
+    });
+    afterAll(async () => {
+      await client.close();
+    });
+
+    it("connects with a valid token and issues no session id", () => {
+      expect(transport.sessionId).toBeUndefined();
+      expect(client.getServerVersion()?.name).toBe("telegram-bot");
+    });
+
+    it("lists every tool", async () => {
+      const { tools } = await client.listTools();
+      // Input schemas stay closed, as under SDK 1.x (zod 4 omits it by default).
+      // telegram_get_me takes no arguments and declares no schema (as under 1.x).
+      for (const t of tools.filter((t) => t.name !== "telegram_get_me")) {
+        expect(t.inputSchema.additionalProperties).toBe(false);
+      }
+      expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOLS);
+    });
+
+    it("surfaces the webhook conflict on get_updates", async () => {
+      mockTelegram("getUpdates", 409, {
+        ok: false,
+        error_code: 409,
+        description: "Conflict: can't use getUpdates method while webhook is active",
+      });
+      const result = await callTool(client, "telegram_get_updates", {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("deleteWebhook");
+    });
+
+    it("short-polls for updates and returns the offset that acknowledges them", async () => {
+      let sent: unknown;
+      mockTelegram("getUpdates", 200, {
+        ok: true,
+        result: [
+          { update_id: 100, message: { message_id: 1, date: 1_700_000_000, chat: { id: 5, type: "private" }, text: "a" } },
+          { update_id: 101, message: { message_id: 2, date: 1_700_000_001, chat: { id: 5, type: "private" }, text: "b" } },
+        ],
+      }, (b) => (sent = b));
+      const result = await callTool(client, "telegram_get_updates", { limit: 10 });
+      expect(sent).toEqual({ limit: 10, timeout: 0 });
+      expect(result.structuredContent).toMatchObject({ count: 2, next_offset: 102 });
+    });
+
+    it("rejects a bad chat id in the schema, before calling Telegram", async () => {
+      const result = await callTool(client, "telegram_send_message", { chat_id: "general", text: "hi" });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("chat_id");
+    });
+
+    it("rejects a non-https photo in the schema, before calling Telegram", async () => {
+      const result = await callTool(client, "telegram_send_photo", { chat_id: 5, photo: "http://example.com/a.png" });
+      expect(result.isError).toBe(true);
+      // The schema's own message, not the 502 a blocked Telegram call would produce.
+      expect(JSON.stringify(result.content)).toContain("photo must be an https:// URL");
+    });
+
+    it("returns chat info with a null member count when that call fails", async () => {
+      mockTelegram("getChat", 200, { ok: true, result: { id: -100, type: "supergroup", title: "T", description: "d" } });
+      mockTelegram("getChatMemberCount", 400, { ok: false, error_code: 400, description: "Bad Request" });
+      const result = await callTool(client, "telegram_get_chat", { chat_id: -100 });
+      expect(result.structuredContent.chat).toMatchObject({ id: -100, title: "T", description: "d", member_count: null });
+    });
+
+    it.each(TOOL_CASES)("$tool -> $method", async ({ tool, args, method, body, result }) => {
+      let sent: unknown;
+      mockTelegram(method, 200, { ok: true, result }, (b) => (sent = b));
+      const out = await callTool(client, tool, args);
+      expect(out.isError).toBeUndefined();
+      expect(sent).toEqual(body);
+    });
+  });
+}

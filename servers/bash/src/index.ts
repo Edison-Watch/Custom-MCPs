@@ -19,14 +19,17 @@
  * two paths differ and the server would never start.
  */
 
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { buildServer, parseServerDefaults } from './server.js'
 
 async function main(): Promise<void> {
   const defaults = parseServerDefaults(process.argv.slice(2))
-  const server = buildServer(defaults)
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
+  // serveStdio owns the era decision per connection: a 2026-07-28 opening
+  // (server/discover or a per-request envelope) and a 2025-era `initialize`
+  // handshake are both served from the same factory.
+  serveStdio(() => buildServer(defaults), {
+    onerror: (err) => process.stderr.write(`bash-mcp: ${err.message}\n`)
+  })
 }
 
 main().catch((err) => {

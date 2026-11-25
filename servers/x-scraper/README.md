@@ -12,8 +12,11 @@ Search and scrape X (formerly Twitter). Three tools:
   and it returns the accounts that replied, quoted, and (opt-in) retweeted it, as
   deduped profile records tagged with how each engaged.
 
-- **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
-- **Transport:** streamable HTTP at `/mcp`.
+- **Runtime:** TypeScript on a Cloudflare Worker, MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`), stateless.
+- **Transport:** streamable HTTP at `/mcp` via `createMcpHandler`
+  (`agents/mcp/server`): 2026-07-28 per-request traffic plus 2025-era
+  `initialize` clients (stateless legacy fallback) on the same route.
 - **Backing:** public Apify Actors via their synchronous
   `run-sync-get-dataset-items` endpoint (one blocking call, no polling) -
   [`kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest`](https://apify.com/kaitoeasyapi/twitter-x-data-tweet-scraper-pay-per-result-cheapest)
@@ -120,9 +123,9 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 # AUTH_TOKEN only needed as a rollback path to bearer mode
 ```
 
-`compatibility_flags: ["nodejs_compat"]` and the `XMCP` Durable Object hold the
-MCP session, backed by the Durable Object's own SQLite; no other bindings.
-Production auth (`edison-jwt`) is
+`compatibility_flags: ["nodejs_compat"]`; no bindings (no storage, no Durable
+Object: the server is stateless, and the old McpAgent session
+class stays as an unbound stub for rollback, to be deleted once 2.x is verified live). Production auth (`edison-jwt`) is
 configured in `wrangler.jsonc` `vars`; `EDISON_JWT_AUDIENCE` must equal this
 server's catalog id, `x-scraper`.
 

@@ -16,8 +16,8 @@
  * with `--serial <serial>` or the `ANDROID_ADB_SERIAL` env var.
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { McpServer } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { z } from 'zod'
 import {
   parseActionIntents,
@@ -75,7 +75,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
     {
       title: 'List installed packages',
       description: 'List all packages installed on the connected Android device.',
-      inputSchema: {}
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -94,12 +94,12 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
         'Run an arbitrary adb command against the connected device and return its output. ' +
         'The command is everything after `adb` (e.g. "shell ls /sdcard", "pm list packages", ' +
         '"logcat -d"). The target device is selected automatically.',
-      inputSchema: {
+      inputSchema: z.object({
         command: z
           .string()
           .min(1)
           .describe('The adb command to run, without the leading `adb` (e.g. "shell ls /sdcard").')
-      }
+      }).meta({ additionalProperties: false })
     },
     async ({ command }) => {
       const args = tokenizeCommand(command)
@@ -125,7 +125,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
       description:
         'Dump the current screen UI hierarchy and return the clickable/labelled elements with ' +
         'their text, content description, class, bounds, and centre tap coordinates.',
-      inputSchema: {}
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -151,7 +151,7 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
     {
       title: 'Take a screenshot',
       description: 'Capture a PNG screenshot of the connected device screen.',
-      inputSchema: {}
+      inputSchema: z.object({}).meta({ additionalProperties: false })
     },
     async () => {
       const serial = await resolve()
@@ -174,12 +174,12 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
       description:
         'List the non-data intent actions a package advertises in its Activity Resolver Table ' +
         '(useful for launching specific screens of an app).',
-      inputSchema: {
+      inputSchema: z.object({
         package_name: z
           .string()
           .min(1)
           .describe('The package name to inspect, e.g. "com.android.settings".')
-      }
+      }).meta({ additionalProperties: false })
     },
     async ({ package_name }) => {
       if (!PACKAGE_NAME.test(package_name)) {
@@ -200,11 +200,19 @@ function registerTools(server: McpServer, resolve: SerialResolver): void {
 
 async function main(): Promise<void> {
   const config = parseServerConfig(process.argv.slice(2))
-  const server = new McpServer({ name: 'sealgate-android-adb', version: VERSION })
-  registerTools(server, makeSerialResolver(config))
-
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
+  const resolve = makeSerialResolver(config)
+  // serveStdio owns the era decision per connection: a 2026-07-28 opening
+  // (server/discover or a per-request envelope) and a 2025-era `initialize`
+  // handshake are both served from the same factory. The serial resolver is
+  // shared so its cache survives across the (single) pinned instance.
+  serveStdio(
+    () => {
+      const server = new McpServer({ name: 'sealgate-android-adb', version: VERSION })
+      registerTools(server, resolve)
+      return server
+    },
+    { onerror: (err) => process.stderr.write(`android-adb-mcp: ${err.message}\n`) }
+  )
 }
 
 main().catch((err) => {

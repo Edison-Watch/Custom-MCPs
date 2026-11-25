@@ -10,8 +10,11 @@ wrapping a public HarvestAPI Apify Actor (no LinkedIn cookies or account):
 | `linkedin_profile` | full profiles (hydrate known profile URLs) | [`harvestapi/linkedin-profile-scraper`](https://apify.com/harvestapi/linkedin-profile-scraper) |
 | `linkedin_company` | company pages (headcount, industry, activity) | [`harvestapi/linkedin-company`](https://apify.com/harvestapi/linkedin-company) |
 
-- **Runtime:** TypeScript on a Cloudflare Worker (`McpAgent` / Durable Object).
-- **Transport:** streamable HTTP at `/mcp`.
+- **Runtime:** TypeScript on a Cloudflare Worker, MCP TS SDK 2.x
+  (`@modelcontextprotocol/server`), stateless.
+- **Transport:** streamable HTTP at `/mcp` via `createMcpHandler`
+  (`agents/mcp/server`): 2026-07-28 per-request traffic plus 2025-era
+  `initialize` clients (stateless legacy fallback) on the same route.
 - **Backing:** each Actor is called via its synchronous
   `run-sync-get-dataset-items` endpoint (one blocking call, no polling) and
   scrapes only public data. The Worker holds a single first-party Apify token
@@ -94,9 +97,9 @@ wrangler secret put APIFY_TOKEN  # the server's Apify account token
 # AUTH_TOKEN only needed as a rollback path to bearer mode
 ```
 
-`compatibility_flags: ["nodejs_compat"]` and the `LinkedinMCP` Durable Object
-hold the MCP session, backed by the Durable Object's own SQLite; no other
-bindings. Production auth (`edison-jwt`) is configured in `wrangler.jsonc`
+`compatibility_flags: ["nodejs_compat"]`; no bindings (no storage, no Durable
+Object: the server is stateless, and the old McpAgent session
+class stays as an unbound stub for rollback, to be deleted once 2.x is verified live). Production auth (`edison-jwt`) is configured in `wrangler.jsonc`
 `vars`; `EDISON_JWT_AUDIENCE`
 must equal this server's catalog id, `linkedin-scraper`.
 

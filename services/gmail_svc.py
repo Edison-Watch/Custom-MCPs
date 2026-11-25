@@ -14,7 +14,9 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -377,8 +379,17 @@ def _mint_access_token(refresh_token: str) -> str:
     return access_token
 
 
-_client_cache: dict[str, tuple[float, Any]] = {}
 _CLIENT_TTL_S = 50 * 60  # 50 min; access tokens live ~60 min
+_CLIENT_CACHE_MAX = 256  # LRU bound: one entry per recently active user
+# user_id -> (expires_at, refresh_token_enc the client was minted from, client).
+# Insertion order doubles as LRU order (move_to_end on hit, popitem(last=False)
+# evicts the coldest). Guarded by _client_cache_lock: headless tools run services
+# in a worker thread, so calls for different users can interleave, and OrderedDict
+# reordering is not atomic. NB: async MCP enhancers call the sync service on the
+# event loop, so the per-call token-row lookup (one primary-key read) blocks it
+# briefly, as the Gmail API request in that same call already does.
+_client_cache: OrderedDict[str, tuple[float, bytes, Any]] = OrderedDict()
+_client_cache_lock = threading.Lock()
 
 
 def _get_gmail_client(user_id: str):  # noqa: ANN202 - googleapiclient Resource is dynamic
@@ -387,15 +398,32 @@ def _get_gmail_client(user_id: str):  # noqa: ANN202 - googleapiclient Resource 
     Caches the built client per user for ``_CLIENT_TTL_S`` seconds to avoid
     repeated token-mint + discovery-build overhead (~200-500ms each).
 
+    Fails closed: the active token row is re-read on EVERY call (one primary-key
+    lookup), and a cached client is only reused if it was minted from that same
+    row's refresh token. A disconnect on another worker or replica, which can
+    only clear its own process's cache, therefore takes effect here on the very
+    next call instead of after the cached access token expires; a reconnect
+    with a new refresh token likewise retires the old client.
+
     Raises ``GmailNotConnectedError`` if no active token row exists. Network
     or Google-side errors propagate so the caller can decide how to surface them.
     """
+    with _get_db_session() as session:
+        row = _load_token_row(session, user_id)
+        encrypted = bytes(row.refresh_token_enc) if row is not None else None
+    if encrypted is None:
+        _invalidate_gmail_client(user_id)
+        raise GmailNotConnectedError(user_id)
+
     now = time.time()
-    cached = _client_cache.get(user_id)
-    if cached is not None:
-        expires_at, client = cached
-        if now < expires_at:
-            return client
+    with _client_cache_lock:
+        cached = _client_cache.get(user_id)
+        if cached is not None:
+            expires_at, minted_from, client = cached
+            if now < expires_at and hmac.compare_digest(minted_from, encrypted):
+                _client_cache.move_to_end(user_id)
+                return client
+            del _client_cache[user_id]
 
     # Deliberate deferral: the Google SDK (discovery machinery) is heavy -
     # only load it when a Gmail API call is actually made, not at service
@@ -406,23 +434,22 @@ def _get_gmail_client(user_id: str):  # noqa: ANN202 - googleapiclient Resource 
     # Call-time import: tests patch common.token_encryption.require_encryption.
     from common.token_encryption import require_encryption  # noqa: PLC0415
 
-    with _get_db_session() as session:
-        row = _load_token_row(session, user_id)
-        if row is None:
-            raise GmailNotConnectedError(user_id)
-        encrypted = row.refresh_token_enc
-
     refresh_token = require_encryption().decrypt(encrypted)
     access_token = _mint_access_token(refresh_token)
     creds = Credentials(token=access_token)
     client = build("gmail", "v1", credentials=creds, cache_discovery=False)
-    _client_cache[user_id] = (now + _CLIENT_TTL_S, client)
+    with _client_cache_lock:
+        _client_cache[user_id] = (now + _CLIENT_TTL_S, encrypted, client)
+        _client_cache.move_to_end(user_id)
+        while len(_client_cache) > _CLIENT_CACHE_MAX:
+            _client_cache.popitem(last=False)
     return client
 
 
 def _invalidate_gmail_client(user_id: str) -> None:
     """Remove a cached client (call after disconnect or token revocation)."""
-    _client_cache.pop(user_id, None)
+    with _client_cache_lock:
+        _client_cache.pop(user_id, None)
 
 
 def _build_raw_message(
