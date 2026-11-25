@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "telegram-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // No Durable Object: the server is stateless on purpose, so a user's bot token
+  // lives only for the request that carries it (see src/index.ts).
+  // Company-owned hostname (zone must live in the same Cloudflare account), for
+  // the same reason as reddit: *.workers.dev bot protection intermittently 403s
+  // the Railway gateway.
+  "routes": [{ "pattern": "telegram.sealgate.ai", "custom_domain": true }],
+  "workers_dev": false,
+  "vars": {
+    // Two credentials on every call. The fleet gate is edison-jwt, like the other
+    // hosted connectors: SealGate mints a per-user JWT, so the endpoint is not an
+    // open relay and every call is attributable. The caller's own bot token rides
+    // beside it in X-Telegram-Bot-Token (the user's encrypted template value).
+    // None of these are secrets. ISSUER must byte-match SEALGATE_MCP_JWT_ISSUER on
+    // the issuing deploy; AUDIENCE must equal this server's catalog id.
+    "AUTH_MODE": "edison-jwt",
+    "EDISON_JWKS_URL": "https://demo-dashboard.sealgate.ai/.well-known/jwks.json",
+    "EDISON_JWT_ISSUER": "https://demo-dashboard.sealgate.ai",
+    "EDISON_JWT_AUDIENCE": "telegram-bot"
+  },
+  "observability": { "enabled": true }
+}

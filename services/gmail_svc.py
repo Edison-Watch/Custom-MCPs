@@ -40,14 +40,14 @@ from models.gmail import (
     GmailStatusResult,
     InlineImageUpload,
 )
-from services import ConnectRequiredError, service
+from services import ConnectRequiredError, InvalidArgument, ModelFacingError, service
 
 # ---------------------------------------------------------------------------
 # Domain errors
 # ---------------------------------------------------------------------------
 
 
-class GoogleOAuthNotConfiguredError(RuntimeError):
+class GoogleOAuthNotConfiguredError(ModelFacingError, RuntimeError):
     """GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI missing.
 
     Subclasses RuntimeError so pre-existing callers catching the old bare
@@ -88,7 +88,7 @@ class GmailNotConnectedError(ConnectRequiredError):
             return None
 
 
-class GmailAttachmentTooLargeError(Exception):
+class GmailAttachmentTooLargeError(ModelFacingError):
     """Raised when a fetched attachment exceeds the configured size ceiling.
 
     Carries the sizes so a transport can build a precise client-facing message
@@ -100,9 +100,9 @@ class GmailAttachmentTooLargeError(Exception):
         self.size = size
         self.max_bytes = max_bytes
         super().__init__(
-            f"Attachment {attachment_id} is {size} bytes, over the {max_bytes}-byte "
-            "limit (global_config.gmail.max_attachment_bytes). Raise the limit or "
-            "handle this file out of band."
+            f"Attachment {attachment_id} is {size} bytes, over this server's "
+            f"{max_bytes}-byte limit, so it cannot be loaded here; retrying will "
+            "not help."
         )
 
 
@@ -280,6 +280,7 @@ def gmail_status(input: GmailStatusInput) -> GmailStatusResult:
     description="Revoke and remove the user's linked Gmail account",
     input_model=GmailDisconnectInput,
     output_model=GmailDisconnectResult,
+    mutating=True,
 )
 def gmail_disconnect(input: GmailDisconnectInput) -> GmailDisconnectResult:
     """Revoke the stored refresh token with Google + mark the row revoked.
@@ -473,7 +474,7 @@ def _build_raw_message(
     for img in inline_images or []:
         maintype, subtype = _split_mime(img.mime_type)
         body_host.add_related(
-            _decode_b64url(img.data_base64),
+            _decode_part(img.data_base64, f"inline image {img.content_id!r}"),
             maintype=maintype,
             subtype=subtype,
             cid=f"<{img.content_id}>",
@@ -481,7 +482,7 @@ def _build_raw_message(
     for att in attachments or []:
         maintype, subtype = _split_mime(att.mime_type)
         msg.add_attachment(
-            _decode_b64url(att.data_base64),
+            _decode_part(att.data_base64, f"attachment {att.filename!r}"),
             maintype=maintype,
             subtype=subtype,
             filename=att.filename,
@@ -493,6 +494,14 @@ def _build_raw_message(
 def _decode_b64url(data: str) -> bytes:
     """Decode base64url, re-padding per RFC 4648 §5."""
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def _decode_part(data: str, what: str) -> bytes:
+    """Decode a caller-supplied base64url part, as a model-correctable error."""
+    try:
+        return _decode_b64url(data)
+    except (binascii.Error, ValueError) as exc:
+        raise InvalidArgument(f"{what}: data_base64 is not valid base64url") from exc
 
 
 def _b64url_to_std(data: str) -> str:

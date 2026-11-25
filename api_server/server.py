@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from typing import Literal, TypedDict
 
 import uvicorn
 from fastapi import FastAPI
@@ -14,9 +15,11 @@ from api_server.middleware.error_handler import (
     ErrorHandlerMiddleware,
     RequestIdMiddleware,
     attachment_too_large_handler,
+    invalid_argument_handler,
 )
 from api_server.middleware.mcp_auth import MCPAuthMiddleware
 from api_server.middleware.rate_limit import RateLimitMiddleware
+from api_server.middleware.security_headers import SecurityHeadersMiddleware
 from api_server.routes import (
     agentic_payments,
     ask,
@@ -29,23 +32,36 @@ from api_server.routes import (
 )
 from api_server.routes.google import webhooks as google_webhooks
 from api_server.routes.payments import checkout, metering, subscription, webhooks
-from api_server.runner import runner_lifespan
+from api_server.runner import idempotency_sweep_lifespan, runner_lifespan
 from common import global_config
+from common.token_encryption import ensure_encryption_configured
 from mcp_server.server import lifespan as mcp_lifespan
 from mcp_server.server import mount_on as mount_mcp_server
+from services import InvalidArgument
 from services.gmail_svc import GmailAttachmentTooLargeError
 
 try:
-    _APP_VERSION = _pkg_version("mcp-template")
+    _APP_VERSION = _pkg_version("custom-mcps")
 except PackageNotFoundError:
     _APP_VERSION = "0.1.0"
 
-# Advertise the public host in the OpenAPI `servers` block when configured, so
-# the published spec is self-describing (codegen, Swagger "Try it out", and the
-# landing-page API reference all target the real deployment, not a relative path).
-_openapi_servers = (
-    [{"url": global_config.API_PUBLIC_URL}] if global_config.API_PUBLIC_URL else None
-)
+
+def openapi_servers(public_url: str | None) -> list[dict[str, str]] | None:
+    """The OpenAPI ``servers`` block.
+
+    The public host comes first when configured, so the published spec is
+    self-describing (codegen and the landing-page API reference target the real
+    deployment). A relative ``/`` entry follows so Swagger "Try it out" can stay
+    same-origin when the docs are opened on another host (a preview deploy,
+    localhost): the docs CSP allows ``connect-src 'self'`` only, and is
+    deliberately not widened to the public host. Unset -> FastAPI's default.
+    """
+    if not public_url:
+        return None
+    return [{"url": public_url}, {"url": "/", "description": "this host"}]
+
+
+_openapi_servers = openapi_servers(global_config.API_PUBLIC_URL)
 
 # Document the versioning + deprecation contract in the spec itself so codegen
 # and agents discover it without reading prose docs. Endpoints are URL-versioned
@@ -65,15 +81,50 @@ _API_DESCRIPTION = (
 )
 
 
+class SessionCookiePolicy(TypedDict):
+    """The subset of ``SessionMiddleware`` options this app pins deliberately."""
+
+    https_only: bool
+    same_site: Literal["lax", "strict", "none"]
+
+
+def session_cookie_policy() -> SessionCookiePolicy:
+    """Cookie flags for ``SessionMiddleware`` (ASVS V3.4.1 / V3.4.3).
+
+    Starlette defaults ``https_only`` to False, which ships the session cookie
+    without ``Secure`` - it would then travel over a downgraded http:// request.
+    Turned on everywhere except local development, where the server is served
+    over plain http and a ``Secure`` cookie would simply never be stored,
+    breaking any browser flow that round-trips through the session.
+
+    ``same_site`` is stated rather than inherited so the CSRF posture is
+    explicit: ``lax`` still lets the cookie ride the top-level GET redirect
+    back from Google's OAuth consent screen, which ``strict`` would drop.
+
+    ``global_config.is_dev`` fails secure - an unset or misspelled ``DEV_ENV``
+    reads as production - so a typo cannot drop the ``Secure`` flag.
+    """
+    return {"https_only": not global_config.is_dev, "same_site": "lax"}
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Compose the FastMCP session manager with the periodic webhook runner."""
-    async with mcp_lifespan(app), runner_lifespan(app):
+    """Compose the MCPServer session manager with the periodic background loops.
+
+    Refuses to start outside dev when a database is configured but
+    GOOGLE_TOKEN_ENC_KEY is not, rather than 500 on the first mutating request.
+    """
+    ensure_encryption_configured()
+    async with (
+        mcp_lifespan(app),
+        runner_lifespan(app),
+        idempotency_sweep_lifespan(app),
+    ):
         yield
 
 
 app = FastAPI(
-    title="mymcp-api",
+    title="edisonmcps-api",
     version=_APP_VERSION,
     description=_API_DESCRIPTION,
     servers=_openapi_servers,
@@ -93,6 +144,7 @@ app.add_middleware(MCPAuthMiddleware)  # type: ignore[arg-type]
 app.add_middleware(
     SessionMiddleware,  # type: ignore[arg-type]
     secret_key=global_config.SESSION_SECRET_KEY,
+    **session_cookie_policy(),
 )
 
 app.add_middleware(
@@ -103,10 +155,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Outermost, deliberately: it is the only middleware that must stamp *every*
+# byte-producing path, including CORS preflights, the MCPAuthMiddleware 401
+# challenge (which writes to `send` directly), and the MCPServer mount below.
+#
+# On the mount: `mount_mcp_server(app)` calls `app.mount("/", mcp_app)`, which
+# registers an ordinary route on `app.router`. `add_middleware` wraps the
+# router, not the individual routes, so /mcp responses traverse this middleware
+# exactly like /health does - the mount does not bypass it. That holds only
+# because the mount goes through `app.mount`; a second ASGI app composed
+# *around* `app` (e.g. `Mount("/mcp", mcp_app)` in a parent Starlette router)
+# would need its own registration.
+#
+# The docs paths are read off the app rather than hardcoded in the middleware,
+# so customising or disabling `docs_url`/`redoc_url` can never leave the looser
+# CSP pointed at a path FastAPI no longer serves the bundles on.
+app.add_middleware(
+    SecurityHeadersMiddleware,  # type: ignore[arg-type]
+    docs_paths=frozenset(
+        path
+        for path in (
+            app.docs_url,
+            app.redoc_url,
+            app.swagger_ui_oauth2_redirect_url,
+        )
+        if path
+    ),
+    hsts_include_subdomains=global_config.server.hsts_include_subdomains,
+)
+
 # --- Exception handlers ---------------------------------------------------
 # Map the oversized-attachment domain error to 413 so an over-cap
 # gmail_get_attachment request is a client error, not a generic 500.
 app.add_exception_handler(GmailAttachmentTooLargeError, attachment_too_large_handler)
+# A service's InvalidArgument is the caller's mistake: 400 with its text, not a
+# 500 (and execute_idempotent releases the Idempotency-Key claim for it).
+app.add_exception_handler(InvalidArgument, invalid_argument_handler)
 
 # --- Routes ---------------------------------------------------------------
 
@@ -125,12 +209,12 @@ app.include_router(agentic_payments.router)
 app.include_router(ask.router)
 
 # --- MCP server (streamable HTTP) -----------------------------------------
-# Mounts FastMCP at /mcp so CLI/API/MCP share one process, port, and middleware.
+# Mounts MCPServer at /mcp so CLI/API/MCP share one process, port, and middleware.
 mount_mcp_server(app)
 
 
 def main() -> None:
-    """Entry-point for ``mymcp-api`` console script."""
+    """Entry-point for ``edisonmcps-api`` console script."""
     uvicorn.run(
         "api_server.server:app",
         host=global_config.server.host,

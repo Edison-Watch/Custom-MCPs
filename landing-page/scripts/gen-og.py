@@ -35,7 +35,7 @@ WORDMARK = "GmailMCP"
 HEADLINE = ["Give your AI agent", "real tools."]
 SUBHEAD = "One service registry, exposed identically over CLI, MCP, and HTTP."
 PILLS = ["CLI", "MCP", "HTTP"]
-REPO = "github.com/Miyamura80/MCP-Template"
+REPO = "github.com/Edison-Watch/Custom-MCPs"
 
 W, H = 1200, 630
 PAD = 80

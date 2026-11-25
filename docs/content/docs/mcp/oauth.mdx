@@ -5,7 +5,7 @@ description: Spec-compliant OAuth for remote MCP clients via WorkOS AuthKit
 
 ## Overview
 
-The `/mcp` endpoint supports the MCP authorization spec (2025-11-25): this
+The `/mcp` endpoint supports the MCP authorization spec (2026-07-28): this
 server acts as an OAuth 2.1 **resource server**, and [WorkOS
 AuthKit](https://workos.com/docs/authkit/mcp) acts as the **authorization
 server**. AuthKit handles client registration (Client ID Metadata Documents
@@ -57,7 +57,7 @@ MCP_PUBLIC_URL=https://your-deployment.example.com/mcp
 slash); tokens are audience-bound to this string, so a mismatch yields silent
 401s.
 
-3. Restart `mymcp-serve`. Verify discovery:
+3. Restart `edisonmcps-serve`. Verify discovery:
 
 ```bash
 curl https://your-deployment.example.com/.well-known/oauth-protected-resource/mcp
@@ -86,6 +86,10 @@ npx -y @mcpjam/cli@latest oauth conformance \
   --protocol-version 2025-11-25 \
   --conformance-checks
 ```
+
+The `--protocol-version 2025-11-25` flag is intentional: it runs the suite
+against the handshake-era baseline, which the same `/mcp` mount still serves
+alongside 2026-07-28. Bump it once the suite targets 2026-07-28.
 
 Protocol and apps conformance run in CI against the API-key path (see
 `make mcp_conformance`).

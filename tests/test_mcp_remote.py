@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -114,7 +115,7 @@ class TestMCPRemote(TestTemplate):
             assert resp.status_code == 200, resp.text
             msg = _read_sse_first_message(resp)
             assert msg["jsonrpc"] == "2.0"
-            assert msg["result"]["serverInfo"]["name"] == "mymcp"
+            assert msg["result"]["serverInfo"]["name"] == "edisonmcps"
 
     def test_health_endpoint_unaffected_by_mcp_auth(self):
         # Plain TestClient (no lifespan) -- /health doesn't need the MCP session
@@ -147,7 +148,7 @@ class TestMCPAuthGuards(TestTemplate):
         )
         token = set_current_user(user)
         try:
-            with pytest.raises(PermissionError, match="services:execute"):
+            with pytest.raises(ToolError, match="services:execute"):
                 _check_scopes()
         finally:
             reset_current_user(token)

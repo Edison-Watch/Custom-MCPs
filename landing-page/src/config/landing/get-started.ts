@@ -72,15 +72,15 @@ export const getStarted: {
       icon: "/logos/cli.svg",
       setupTitle: "Install the CLI",
       setupBody:
-        "Clone the template and sync dependencies with uv. The mymcp command is ready to run.",
+        "Clone the template and sync dependencies with uv. The edisonmcps command is ready to run.",
       setupKind: "code",
       setupLang: "bash",
-      setupCode: `git clone https://github.com/Miyamura80/MCP-Template
-cd MCP-Template && make all`,
+      setupCode: `git clone https://github.com/Edison-Watch/Custom-MCPs
+cd Custom-MCPs && make all`,
       callTitle: "Call a tool",
       callBody: "Invoke any service straight from your shell: typed inputs, structured output.",
       callLang: "bash",
-      callCode: `$ mymcp gmail-curate-inbox --limit 3
+      callCode: `$ edisonmcps gmail-curate-inbox --limit 3
 
 0.86  Re: Q3 contract redlines        legal@acme.com    ✎ draft
 0.61  Design review for v2 dashboard  sarah@team.io
@@ -149,17 +149,17 @@ cd MCP-Template && make all`,
       icon: "/logos/api.svg",
       setupTitle: "Point at the endpoint",
       setupBody:
-        "No install required: the HTTP API is live at its own host. Authenticate with a bearer token and call it from anything.",
+        "No install required: the HTTP API is live at its own host. Authenticate with an API key and call it from anything.",
       setupKind: "code",
       setupLang: "bash",
       setupCode: `export GMAILMCP_API_URL=${site.apiUrl}
-export TOKEN=sk-...   # OAuth 2.1 bearer`,
+export API_KEY=sk_...   # API key (X-API-KEY header)`,
       callTitle: "Call a tool",
       callBody:
         "Hit the same service over plain HTTP: identical inputs and outputs as the CLI and MCP.",
       callLang: "bash",
       callCode: `$ curl -s $GMAILMCP_API_URL/api/v1/services/gmail_curate_inbox \\
-    -H "Authorization: Bearer $TOKEN" \\
+    -H "X-API-KEY: $API_KEY" \\
     -H "Content-Type: application/json" \\
     -d '{ "limit": 3 }'
 

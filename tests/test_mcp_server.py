@@ -1,12 +1,14 @@
 """Tests for MCP server tool registration."""
 
 import asyncio
+import tomllib
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.types import InputRequiredResult
 from pydantic import BaseModel
 
-from mcp_server.server import _register_app_resource, mcp
+from mcp_server.server import _register_app_resource, _server_version, mcp
 from services import get_registry
 from tests.test_template import TestTemplate
 
@@ -14,6 +16,13 @@ from tests.test_template import TestTemplate
 class TestMCPServer(TestTemplate):
     def test_server_imports(self):
         assert mcp is not None
+
+    def test_server_version_reads_this_projects_distribution(self):
+        # serverInfo.version must come from this package, not fall back to
+        # 0.0.0 because the lookup names some other distribution.
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        project = tomllib.loads(pyproject.read_text())["project"]
+        assert _server_version() == project["version"]
 
     def test_all_services_registered_as_tools(self):
         # Importing mcp_server.server (at module top) triggers service module
@@ -46,7 +55,7 @@ class TestMCPServer(TestTemplate):
             assert tool.output_schema is not None, f"{tool_name} missing outputSchema"
 
     def test_enhanced_output_schema_matches_output_model(self):
-        # _patch_output_schema writes into FastMCP's private registry; assert
+        # _patch_output_schema writes into the SDK's private registry; assert
         # the published schema is byte-for-byte the service output model's
         # schema, not just non-None, so an SDK upgrade that breaks the patch
         # path fails loudly here.
@@ -77,7 +86,7 @@ class TestMCPServer(TestTemplate):
             meta = tools[name].meta
             assert meta is not None, f"{name} missing _meta"
             uri = meta["ui"]["resourceUri"]
-            assert uri.startswith("ui://mymcp/"), f"{name} bad resourceUri: {uri}"
+            assert uri.startswith("ui://edisonmcps/"), f"{name} bad resourceUri: {uri}"
             # Deprecated flat key kept for legacy host compat.
             assert meta["ui/resourceUri"] == uri
 
@@ -96,7 +105,7 @@ class TestMCPServer(TestTemplate):
 
     def test_default_factory_fields_resolve_to_concrete_defaults(self):
         # Regression: inspect.signature() renders a Pydantic default_factory
-        # field with the private <factory> sentinel. FastMCP copies each
+        # field with the private <factory> sentinel. MCPServer copies each
         # parameter default verbatim into the tool's argument model, so an
         # unresolved sentinel is handed back as the value when the caller omits
         # the field, failing validation ("Input should be a valid list ...
@@ -161,17 +170,19 @@ class TestMCPServer(TestTemplate):
 
 
 class TestMCPServerIntegration(TestTemplate):
-    """End-to-end integration tests calling tools through the registered FastMCP wrapper."""
+    """End-to-end integration tests calling tools through the registered MCPServer wrapper."""
 
     def test_app_resources_registered_and_serve_html(self):
         resources = asyncio.run(mcp.list_resources())
         uris = {str(r.uri) for r in resources}
         # gmail_composer / gmail_inbox apps are added in later phases; here we
         # only assert that whatever ui:// resources are registered serve HTML.
-        ui_uris = [u for u in uris if u.startswith("ui://mymcp/")]
-        assert ui_uris, "expected at least one ui://mymcp/ resource registered"
+        ui_uris = [u for u in uris if u.startswith("ui://edisonmcps/")]
+        assert ui_uris, "expected at least one ui://edisonmcps/ resource registered"
         for uri in ui_uris:
-            contents = list(asyncio.run(mcp.read_resource(uri)))
+            read = asyncio.run(mcp.read_resource(uri))
+            assert not isinstance(read, InputRequiredResult)
+            contents = list(read)
             assert len(contents) == 1
             text = str(contents[0].content)
             assert text.lstrip().lower().startswith("<!doctype html>")
@@ -179,13 +190,15 @@ class TestMCPServerIntegration(TestTemplate):
     def test_missing_app_build_serves_stub_comment(self):
         # Edge case A1 (mcp_server/MCP_UI_EDGE_CASES.md): an app dir without a
         # built dist/mcp-app.html must serve an HTML comment stub, not crash.
-        test_mcp = FastMCP("test_stub")
+        test_mcp = MCPServer("test_stub")
         missing = Path("/nonexistent/test_app/dist/mcp-app.html")
         _register_app_resource(
-            test_mcp, "ui://mymcp/test_stub_app", missing, "test_stub_app"
+            test_mcp, "ui://edisonmcps/test_stub_app", missing, "test_stub_app"
         )
 
-        contents = list(asyncio.run(test_mcp.read_resource("ui://mymcp/test_stub_app")))
+        read = asyncio.run(test_mcp.read_resource("ui://edisonmcps/test_stub_app"))
+        assert not isinstance(read, InputRequiredResult)
+        contents = list(read)
         assert len(contents) == 1
         text = str(contents[0].content)
         assert text.startswith("<!--")

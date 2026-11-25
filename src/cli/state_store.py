@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-_PACKAGE_NAME = "mcp-template"
+_PACKAGE_NAME = "custom-mcps"
 _CONFIG_DIR = Path.home() / ".config" / _PACKAGE_NAME
 _STATE_FILE = _CONFIG_DIR / "state.json"
 

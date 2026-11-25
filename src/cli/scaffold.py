@@ -43,4 +43,4 @@ def init_command(
     target.write_text(rendered)
     command_name = name.replace("_", "-")
     console.print(f"[green]Created[/green] src/cli/commands/{name}.py")
-    console.print(f"Run it with: [bold]mymcp {command_name}[/bold]")
+    console.print(f"Run it with: [bold]edisonmcps {command_name}[/bold]")

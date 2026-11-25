@@ -16,6 +16,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from api_server.routes.google_oauth import _success_page
 from api_server.server import app
 from common import global_config
 from common.token_encryption import PlaintextEncryption
@@ -312,3 +313,61 @@ class TestCallbackRoute(TestTemplate):
             assert row.email == "dave@example.com"
             assert row.revoked_at is None
             s.close()
+
+
+_XSS_EMAIL = "<script>alert(1)</script>@x.com"
+_XSS_ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;@x.com"
+
+
+class TestSuccessPageEscaping(TestTemplate):
+    """Regression: the signed-in email must be HTML-escaped on the success page."""
+
+    def test_success_page_escapes_email(self):
+        resp = _success_page(_XSS_EMAIL)
+        body = bytes(resp.body).decode("utf-8")
+        assert "<script>" not in body
+        assert _XSS_ESCAPED in body
+
+    def test_success_page_escapes_quotes(self):
+        body = bytes(_success_page('"onmouseover="x\'@x.com').body).decode("utf-8")
+        assert '"onmouseover="' not in body
+        assert "&quot;onmouseover=&quot;x&#x27;@x.com" in body
+
+    def test_callback_escapes_email_from_id_token(self):
+        state = _sign_state("mallory")
+        body = {
+            "access_token": "AT",
+            "refresh_token": "RT-secret",
+            "id_token": _fake_id_token(_XSS_EMAIL),
+            "scope": " ".join(GMAIL_SCOPES),
+            "expires_in": 3600,
+        }
+
+        async def _fake_exchange(**_kwargs):
+            return body
+
+        with (
+            _patch_db(),
+            patch.object(global_config, "GOOGLE_CLIENT_ID", "cid"),
+            patch.object(global_config, "GOOGLE_CLIENT_SECRET", "csecret"),
+            patch.object(
+                global_config,
+                "GOOGLE_REDIRECT_URI",
+                "http://localhost:8000/api/v1/auth/google/callback",
+            ),
+            patch.object(global_config, "GOOGLE_TOKEN_ENC_KEY", None),
+            patch.object(global_config, "DEV_ENV", "dev"),
+            patch(
+                "api_server.routes.google_oauth._exchange_code",
+                _fake_exchange,
+            ),
+        ):
+            client = _client()
+            resp = client.get(f"/api/v1/auth/google/callback?code=abc&state={state}")
+
+        assert resp.status_code == 200, resp.text
+        assert "<script>" not in resp.text
+        assert _XSS_ESCAPED in resp.text
+        # Defence-in-depth: the global security-headers middleware denies
+        # script execution on this page even if escaping ever regressed.
+        assert "default-src 'none'" in resp.headers["content-security-policy"]

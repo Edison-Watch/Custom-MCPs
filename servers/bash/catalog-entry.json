@@ -1,0 +1,21 @@
+{
+  "id": "bash",
+  "displayName": "Bash",
+  "description": "Run arbitrary bash commands on your machine (`/bin/bash -c`) - full shell syntax (pipes, redirects, globs), with optional working directory and stdin. Returns the exit code, stdout, and stderr. Runs locally via the SealGate daemon, so every call is mediated by the data firewall.",
+  "author": "SealGate",
+  "category": "development",
+  "tags": ["bash", "shell", "terminal", "command", "cli", "local", "stdio"],
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@sealgate/bash-mcp@0.1.0"],
+  "auth": "none",
+  "icon": "bash.svg",
+  "tools_configurations": {
+    "run": {
+      "write_operation": false,
+      "read_private_data": true,
+      "read_untrusted_public_data": true,
+      "acl": "SECRET"
+    }
+  }
+}

@@ -2,8 +2,8 @@ import "./global.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "MCP Template Documentation",
-  description: "Batteries-included Python template with CLI, MCP, and REST API interfaces",
+  title: "Custom-MCPs Documentation",
+  description: "Custom MCPs for a wide range of applications, over CLI, MCP (streamable HTTP), and an HTTP API.",
   icons: {
     icon: [
       {

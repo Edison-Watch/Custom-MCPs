@@ -8,7 +8,7 @@ import os
 from collections.abc import Callable
 
 from mcp.server.elicitation import ElicitationResult
-from mcp.server.fastmcp.server import Context
+from mcp.server.mcpserver import Context
 from mcp.types import (
     Annotations,
     AudioContent,
@@ -19,6 +19,32 @@ from mcp.types import (
     TextContent,
 )
 from pydantic import BaseModel
+
+
+def client_can_elicit(session) -> bool:
+    """True only when an in-band ``elicitation/create`` can actually complete.
+
+    Two conditions, both required:
+
+    - the client DECLARED the elicitation capability (in ``initialize`` on
+      handshake-era revisions, in each request's ``_meta`` on 2026-07-28), and
+    - this request has a back-channel for server-initiated requests
+      (``session.can_send_request``). That is False on every 2026-07-28
+      request (the protocol removed server-initiated requests; input there is
+      gathered via multi-round-trip ``InputRequiredResult``), on stateless
+      legacy HTTP (the client's reply POST is uncorrelatable) and in
+      JSON-response mode. ``ctx.elicit()`` would raise ``NoBackChannelError``
+      (or, in v1, hang) in those cases.
+
+    Deliberately conservative: never attempt-when-unknown.
+    """
+    if session is None:
+        return False
+    if not session.can_send_request:
+        return False
+    return session.check_client_capability(
+        ClientCapabilities(elicitation=ElicitationCapability())
+    )
 
 
 def build_app_meta(resource_uri: str) -> dict:
@@ -52,18 +78,36 @@ class EnhancedTool[TInput: BaseModel, TOutput: BaseModel]:
         self._service_fn = service_fn
         self.extra_content: list[TextContent | ImageContent | AudioContent] = []
         self.app_resource_uri: str | None = None
+        # Result of the most recent *completed* `call()`, or None if the last
+        # `call()` raised (or never ran). Lets the fallback path in
+        # `mcp_server._tool_factory` reuse the result instead of re-executing
+        # the service (which would duplicate side effects for mutating
+        # services) when the enhancer crashes after `call()` completed.
+        self.call_result: TOutput | None = None
 
     def call(self, override_input: TInput | None = None) -> TOutput:
         """Invoke the pure service. Pass `override_input` instead of mutating `tool.input`."""
-        return self._service_fn(
+        # Reset first: a stale stash from an earlier call must not mask a
+        # failure of *this* invocation as success in the crash-fallback path.
+        self.call_result = None
+        result = self._service_fn(
             override_input if override_input is not None else self.input
         )
+        self.call_result = result
+        return result
 
     @property
     def can_elicit(self) -> bool:
-        return self._ctx.session.check_client_capability(
-            ClientCapabilities(elicitation=ElicitationCapability())
-        )
+        """True only when the client declared elicitation AND it can complete.
+
+        See :func:`client_can_elicit`. Under 2026-07-28 and under
+        ``stateless_http=True`` (the production default for legacy clients)
+        this is False even for elicitation-capable hosts, so enhancers take
+        their non-elicitation fallbacks. Do NOT change this to
+        attempt-when-unknown. See the transport comment in
+        ``mcp_server/server.py``.
+        """
+        return client_can_elicit(self._ctx.session)
 
     @property
     def can_show_app(self) -> bool:
@@ -98,7 +142,7 @@ class EnhancedTool[TInput: BaseModel, TOutput: BaseModel]:
         annotations = _annotations(audience)
         self.extra_content.append(
             ImageContent(
-                type="image", data=data, mimeType=mime_type, annotations=annotations
+                type="image", data=data, mime_type=mime_type, annotations=annotations
             )
         )
 
@@ -112,7 +156,7 @@ class EnhancedTool[TInput: BaseModel, TOutput: BaseModel]:
         annotations = _annotations(audience)
         self.extra_content.append(
             AudioContent(
-                type="audio", data=data, mimeType=mime_type, annotations=annotations
+                type="audio", data=data, mime_type=mime_type, annotations=annotations
             )
         )
 

@@ -460,6 +460,7 @@ def gmail_get_attachment(input: GmailGetAttachmentInput) -> GmailAttachmentData:
     description="Mark a Gmail thread as read by removing the UNREAD label",
     input_model=GmailThreadModifyInput,
     output_model=GmailMarkReadResult,
+    mutating=True,
 )
 def gmail_mark_thread_read(input: GmailThreadModifyInput) -> GmailMarkReadResult:
     svc = _get_gmail_client(input.user_id)
@@ -476,6 +477,7 @@ def gmail_mark_thread_read(input: GmailThreadModifyInput) -> GmailMarkReadResult
     description="Archive a Gmail thread by removing the INBOX label. Also marks the thread dismissed in the curation ledger. During a triage pass, continue on to the next uncurated or stale thread.",
     input_model=GmailThreadModifyInput,
     output_model=GmailArchiveResult,
+    mutating=True,
 )
 def gmail_archive_thread(input: GmailThreadModifyInput) -> GmailArchiveResult:
     svc = _get_gmail_client(input.user_id)
@@ -495,6 +497,7 @@ def gmail_archive_thread(input: GmailThreadModifyInput) -> GmailArchiveResult:
     description="Mark a Gmail thread as done by applying the MCP/Done label (hides from curated inbox). Also marks the thread dismissed in the curation ledger. During a triage pass, continue on to the next uncurated or stale thread.",
     input_model=GmailThreadModifyInput,
     output_model=GmailMarkDoneResult,
+    mutating=True,
 )
 def gmail_mark_thread_done(input: GmailThreadModifyInput) -> GmailMarkDoneResult:
     svc = _get_gmail_client(input.user_id)
@@ -514,6 +517,7 @@ def gmail_mark_thread_done(input: GmailThreadModifyInput) -> GmailMarkDoneResult
     description="Remove the MCP/Done label from a thread (undo mark-done)",
     input_model=GmailThreadModifyInput,
     output_model=GmailUnmarkDoneResult,
+    mutating=True,
 )
 def gmail_unmark_thread_done(input: GmailThreadModifyInput) -> GmailUnmarkDoneResult:
     svc = _get_gmail_client(input.user_id)

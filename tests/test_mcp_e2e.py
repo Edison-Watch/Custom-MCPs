@@ -1,10 +1,17 @@
 """Wire-level E2E tests for the streamable-HTTP /mcp endpoint.
 
-Runs a full MCP session through the FastAPI mount - initialize,
+Covers both protocol eras the one mount serves (python-sdk 2.x):
+
+- **Handshake era** (2025-11-25 and earlier): runs a full MCP session through
+  the FastAPI mount - initialize,
 notifications/initialized, tools/list, tools/call, resources/list,
 resources/read - and asserts what actually crosses the wire: serialized
 outputSchema, ``_meta.ui`` shapes, CallToolResult assembly, and
-structuredContent. This is the fast in-CI tier of the two-tier strategy
+structuredContent.
+- **2026-07-28** (stateless core): self-contained POSTs with no initialize and
+  no ``Mcp-Session-Id``; see ``tests/test_mcp_protocol_eras.py``.
+
+This is the fast in-CI tier of the two-tier strategy
 from issue #42; MCPJam conformance (``make mcp_conformance``) is the
 spec-conformance tier.
 
@@ -74,22 +81,32 @@ def _read_sse_first_message(response) -> dict:
 class _McpSession:
     """Minimal JSON-RPC client speaking streamable HTTP against a TestClient."""
 
-    def __init__(self, client: TestClient, api_key: str):
+    def __init__(
+        self,
+        client: TestClient,
+        api_key: str,
+        protocol_version: str = _PROTOCOL_VERSION,
+    ):
         self._client = client
         self._api_key = api_key
         self._session_id: str | None = None
         self._next_id = 0
-        self._protocol_version = _PROTOCOL_VERSION
+        self._requested_version = protocol_version
+        self._protocol_version = protocol_version
+        self._negotiated = False
 
     def _headers(self) -> dict:
         headers = {
             "Accept": "application/json, text/event-stream",
             "Host": "127.0.0.1:8080",
             "X-API-KEY": self._api_key,
-            # Post-initialize requests must carry the *negotiated* version,
-            # not the one the client originally requested.
-            "MCP-Protocol-Version": self._protocol_version,
         }
+        # Post-initialize requests must carry the *negotiated* version, not the
+        # one the client originally requested. ``initialize`` itself carries
+        # none: a version header outside the handshake set would route the
+        # POST to the 2026-07-28 stateless entry instead.
+        if self._negotiated:
+            headers["MCP-Protocol-Version"] = self._protocol_version
         if self._session_id:
             headers["mcp-session-id"] = self._session_id
         return headers
@@ -144,19 +161,20 @@ class _McpSession:
         result = self.request(
             "initialize",
             {
-                "protocolVersion": _PROTOCOL_VERSION,
+                "protocolVersion": self._requested_version,
                 "capabilities": {},
                 "clientInfo": {"name": "e2e-test", "version": "0"},
             },
         )
         self._protocol_version = result["protocolVersion"]
+        self._negotiated = True
         self.notify("notifications/initialized")
         return result
 
 
 @contextmanager
-def _wire_session(user_id: str):
-    """Yield a handshaken MCP session backed by a fresh DB and API key."""
+def _wire_client(user_id: str):
+    """Yield ``(TestClient, api_key)`` backed by a fresh DB and API key."""
     with patch("api_server.middleware.mcp_auth.global_config") as mock_config:
         mock_config.WORKOS_CLIENT_ID = None
         mock_config.WORKOS_AUTHKIT_DOMAIN = None
@@ -165,9 +183,16 @@ def _wire_session(user_id: str):
                 raw_key, _ = create_api_key(s, user_id=user_id, scopes=["*"])
 
             with TestClient(app) as client:
-                session = _McpSession(client, raw_key)
-                session.handshake()
-                yield session
+                yield client, raw_key
+
+
+@contextmanager
+def _wire_session(user_id: str, protocol_version: str = _PROTOCOL_VERSION):
+    """Yield a handshaken (handshake-era) MCP session."""
+    with _wire_client(user_id) as (client, raw_key):
+        session = _McpSession(client, raw_key, protocol_version)
+        session.handshake()
+        yield session
 
 
 class TestMCPWireE2E(TestTemplate):
@@ -180,7 +205,7 @@ class TestMCPWireE2E(TestTemplate):
             # their ui:// resource in tools/list per the MCP Apps spec.
             compose = tools["gmail_compose"]
             assert compose["outputSchema"]["type"] == "object"
-            assert compose["_meta"]["ui"]["resourceUri"].startswith("ui://mymcp/")
+            assert compose["_meta"]["ui"]["resourceUri"].startswith("ui://edisonmcps/")
             assert (
                 compose["_meta"]["ui/resourceUri"]
                 == (compose["_meta"]["ui"]["resourceUri"])
@@ -208,7 +233,7 @@ class TestMCPWireE2E(TestTemplate):
         with _wire_session("u-e2e-res") as session:
             resources = session.request("resources/list")["resources"]
             ui_resources = [
-                r for r in resources if str(r["uri"]).startswith("ui://mymcp/")
+                r for r in resources if str(r["uri"]).startswith("ui://edisonmcps/")
             ]
             assert ui_resources, "expected ui:// resources in resources/list"
             assert all(
@@ -257,7 +282,7 @@ class TestMCPWireE2E(TestTemplate):
                 # Enhanced read tool: publishes outputSchema + its ui:// app.
                 gc = tools["inbox_get_curation"]
                 assert gc["outputSchema"]["type"] == "object"
-                assert gc["_meta"]["ui"]["resourceUri"] == "ui://mymcp/gmail_inbox"
+                assert gc["_meta"]["ui"]["resourceUri"] == "ui://edisonmcps/gmail_inbox"
                 # The mutating write-back stays headless (no UI on the wire).
                 save_meta = tools["inbox_save_curation"].get("_meta")
                 assert save_meta in (None, {})
@@ -272,7 +297,10 @@ class TestMCPWireE2E(TestTemplate):
                 assert sc["records"][0]["ledger_status"] == "curated"
                 assert result["isError"] is False
                 # Enhancer attached the dashboard app on the result.
-                assert result["_meta"]["ui"]["resourceUri"] == "ui://mymcp/gmail_inbox"
+                assert (
+                    result["_meta"]["ui"]["resourceUri"]
+                    == "ui://edisonmcps/gmail_inbox"
+                )
 
     def test_not_connected_gmail_tool_returns_url_elicitation_error(self):
         """A Gmail tool called by a user with no linked account surfaces the
@@ -324,7 +352,7 @@ class TestMCPWireE2E(TestTemplate):
         async def _enhancer(tool):
             result = tool.call()
             tool.send_text("extra block", audience=["user"])
-            tool.send_app("ui://mymcp/__e2e_test_app")
+            tool.send_app("ui://edisonmcps/__e2e_test_app")
             return result
 
         entry = next(e for e in get_registry() if e.name == svc_name)
@@ -340,8 +368,8 @@ class TestMCPWireE2E(TestTemplate):
                 assert blocks[1]["text"] == "extra block"
                 assert blocks[1]["annotations"]["audience"] == ["user"]
                 meta = result["_meta"]
-                assert meta["ui"]["resourceUri"] == "ui://mymcp/__e2e_test_app"
-                assert meta["ui/resourceUri"] == "ui://mymcp/__e2e_test_app"
+                assert meta["ui"]["resourceUri"] == "ui://edisonmcps/__e2e_test_app"
+                assert meta["ui/resourceUri"] == "ui://edisonmcps/__e2e_test_app"
         finally:
             _registry[:] = [e for e in _registry if e.name != svc_name]
             _enhancers.pop(svc_name, None)

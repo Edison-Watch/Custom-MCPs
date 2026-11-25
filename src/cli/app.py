@@ -45,8 +45,8 @@ _FORMAT_MAP = {
 }
 
 app = typer.Typer(
-    name="mymcp",
-    help="CLI Template - a batteries-included Python CLI.",
+    name="edisonmcps",
+    help="Custom-MCPs - custom MCP servers over CLI, MCP, and HTTP.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -59,10 +59,10 @@ def _load_cli_branding() -> tuple[str, str]:
 
 def _version_callback(value: bool) -> None:
     if value:
-        version = importlib.metadata.version("mcp-template")
+        version = importlib.metadata.version("custom-mcps")
         emoji, _ = _load_cli_branding()
         prefix = f"{emoji} " if emoji else ""
-        typer.echo(f"{prefix}mymcp {version}")
+        typer.echo(f"{prefix}edisonmcps {version}")
         raise typer.Exit()
 
 
@@ -182,12 +182,12 @@ def main_cli() -> None:
     _register_builtin_commands()
     _register_user_commands()
 
-    version = importlib.metadata.version("mcp-template")
+    version = importlib.metadata.version("custom-mcps")
     emoji, primary = _load_cli_branding()
     prefix = f"{emoji} " if emoji else ""
     app.info.help = (
-        f"{prefix}[{primary}]CLI Template[/{primary}] "
-        f"[dim]v{version}[/dim] - a batteries-included Python CLI."
+        f"{prefix}[{primary}]Custom-MCPs[/{primary}] "
+        f"[dim]v{version}[/dim] - custom MCP servers over CLI, MCP, and HTTP."
     )
 
     command = _detect_command(sys.argv)

@@ -1,5 +1,7 @@
 """Tests for main CLI entry point and commands."""
 
+from unittest.mock import patch
+
 from typer.testing import CliRunner
 
 from src.cli.app import _register_builtin_commands, _register_user_commands, app
@@ -16,12 +18,12 @@ class TestCLI(TestTemplate):
     def test_version(self):
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "mymcp" in result.output
+        assert "edisonmcps" in result.output
 
     def test_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "CLI Template" in result.output
+        assert "Custom-MCPs" in result.output
 
     def test_greet(self):
         result = runner.invoke(app, ["greet", "Alice"])
@@ -74,6 +76,13 @@ class TestCLI(TestTemplate):
         assert result.exit_code == 0
         assert "DRY RUN" in result.output
 
+    def test_doctor_fix_dry_run_applies_nothing(self):
+        with patch("services.doctor_svc.doctor_fix") as doctor_fix:
+            result = runner.invoke(app, ["--dry-run", "doctor", "--fix"])
+        assert result.exit_code == 0
+        assert "DRY RUN" in result.output
+        doctor_fix.assert_not_called()
+
     def test_config_set_missing_value_errors(self):
         result = runner.invoke(app, ["config", "set", "some.key"], input="")
         assert result.exit_code == 1
@@ -101,10 +110,10 @@ class TestCLI(TestTemplate):
         # than rendered --help output, which word-wraps at the terminal width.
         from src.cli.commands import doctor, greet  # noqa: PLC0415
 
-        assert "mymcp --dry-run greet" in greet.EPILOG
-        assert "mymcp greet Ada --dry-run" not in greet.EPILOG
-        assert "mymcp --format json doctor" in doctor.EPILOG
-        assert "mymcp doctor --format json" not in doctor.EPILOG
+        assert "edisonmcps --dry-run greet" in greet.EPILOG
+        assert "edisonmcps greet Ada --dry-run" not in greet.EPILOG
+        assert "edisonmcps --format json doctor" in doctor.EPILOG
+        assert "edisonmcps doctor --format json" not in doctor.EPILOG
 
     def test_format_json(self):
         result = runner.invoke(app, ["--format", "json", "config", "show"])

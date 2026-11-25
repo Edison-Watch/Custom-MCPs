@@ -3,10 +3,10 @@ import { i18n } from "@/lib/i18n";
 
 export function baseOptions(locale: string): BaseLayoutProps {
   const titles: Record<string, string> = {
-    en: "MCP Template",
-    zh: "MCP 模板",
-    es: "MCP Template",
-    ja: "MCP テンプレート",
+    en: "Custom-MCPs",
+    zh: "Custom-MCPs",
+    es: "Custom-MCPs",
+    ja: "Custom-MCPs",
   };
 
   const docsLabels: Record<string, string> = {
