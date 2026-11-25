@@ -34,9 +34,18 @@ on:
         type: string
 
 concurrency:
-  # Serialize deploys; never cancel one mid-flight.
+  # Serialize deploys; never cancel one mid-flight. GitHub still keeps only ONE
+  # pending run per group, so a newer push replaces (cancels) a queued one. That
+  # is safe only because the select job diffs against the last SUCCESSFUL
+  # deploy, not this push's own `before`: the surviving run picks up whatever
+  # the cancelled one would have shipped.
   group: deploy-fleet
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Read this workflow's own run history to find the last successful deploy.
+  actions: read
 
 jobs:
   select:
@@ -61,7 +70,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history so the push diff base (event.before) is reachable.
+          # Full history so the diff base (last successful deploy) is reachable.
           fetch-depth: 0
 
       - name: Assemble deploy matrix
@@ -71,6 +80,8 @@ jobs:
           DISPATCH_SERVER: ${{ github.event.inputs.server }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -87,13 +98,28 @@ jobs:
               sel=$(jq -nc --arg s "$inp" '[$s]')
             fi
           else
-            # Diff since the previous push; on a new branch/unknown base, diff the
-            # merge commit against its first parent instead.
-            if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              changed=$(git diff --name-only "${SHA}^" "${SHA}" || true)
+            # Diff since the last SUCCESSFUL push deploy, not since this push's
+            # `before`. Runs in the deploy-fleet group serialize, and a newer push
+            # cancels a still-pending one; diffing from `before` would then drop
+            # the cancelled push's servers, which stay on old code until touched
+            # again. A failed run is not a base either, so its servers retry on the
+            # next deploy. Every successful run covers everything up to its head,
+            # so its head_sha is a sound base. Dispatch runs are excluded: they
+            # deploy a hand-picked subset.
+            base=$(gh api "repos/${REPO}/actions/workflows/servers_deploy.yaml/runs?branch=main&event=push&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // empty' 2>/dev/null || true)
+            if [ -n "$base" ] && git merge-base --is-ancestor "$base" "$SHA" 2>/dev/null; then
+              echo "Diff base: last successful deploy $base"
+            elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+              # No usable deploy history (first run, API error, rewritten main):
+              # fall back to this push's own range.
+              base="$BEFORE"
+              echo "::warning::no usable last-successful-deploy base; diffing from push before ($base)"
             else
-              changed=$(git diff --name-only "$BEFORE" "$SHA" || true)
+              base="${SHA}^"
+              echo "::warning::no usable base; diffing the merge commit against its first parent"
             fi
+            changed=$(git diff --name-only "$base" "$SHA" || true)
 
             mapfile -t CH < <(echo "$changed" | sed -n 's|^servers/\([^/]*\)/.*|\1|p' | sort -u)
             sel='[]'
