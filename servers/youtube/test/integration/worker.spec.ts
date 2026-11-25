@@ -1,86 +1,26 @@
 import { SELF } from "cloudflare:test";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const ORIGIN = "https://example.com";
 const AUTH = "Bearer test-token";
-const MCP_HEADERS = {
-  "content-type": "application/json",
-  accept: "application/json, text/event-stream",
-  authorization: AUTH,
-};
 
-// Streamable-HTTP replies are SSE (`data: {json}\n\n`). Pull the first JSON-RPC
-// message carrying a result/error out of the buffered stream so far.
-function extractMessage(buffer: string): Record<string, any> | null {
-  for (const line of buffer.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const json = trimmed.slice("data:".length).trim();
-    if (!json) continue;
-    try {
-      const msg = JSON.parse(json);
-      if (msg && (msg.result !== undefined || msg.error !== undefined)) return msg;
-    } catch {
-      // JSON split across chunks - wait for the next read.
-    }
-  }
-  return null;
-}
+type Era = "legacy" | "modern";
 
-async function initSession(): Promise<string> {
-  const res = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: MCP_HEADERS,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
-    }),
+// A real SDK 2.x client driven through the Worker (SELF.fetch). "modern" pins
+// the 2026-07-28 per-request protocol (server/discover, no handshake);
+// "legacy" is the plain 2025 `initialize` sequence served statelessly.
+async function connect(era: Era): Promise<Client> {
+  const client = new Client(
+    { name: "test", version: "1.0" },
+    era === "modern" ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : {},
+  );
+  const transport = new StreamableHTTPClientTransport(new URL(`${ORIGIN}/mcp`), {
+    requestInit: { headers: { authorization: AUTH } },
+    fetch: (input, init) => SELF.fetch(input as string, init),
   });
-  expect(res.status).toBe(200);
-  const sessionId = res.headers.get("mcp-session-id");
-  expect(sessionId).toBeTruthy();
-  // NB: the initialize response is a long-lived SSE stream - do not read it to
-  // completion (it never ends) and do not cancel it (that aborts the session).
-  const notif = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: { ...MCP_HEADERS, "mcp-session-id": sessionId! },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-  });
-  await notif.text();
-  return sessionId!;
-}
-
-async function callTool(sessionId: string, name: string, args: Record<string, unknown>) {
-  const res = await SELF.fetch(`${ORIGIN}/mcp`, {
-    method: "POST",
-    headers: { ...MCP_HEADERS, "mcp-session-id": sessionId },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } }),
-  });
-  expect(res.status).toBe(200);
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: true });
-      const msg = extractMessage(buffer);
-      if (msg) {
-        // Surface a JSON-RPC-level error (unknown tool, invalid params) with the
-        // server's own message instead of returning an opaque empty result.
-        if (msg.error !== undefined) {
-          throw new Error(`JSON-RPC error from ${name}: ${JSON.stringify(msg.error)}`);
-        }
-        return (msg.result ?? {}) as Record<string, any>;
-      }
-      if (done) break;
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  throw new Error("no JSON-RPC result found in SSE response");
+  await client.connect(transport);
+  return client;
 }
 
 describe("routing", () => {
@@ -122,24 +62,44 @@ describe("auth gate on /mcp", () => {
   });
 });
 
-describe("youtube_scrape tool", () => {
-  let sessionId: string;
-  beforeAll(async () => {
-    sessionId = await initSession();
-  });
-
-  // The test env sets no APIFY_TOKEN, so the tool fails closed at the misconfig
-  // guard - exercising the full MCP transport + tool registration + guard with
-  // no live Apify call (the live scrape path is covered manually against the
-  // real Actors, and the pure mapping logic by test/unit/youtube.test.ts).
-  it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
-    const result = await callTool(sessionId, "youtube_scrape", { search: "rust" });
-    expect(result.isError).toBe(true);
-    expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
-  });
-
-  it("rejects a call with no search and no start_urls", async () => {
-    const result = await callTool(sessionId, "youtube_scrape", {});
-    expect(result.isError).toBe(true);
+describe("request body bound", () => {
+  it("rejects an oversized /mcp POST with 413", async () => {
+    const res = await SELF.fetch(`${ORIGIN}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: AUTH },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", pad: "x".repeat(1024 * 1024 + 1) }),
+    });
+    expect(res.status).toBe(413);
   });
 });
+
+for (const era of ["modern", "legacy"] as const) {
+  describe(`youtube_scrape tool (${era} protocol)`, () => {
+    let client: Client;
+    beforeAll(async () => {
+      client = await connect(era);
+    });
+
+    it("lists the tool with input and output schemas", async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === "youtube_scrape");
+      expect(tool?.inputSchema.properties).toHaveProperty("search");
+      expect(tool?.outputSchema?.properties).toHaveProperty("videos");
+    });
+
+    // The test env sets no APIFY_TOKEN, so the tool fails closed at the misconfig
+    // guard - exercising the full MCP transport + tool registration + guard with
+    // no live Apify call (the live scrape path is covered manually against the
+    // real Actors, and the pure mapping logic by test/unit/youtube.test.ts).
+    it("fails closed with a clear error when APIFY_TOKEN is unset", async () => {
+      const result = await client.callTool({ name: "youtube_scrape", arguments: { search: "rust" } });
+      expect(result.isError).toBe(true);
+      expect((result.content as { text: string }[])[0]?.text).toContain("APIFY_TOKEN");
+    });
+
+    it("rejects a call with no search and no start_urls", async () => {
+      const result = await client.callTool({ name: "youtube_scrape", arguments: {} });
+      expect(result.isError).toBe(true);
+    });
+  });
+}
