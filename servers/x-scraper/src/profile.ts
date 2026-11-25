@@ -86,6 +86,17 @@ const RESERVED_URL_SEGMENTS = new Set([
  * (`/<handle>/status/…`), an `/i/…` route, a search, or a foreign host.
  */
 export function handleFromUrl(url: string): string | undefined {
+  const segment = profileUrlSegment(url);
+  // Validate the handle grammar too, so e.g. x.com/foo.bar yields no target.
+  return segment === undefined ? undefined : normalizeHandle(segment);
+}
+
+/**
+ * The single path segment of a profile-shaped URL (`x.com/<segment>`, not a
+ * reserved route), before handle-grammar validation; undefined for anything
+ * else (tweet permalinks, `/i/…` routes, foreign hosts, unparseable input).
+ */
+function profileUrlSegment(url: string): string | undefined {
   let parsed: URL;
   try {
     parsed = new URL(url.trim());
@@ -99,8 +110,39 @@ export function handleFromUrl(url: string): string | undefined {
   if (segments.length !== 1) return undefined;
   const stripped = segments[0].replace(/^@/, "");
   if (!stripped || RESERVED_URL_SEGMENTS.has(stripped.toLowerCase())) return undefined;
-  // Validate the handle grammar too, so e.g. x.com/foo.bar yields no target.
-  return normalizeHandle(segments[0]);
+  return segments[0];
+}
+
+/** A profile-shaped URL whose handle fails X's grammar, e.g. `x.com/foo.bar`. */
+function isMalformedProfileUrl(url: string): boolean {
+  const segment = profileUrlSegment(url);
+  return segment !== undefined && normalizeHandle(segment) === undefined;
+}
+
+/**
+ * Targets that are recognisably meant as accounts but can never match one: a
+ * handle failing X's grammar (1-15 of `[A-Za-z0-9_]`), or a profile URL whose
+ * handle does. Never sent to the Actor; reported in `not_found` as given
+ * (trimmed), deduped case-insensitively. Blank entries are not targets.
+ */
+export function malformedTargets(args: XProfileArgs): string[] {
+  const raw = [
+    ...(args.handles ?? []).flatMap((h) => {
+      if (typeof h !== "string") return [];
+      const t = h.trim();
+      return t && t !== "@" && !normalizeHandle(t) ? [t] : [];
+    }),
+    ...(args.profile_urls ?? []).flatMap((u) =>
+      typeof u === "string" && isMalformedProfileUrl(u) ? [u.trim()] : [],
+    ),
+  ];
+  const seen = new Set<string>();
+  return raw.filter((t) => {
+    const key = t.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export interface ProfileTargets {
@@ -121,7 +163,9 @@ export function profileTargets(args: XProfileArgs): ProfileTargets {
   for (const raw of args.profile_urls ?? []) {
     if (typeof raw !== "string") continue;
     const u = raw.trim();
-    if (!u) continue;
+    // A profile URL with a malformed handle can never match an account: don't
+    // pay a "Profile URL Query" for it (malformedTargets reports it instead).
+    if (!u || isMalformedProfileUrl(u)) continue;
     urls.push(u);
     const h = handleFromUrl(u);
     if (h) names.add(h.toLowerCase());
@@ -198,9 +242,9 @@ export function selectProfiles(
 /**
  * Requested handles (as the caller spelled them, URL targets resolved to their
  * handle) with no matching profile in `profiles`, so a dropped or nonexistent
- * account is reported instead of silently missing from the result. Handles that
- * fail X's handle grammar (see normalizeHandle: 1-15 of `[A-Za-z0-9_]`) are never
- * sent to the Actor, so they are reported here too rather than vanishing.
+ * account is reported instead of silently missing from the result. Malformed
+ * targets ({@link malformedTargets}) are never sent to the Actor, so they are
+ * reported here too rather than vanishing.
  */
 export function missingTargets(profiles: Record<string, unknown>[], args: XProfileArgs): string[] {
   const found = new Set(
@@ -216,15 +260,11 @@ export function missingTargets(profiles: Record<string, unknown>[], args: XProfi
     seen.add(key);
     out.push(h);
   }
-  for (const raw of args.handles ?? []) {
-    if (typeof raw !== "string") continue;
-    const trimmed = raw.trim();
-    // Blank entries are not targets; valid ones were handled above.
-    if (!trimmed || trimmed === "@" || normalizeHandle(trimmed)) continue;
-    const key = trimmed.toLowerCase();
+  for (const t of malformedTargets(args)) {
+    const key = t.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(trimmed);
+    out.push(t);
   }
   return out;
 }

@@ -158,6 +158,20 @@ describe("x_profile tool", () => {
     expect(result.content?.[0]?.text).toContain("APIFY_TOKEN");
   });
 
+  it("answers a malformed-only lookup with not_found, without a run", async () => {
+    // Runs before the APIFY_TOKEN guard: nothing here can match an account.
+    const result = await callTool(sessionId, "x_profile", {
+      handles: ["foo.bar"],
+      profile_urls: ["https://x.com/this_handle_is_way_too_long"],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      count: 0,
+      profiles: [],
+      not_found: ["foo.bar", "https://x.com/this_handle_is_way_too_long"],
+    });
+  });
+
   it("rejects a call with no handles and no profile_urls", async () => {
     const result = await callTool(sessionId, "x_profile", {});
     expect(result.isError).toBe(true);

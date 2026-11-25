@@ -28,6 +28,7 @@ import {
   MAX_PROFILE_TARGETS,
   buildProfileInput,
   hasProfileTarget,
+  malformedTargets,
   missingTargets,
   profileTargets,
   selectProfiles,
@@ -281,6 +282,16 @@ export class XMCP extends McpAgent<Env, unknown, Record<string, unknown>> {
         },
       },
       async (args: XProfileArgs) => {
+        // Only malformed targets (e.g. a 16+ char handle, x.com/foo.bar): none can
+        // match an account, so answer without a paid run, listing them as
+        // not_found instead of failing with a generic "no target" error.
+        const malformed = malformedTargets(args);
+        if (malformed.length && profileTargets(args).names.size === 0) {
+          return {
+            content: [{ type: "text" as const, text: `X profile lookup returned 0 profile(s); not found: ${malformed.join(", ")}` }],
+            structuredContent: { count: 0, profiles: [], not_found: malformed },
+          };
+        }
         if (!hasProfileTarget(args)) {
           return textError("provide at least one 'handles' entry or 'profile_urls' entry");
         }

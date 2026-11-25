@@ -6,6 +6,7 @@ import {
   hasProfileTarget,
   normalizeHandles,
   profileTargets,
+  malformedTargets,
   missingTargets,
   selectProfiles,
   uniqueTargetCount,
@@ -115,6 +116,11 @@ describe("missingTargets", () => {
       "this_handle_does_not_exist_zz",
     ]);
   });
+  test("reports a profile URL whose handle is malformed, as given", () => {
+    expect(missingTargets([openai], { handles: ["openai"], profile_urls: [" https://x.com/foo.bar "] })).toEqual([
+      "https://x.com/foo.bar",
+    ]);
+  });
   test("is empty when everything came back", () => {
     expect(missingTargets([openai], { handles: ["@openai"] })).toEqual([]);
   });
@@ -158,5 +164,21 @@ describe("selectProfiles", () => {
   test("skips items without a string userName", () => {
     const kept = selectProfiles([{ id: 1 }, sama], { handles: ["sama"] });
     expect(kept).toEqual([sama]);
+  });
+});
+
+describe("malformedTargets", () => {
+  test("collects malformed handles and malformed profile URLs, deduped, blanks ignored", () => {
+    expect(
+      malformedTargets({
+        handles: ["openai", "foo.bar", "FOO.BAR", "", "@", "x".repeat(16)],
+        profile_urls: ["https://x.com/sama", "https://x.com/foo.bar", "https://x.com/openai/status/1"],
+      }),
+    ).toEqual(["foo.bar", "x".repeat(16), "https://x.com/foo.bar"]);
+  });
+
+  test("malformed profile URLs are not sent to the Actor", () => {
+    const input = buildProfileInput({ handles: ["sama"], profile_urls: ["https://x.com/foo.bar"] });
+    expect(input.startUrls).toBeUndefined();
   });
 });
